@@ -1,0 +1,30 @@
+[tool.poetry]
+name = "genesis-drone-env"
+version = "2.0.0"
+description = "Genesis Drone Environment"
+authors = [
+    "Xian Wang <xianwang@zju.edu.cn>",
+    "Yifei Nie <nyf@zju.edu.cn>",
+    "Junjie Wang <22532069@zju.edu.cn>"
+]
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/KafuuChikai/GenesisDroneEnv.git"
+packages = [
+    { include = "genesis_drones" }
+]
+
+[tool.poetry.dependencies]
+python = ">=3.10"
+tensorboard = "*"
+torch = ">=1.4.0"
+torchvision = ">=0.5.0" 
+numpy = ">=1.16.4"
+rsl-rl-lib = { git = "https://github.com/leggedrobotics/rsl_rl.git", tag = "v3.1.3" }
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^7.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

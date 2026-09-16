@@ -1,0 +1,141 @@
+
+# =========== pid_param =============
+ang:
+  kp_r: 0.04
+  ki_r: 0.004
+  kd_r: 0.0001
+  kf_r: 0.0
+
+  kp_p: 0.04
+  ki_p: 0.004
+  kd_p: 0.0001
+  kf_p: 0.0
+
+  kp_y: 0.04                                          
+  ki_y: 0.004
+  kd_y: 0.0001
+  kf_y: 0.0
+
+rat:
+  kp_r: 0.07  
+  ki_r: 0.002 
+  kd_r: 0.0
+  kf_r: 0.0
+
+  kp_p: 0.07
+  ki_p: 0.002
+  kd_p: 0.0
+  kf_p: 0.0
+
+  kp_y: 0.07
+  ki_y: 0.002
+  kd_y: 0.0
+  kf_y: 0.0
+
+pos:
+  kp_x: 1.0
+  ki_x: 0.001
+  kd_x: 0.0
+  kf_x: 0.0
+
+  kp_y: 1.0
+  ki_y: 0.001
+  kd_y: 0.0
+  kf_y: 0.0
+
+  kp_t: 1.0
+  ki_t: 0.001
+  kd_t: 0.0
+  kf_t: 0.0
+
+pid_exec_freq: 60
+dt: 0.01  # (s), time step for pid controller
+
+# =========== drone_param =============
+# see in assets/drone_urdf/cf2x.urdf
+weight: 0.5   
+motor_inertia: 2.6e-07
+g: 9.81   
+kf: 3.16e-10
+TWR: 3.3
+min_t: 0.0
+max_t: 16.1865     # (N), max collective thrust
+base_rpm: 62293.9641914   # equal to (m*g/4*kf)^0.5
+inertia_matrix:       # no use
+  - [0.0014, 0.0,     0.0,     0.0]
+  - [0.0,    0.0014,  0.0,     0.0]
+  - [0.0,    0.0,     0.00217, 0.0]
+  - [0.0,    0.0,     0.0,     1.0]
+max_roll_rate: 10    # degree/s
+max_pitch_rate: 10   # degree/s
+max_yaw_rate: 3    # degree/s
+
+# =========== mavlink_param =============
+USB_path: "/dev/ttyUSB0"
+baudrate: 2000000
+
+ARM:       "ch5"
+ANGLE:     "ch6"
+OFFBOARD:  "ch8"
+YAW:       "ch3" 
+PITCH:     "ch2"
+ROLL:      "ch1"
+THRUTTLE:  "ch4"   
+
+# =========== odom_param =============
+gyro_update_freq: 8000
+att_update_freq: 100
+acc_update_freq: 1000
+
+# =========== se3 controller_param =============
+se3_control:
+  arm_length: 0.12   # d
+
+  inertia:
+    mass: 0.5
+    Ixx: 1.4e-3
+    Iyy: 1.4e-3
+    Izz: 1.4e-3
+    Ixy: 0.0
+    Iyz: 0.0
+    Ixz: 0.0
+
+  geometry:
+    num_rotors: 4
+    rotor_pos:
+      r1: [ 0.70710678118,  0.70710678118, 0.0 ]
+      r2: [ 0.70710678118, -0.70710678118, 0.0 ]
+      r3: [ -0.70710678118, -0.70710678118, 0.0 ]
+      r4: [ -0.70710678118,  0.70710678118, 0.0 ]
+    rotor_directions: [1, -1, 1, -1]
+    rI: [0.0, 0.0, 0.0]
+
+  aero:
+    c_Dx: 9.1785e-3
+    c_Dy: 9.1785e-3
+    c_Dz: 10.311e-3
+
+  rotor:
+    k_eta: 1.28e-9
+    k_m: 7.94e-12
+    k_d: 1.02506e-6
+    k_z: 7.553e-7
+    k_h: 0.0
+    k_flap: 0.0
+
+  motor:
+    tau_m: 0.005
+    rotor_speed_min: 0.0
+    rotor_speed_max: 210000.0
+    motor_noise_std: 0.0
+
+  flight:
+    g: 9.81
+    omega_z_limit: 3
+    omega_xy_limit: 10
+
+  gains:
+    kp_pos: [16, 16, 16]
+    kd_pos: [5, 5, 7]
+    kp_att: 20.44
+    kd_att: 0.1
