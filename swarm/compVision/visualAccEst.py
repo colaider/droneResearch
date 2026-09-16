@@ -46,7 +46,22 @@ class VisulaAcEst:
         
             self.current_frame.frames[i] = output
 
+    def draw_center_square(self, size=50, color=(0, 0, 255), thickness=2):
+        """Draw a colored square in the center of each frame. For testing."""
+        for i, frame in enumerate(self.current_frame.frames):
+            h, w = frame.shape[:2]
+            cx, cy = w // 2, h // 2
+            half = size // 2
+            
+            cv2.rectangle(
+                frame,
+                (cx - half, cy - half),
+                (cx + half, cy + half),
+                color,
+                thickness,
+            )
+
     def processing(self, frame, idx):
         self.update_frame(frame,idx)
-        self.find_edges()
+        self.draw_center_square()
         return self.current_frame.frames
