@@ -142,6 +142,8 @@ class DroneCTRL:
 
     def step(self):
         """Call this ONCE per scene.step(). Updates all cached estimates."""
+        self.drone.camera_step()
+
         reading = self.drone.imu.read()
 
         acc  = reading.lin_acc.numpy()   # array shape (3,)

@@ -46,7 +46,7 @@ def main():
             plotter.push('Accelerometer (m/s²)', acc)
             plotter.push('Gyroscope (rad/s)',    gyro)
             plotter.update()
-            controller.drone.cameraShow()
+            controller.drone.camera_show()
         scene.step()
 
 
