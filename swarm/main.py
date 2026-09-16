@@ -23,6 +23,7 @@ def main():
         plots={
             'Accelerometer (m/s²)': ['ax', 'ay', 'az'],
             'Gyroscope (rad/s)':    ['gx', 'gy', 'gz'],
+            'Actual pos': ['x', 'y', 'z'],
         },
         buffer_size=1000,
         title='IMU Live',
@@ -34,36 +35,46 @@ def main():
     import numpy as np
 
 
-    for step  in range(100000):
+    # for step  in range(100000):
+    #     if controller.start(step) == 1:
+    #         controller.step()
+    #         controller.position_control(np.array([0,0,1,0]))
+    #         reading = controller.drone.imu.read()
+    #         acc  = reading.lin_acc.numpy()   # array shape (3,)
+    #         gyro = reading.ang_vel.numpy()   # array shape (3,)
+    #         mag  = reading.mag.numpy() 
+
+    #         plotter.push('Accelerometer (m/s²)', acc)
+    #         plotter.push('Gyroscope (rad/s)',    gyro)
+    #         plotter.update()
+    #         controller.drone.camera_show()
+    #     scene.step()
+
+
+    for step in range(100000000000):
+        controller.step()
         if controller.start(step) == 1:
-            controller.step()
-            controller.position_control(np.array([0,0,1,0]))
+            t = (step - 500) * controller.dt   # time since startup finished
+            radius = 2.0
+            omega = 0.5   # rad/s → circle period = 2π/0.5 ≈ 12.5s
+            
+            x = radius * np.cos(omega * t)
+            y = radius * np.sin(omega * t)
+            z = 1.0
+            yaw = 0.0
+            
+            controller.position_control(np.array([x, y, z, yaw]))
             reading = controller.drone.imu.read()
             acc  = reading.lin_acc.numpy()   # array shape (3,)
             gyro = reading.ang_vel.numpy()   # array shape (3,)
-            mag  = reading.mag.numpy() 
-
+            
+            pos= controller.get_position()
             plotter.push('Accelerometer (m/s²)', acc)
             plotter.push('Gyroscope (rad/s)',    gyro)
+            plotter.push('Actual pos', pos)
             plotter.update()
             controller.drone.camera_show()
         scene.step()
-
-
-    # for step in range(100000000000):
-    #     controller.step()
-    #     if controller.start(step) == 1:
-    #         t = (step - 500) * controller.dt   # time since startup finished
-    #         radius = 2.0
-    #         omega = 0.5   # rad/s → circle period = 2π/0.5 ≈ 12.5s
-            
-    #         x = radius * np.cos(omega * t)
-    #         y = radius * np.sin(omega * t)
-    #         z = 1.0
-    #         yaw = 0.0
-            
-    #         controller.position_control(np.array([x, y, z, yaw]))
-    #     scene.step()
         
     print("\n✅ Simulation complete!")
     scene.close()

@@ -70,15 +70,16 @@ class CustomScene:
             entity_idx=drone.idx,
             link_idx_local=0,
             # Sensor imperfections — model a mid-tier consumer IMU
-            acc_noise=(0.05, 0.05, 0.05),          # m/s² white noise std
+            acc_noise=(0.2, 0.2, 0.2),          # m/s² white noise std
             gyro_noise=(0.005, 0.005, 0.005),      # rad/s white noise std
             acc_bias=(0.02, 0.02, 0.02),           # m/s² constant offset
             gyro_bias=(0.005, 0.005, 0.005),       # rad/s constant offset
-            acc_random_walk=(0.001, 0.001, 0.001), # m/s² slow drift
+            acc_random_walk=(0.005, 0.005, 0.005), # m/s² slow drift
             gyro_random_walk=(0.0005, 0.0005, 0.0005),  # rad/s slow drift
             draw_debug=False,
             )
         )
+
 
         left_cam = self.scene.add_sensor(
             gs.sensors.RasterizerCameraOptions(
