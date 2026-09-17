@@ -15,15 +15,19 @@ class VisulaAcEst:
 
 
     def update_frame(self, frame, idx):
-        self.current_frame.frames = frame
-        self.current_frame.idx = idx
+        new_frame_data = EnumFrame()
+        new_frame_data.frames = self.add_noise([f.copy() for f in frame])  
+        new_frame_data.idx = idx
+        
         if not hasattr(self, 'frame_size'):
             self.frame_size = np.shape(frame[0])
-                    
-        if(len(self.buffer) >= 100):
+        
+        # Buffer holds the new object
+        if len(self.buffer) >= 100:
             self.buffer.pop(0)
-
-        self.buffer.append(self.current_frame)
+        self.buffer.append(new_frame_data)
+        
+        self.current_frame = new_frame_data
 
 
     def processing(self, frame, idx):
@@ -35,14 +39,18 @@ class VisulaAcEst:
     def aply_flow(self):
         processed = []
         flow = 0
-        for i, f in enumerate(self.current_frame.frames):
-            if len(self.buffer) >= 2:  
-                frame1 = self.buffer[-2].frames[i]
-                frame2 = self.buffer[-1].frames[i]
-                fr, flow = self.lucas_kanade_flow(frame1, frame2)
-                processed.append(fr)
-
+       
+        if len(self.buffer) < 2:
+            return flow   # need at least 2 frames
+        
+        for i in range(min(len(self.buffer[-2].frames), len(self.buffer[-1].frames))):
+            frame1 = self.buffer[-2].frames[i]
+            frame2 = self.buffer[-1].frames[i]
+            fr, flow = self.lucas_kanade_flow(frame1, frame2)
+            processed.append(fr)
+        
         self.current_frame.frames = processed
+        print(flow)
         return flow
 
 
@@ -50,6 +58,8 @@ class VisulaAcEst:
         gray1 = cv2.cvtColor(frame1, cv2.COLOR_BGR2GRAY)
         gray2 = cv2.cvtColor(frame2, cv2.COLOR_BGR2GRAY)
         # gray2 = self.normalize_lighting(gray1, gray2).copy()
+        # gray1 = cv2.GaussianBlur(gray1, (5, 5), 1.0)
+        # gray2 = cv2.GaussianBlur(gray2, (5, 5), 1.0)
 
         old_points = cv2.goodFeaturesToTrack(
             gray1,
@@ -62,33 +72,37 @@ class VisulaAcEst:
         annotated_frame = frame2.copy()
 
         if old_points is None: return annotated_frame, None
-        new_points, status, error = cv2.calcOpticalFlowPyrLK(
-            gray1,
-            gray2,
-            old_points,
-            None,
-            winSize=(21, 21),
-            maxLevel=3,
+        new_points, status_fwd, error_fwd = cv2.calcOpticalFlowPyrLK(
+            gray1, gray2, old_points, None,
+            winSize=(21, 21), maxLevel=3,
+            criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 30, 0.01)
+        )
+
+        # Backward: frame2 → frame1
+        back_points, status_bwd, error_bwd = cv2.calcOpticalFlowPyrLK(
+            gray2, gray1, new_points, None,
+            winSize=(21, 21), maxLevel=3,
             criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 30, 0.01)
         )
 
         if new_points is None: return annotated_frame, None
 
-        status = status.ravel()
+        diff = np.abs(old_points - back_points).reshape(-1, 2).max(axis=1)
+        good_mask = (status_fwd.ravel() == 1) & (diff < 0.5)   
 
         old_points = old_points.reshape(-1, 2)
         new_points = new_points.reshape(-1, 2)
 
         ys, xs, _ = self.frame_size
         diameter = (xs if xs < ys else ys) * 0.92
-        
-        good_old = old_points[status == 1]
-        good_new = new_points[status == 1]
+    
+        good_old = old_points[good_mask]
+        good_new = new_points[good_mask]
 
-        mask_new = np.sqrt((good_new[:, 0] - xs / 2)**2 + (good_new[:, 1]-ys/2)**2) < diameter / 2
-        mask_old = np.sqrt((good_old[:, 0] - xs / 2)**2 + (good_old[:, 1]-ys/2)**2) < diameter / 2
-        central_good_new = good_new[mask_new]
-        central_good_old = good_old[mask_old]
+
+        mask = np.sqrt((good_new[:, 0] - xs / 2)**2 + (good_new[:, 1]-ys/2)**2) < diameter / 2
+        central_good_new = good_new[mask]
+        central_good_old = good_old[mask]
 
         central_flow = central_good_new - central_good_old
 
@@ -98,6 +112,9 @@ class VisulaAcEst:
             cv2.circle(annotated_frame, (x2, y2), 3, collor , -1)
 
         return annotated_frame, central_flow
+
+    
+
 
     @staticmethod
     def normalize_lighting(prev_gray, curr_gray):
@@ -114,3 +131,34 @@ class VisulaAcEst:
         # Apply to current frame
         normalized = curr_gray.astype(np.float32) * gain + offset
         return np.clip(normalized, 0, 255).astype(np.uint8)
+
+
+    @staticmethod
+    def add_noise(frames, sigma=50):
+        out = []
+        for frame in frames:
+            noise = np.random.normal(0, sigma, frame.shape)
+            noisy = frame.astype(np.float32) + noise
+            out.append(np.clip(noisy, 0, 255).astype(np.uint8))
+        return out
+
+
+
+    @staticmethod
+    def morphological_filter(frames, operation='open', kernel_size=3, iterations=1):
+        kernel = np.ones((kernel_size, kernel_size), np.uint8)
+        
+        ops = {
+            'erode':    lambda img: cv2.erode(img, kernel, iterations=iterations),
+            'dilate':   lambda img: cv2.dilate(img, kernel, iterations=iterations),
+            'open':     lambda img: cv2.morphologyEx(img, cv2.MORPH_OPEN, kernel, iterations=iterations),
+            'close':    lambda img: cv2.morphologyEx(img, cv2.MORPH_CLOSE, kernel, iterations=iterations),
+            'gradient': lambda img: cv2.morphologyEx(img, cv2.MORPH_GRADIENT, kernel, iterations=iterations),
+        }
+        
+        if operation not in ops:
+            raise ValueError(f"Unknown operation: {operation}")
+
+        out = [ops[operation](image) for image in frames]
+
+        return out

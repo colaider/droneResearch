@@ -52,7 +52,7 @@ def main():
 
 
     for step in range(100000000000):
-        controller.step()
+        controller.step(step)
         if controller.start(step) == 1:
             t = (step - 500) * controller.dt   # time since startup finished
             radius = 2.0

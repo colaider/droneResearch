@@ -91,7 +91,7 @@ class CustomScene:
         )
 
         res = (500, 600)
-        fov = 70
+        fov = 85
 
         left_cam = self.scene.add_sensor(
             gs.sensors.RasterizerCameraOptions(

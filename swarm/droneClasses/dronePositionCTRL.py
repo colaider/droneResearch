@@ -37,7 +37,6 @@ class DronePositionCTRL(DroneCTRL):
         v = S_dd + self.kp_pos @ X_err + self.kd_pos @ X_err_d
 
         U = np.linalg.inv(self.f1(omega)) @ (v + self.f2(omega) @ X_d_body)
-        print(U)
         np.clip(U, -2.5,2.5)
         self.lowLevelControl(U)
         self.pr_setpoint = setpoint

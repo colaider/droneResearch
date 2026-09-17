@@ -17,7 +17,6 @@ class DroneCTRL:
 
 
     def hover(self, thrust=0.5):
-        print(self.drone.imu.read())
         self.set_propeller_rpm(np.array([thrust]*4))
 
 
@@ -46,9 +45,6 @@ class DroneCTRL:
 
         roll, pitch, yaw = self.get_attitude()
         vel = self.get_lin_vel()
-        print(f'rol  {roll}' )
-        print(f'pitch  {pitch}' )
-        print(f'vel {vel}')
         ang_vel = self.get_ang_vel()
 
         vx_err = vx_target - vel[0]
@@ -140,9 +136,10 @@ class DroneCTRL:
         self.last_control = np.zeros(4)
 
 
-    def step(self):
+    def step(self, step = 0):
         """Call this ONCE per scene.step(). Updates all cached estimates."""
-        self.drone.camera_step()
+        if step % 3 == 0:
+            self.drone.camera_step()
 
         reading = self.drone.imu.read()
 
@@ -180,13 +177,9 @@ class DroneCTRL:
         ax, ay, az = acc[0], acc[1], acc[2]
         self.ax, self.ay, self.az = ax, ay, az
 
-
         a_x_world = ax*np.cos(pitch) + ay*np.sin(roll)*np.sin(pitch) + az*np.cos(roll)*np.sin(pitch)
         a_y_world = ay*np.cos(roll) - az*np.sin(roll)
         a_z_world = -ax*np.sin(pitch) + ay*np.sin(roll)*np.cos(pitch) + (az)*np.cos(roll)*np.cos(pitch) - 9.81
-
-        print(f'acc {a_x_world}, {a_y_world}, {a_z_world}')
-
 
         self.v_x_sum += a_x_world * self.dt
         self.v_y_sum += a_y_world * self.dt
