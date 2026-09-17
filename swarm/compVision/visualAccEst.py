@@ -57,9 +57,6 @@ class VisulaAcEst:
     def lucas_kanade_flow(self, frame1, frame2):
         gray1 = cv2.cvtColor(frame1, cv2.COLOR_BGR2GRAY)
         gray2 = cv2.cvtColor(frame2, cv2.COLOR_BGR2GRAY)
-        # gray2 = self.normalize_lighting(gray1, gray2).copy()
-        # gray1 = cv2.GaussianBlur(gray1, (5, 5), 1.0)
-        # gray2 = cv2.GaussianBlur(gray2, (5, 5), 1.0)
 
         old_points = cv2.goodFeaturesToTrack(
             gray1,
@@ -114,25 +111,6 @@ class VisulaAcEst:
         return annotated_frame, central_flow
 
     
-
-
-    @staticmethod
-    def normalize_lighting(prev_gray, curr_gray):
-        """Compensate for global gain and offset between frames."""
-        # Estimate gain (contrast) and offset (brightness)
-        mean_prev = prev_gray.mean()
-        mean_curr = curr_gray.mean()
-        std_prev = prev_gray.std()
-        std_curr = curr_gray.std()
-        
-        gain = std_prev / (std_curr + 1e-6)
-        offset = mean_prev - gain * mean_curr
-        
-        # Apply to current frame
-        normalized = curr_gray.astype(np.float32) * gain + offset
-        return np.clip(normalized, 0, 255).astype(np.uint8)
-
-
     @staticmethod
     def add_noise(frames, sigma=50):
         out = []
@@ -140,25 +118,4 @@ class VisulaAcEst:
             noise = np.random.normal(0, sigma, frame.shape)
             noisy = frame.astype(np.float32) + noise
             out.append(np.clip(noisy, 0, 255).astype(np.uint8))
-        return out
-
-
-
-    @staticmethod
-    def morphological_filter(frames, operation='open', kernel_size=3, iterations=1):
-        kernel = np.ones((kernel_size, kernel_size), np.uint8)
-        
-        ops = {
-            'erode':    lambda img: cv2.erode(img, kernel, iterations=iterations),
-            'dilate':   lambda img: cv2.dilate(img, kernel, iterations=iterations),
-            'open':     lambda img: cv2.morphologyEx(img, cv2.MORPH_OPEN, kernel, iterations=iterations),
-            'close':    lambda img: cv2.morphologyEx(img, cv2.MORPH_CLOSE, kernel, iterations=iterations),
-            'gradient': lambda img: cv2.morphologyEx(img, cv2.MORPH_GRADIENT, kernel, iterations=iterations),
-        }
-        
-        if operation not in ops:
-            raise ValueError(f"Unknown operation: {operation}")
-
-        out = [ops[operation](image) for image in frames]
-
         return out
