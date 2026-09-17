@@ -3,14 +3,14 @@ from genesis.utils.misc import tensor_to_array
 from swarm.compVision.visualAccEst import VisulaAcEst
 
 class DroneStruct:
-    def __init__(self, drone, imu, left_cam, right_cam):
+    def __init__(self, drone, imu, left_cam, right_cam, res = 0, fov = 0):
         self.imu = imu
         self._drone = drone
         self.left_cam = left_cam
         self.right_cam = right_cam
         self.postpocessed_frames = []
-        self.frame_processor = VisulaAcEst()
 
+        self.frame_processor = VisulaAcEst(res, fov)
         self.steps_cam = 0
 
     def __getattr__(self, attr):

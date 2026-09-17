@@ -8,33 +8,33 @@ class EnumFrame:
 
 
 class VisulaAcEst:
-    def __init__(self):
+    def __init__(self, res, fov):
         self.current_frame = EnumFrame() 
         self.buffer = []
+        self.foc_l = (res[0]/2)/ np.tan(fov/2)
+
 
     def update_frame(self, frame, idx):
         self.current_frame.frames = frame
         self.current_frame.idx = idx
         if not hasattr(self, 'frame_size'):
             self.frame_size = np.shape(frame[0])
-            
-        
+                    
         if(len(self.buffer) >= 100):
             self.buffer.pop(0)
 
         self.buffer.append(self.current_frame)
 
-    def processing(self, frame, idx):
-        self.update_frame(frame,idx)
-        # self.find_edges()
-        
-        self.aply_flow()
 
+    def processing(self, frame, idx):
+        self.update_frame(frame,idx)        
+        flow = self.aply_flow()
         return self.current_frame.frames
+
 
     def aply_flow(self):
         processed = []
-        dx, dy = 0, 0
+        flow = 0
         for i, f in enumerate(self.current_frame.frames):
             if len(self.buffer) >= 2:  
                 frame1 = self.buffer[-2].frames[i]
@@ -43,7 +43,7 @@ class VisulaAcEst:
                 processed.append(fr)
 
         self.current_frame.frames = processed
-        return dx, dy
+        return flow
 
 
     def lucas_kanade_flow(self, frame1, frame2):
@@ -90,10 +90,9 @@ class VisulaAcEst:
         central_good_new = good_new[mask_new]
         central_good_old = good_old[mask_old]
 
-        flow = good_new - good_old
         central_flow = central_good_new - central_good_old
 
-        for old, new, motion in zip(good_old, good_new, flow):
+        for new in good_new:
             x2, y2 = new.astype(int)
             collor = (0, 100,200 ) if (x2-xs/2)**2 + (y2-ys/2)**2 < (diameter / 2)**2 else (0, 255, 0)
             cv2.circle(annotated_frame, (x2, y2), 3, collor , -1)

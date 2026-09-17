@@ -25,7 +25,16 @@ class CustomScene:
     
     def add_ground_plane(self, size: float = 50.0):
         """Add a ground plane to the scene."""
-        plane = self.scene.add_entity(gs.morphs.Plane())
+        plane = self.scene.add_entity(
+        morph=gs.morphs.Plane(
+            plane_size=(size, size),
+            tile_size=(5.0, 5.0),
+        ),
+        surface=gs.surfaces.Rough(
+            diffuse_texture=gs.textures.ImageTexture(
+                image_path=r".\swarm\objects\grass.jpg"
+            )
+        ))
         self.entities['ground_plane'] = plane
         self.static_objects.append(plane)
         return plane
@@ -65,6 +74,7 @@ class CustomScene:
     
     def add_drone( self, name: str, urdf_path: str, position: Tuple[float, float, float] = (0, 0, 1), orientation = (0,0,0)) -> DroneStruct:
         drone = self.scene.add_entity(gs.morphs.Drone(file=urdf_path, pos=position, euler=orientation))
+
         imu = self.scene.add_sensor(
         gs.sensors.IMU(
             entity_idx=drone.idx,
@@ -80,25 +90,26 @@ class CustomScene:
             )
         )
 
+        res = (500, 600)
+        fov = 70
 
         left_cam = self.scene.add_sensor(
             gs.sensors.RasterizerCameraOptions(
                 entity_idx=drone.idx,
-                res=(500, 600),
+                res=res,
                 pos=(0.0, -0.01, 0.0),        # relative to the link frame once attached
                 up=(0, 0, 0),
-                fov=70.0,
-            )
+                fov=fov,
+           )
         )
-
         right_cam = self.scene.add_sensor(
             gs.sensors.RasterizerCameraOptions(
                 entity_idx=drone.idx,
                 link_idx_local=0,
-                res=(500, 600),
+                res=res,
                 pos=(0, 0.01, 0.0),        # relative to the link frame once attached
                 up=(0, 0, 0),
-                fov=70.0,
+                fov=fov,
             )
         )
 
@@ -106,7 +117,7 @@ class CustomScene:
         self.entities[name] = drone
         self.drones.append(drone)      
         print(f"✓ Added drone: {name} at {position}")
-        return DroneStruct(drone, imu, left_cam, right_cam)
+        return DroneStruct(drone, imu, left_cam, right_cam, res, fov)
 
     
     def add_swarm(self): pass

@@ -11,8 +11,6 @@ class DronePositionCTRL(DroneCTRL):
         self.kp_pos = np.diag([0.45, 0.45, 1, 0.06])
         self.kd_pos = np.diag([0.01, 0.01, 0.01, 0.1])
 
-        self.PCS = False
-
 
     def position_control(self, setpoint: np.array) -> np.array:
 
