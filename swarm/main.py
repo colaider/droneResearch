@@ -34,50 +34,69 @@ def main():
 
     import numpy as np
 
+    def stepping():
+        fps = 30
+        dt_camera = 1/fps
+        camer_st = int(dt_camera/ controller.dt)
 
-    # for step  in range(100000):
-    #     if controller.start(step) == 1:
-    #         controller.step()
-    #         controller.position_control(np.array([0,0,1,0]))
-    #         reading = controller.drone.imu.read()
-    #         acc  = reading.lin_acc.numpy()   # array shape (3,)
-    #         gyro = reading.ang_vel.numpy()   # array shape (3,)
-    #         mag  = reading.mag.numpy() 
-
-    #         plotter.push('Accelerometer (m/s²)', acc)
-    #         plotter.push('Gyroscope (rad/s)',    gyro)
-    #         plotter.update()
-    #         controller.drone.camera_show()
-    #     scene.step()
-
-
-    for step in range(100000000000):
         controller.step(step)
+
+        if step < 1: controller.drone.set_camera_dt(dt_camera)
+        controller.drone.frame_processor.provide_drone_gyro(controller.get_attitude())
+        controller.drone.frame_processor.provide_drone_velocity(controller.get_lin_vel())
+        if step % camer_st == 0: controller.drone.camera_step()
+        controller.drone.camera_show()
+
+    def plotting():
+        reading = controller.drone.imu.read()
+        acc  = reading.lin_acc.numpy()   # array shape (3,)
+        gyro = reading.ang_vel.numpy()   # array shape (3,)
+        
+        pos= controller.get_position()
+        plotter.push('Accelerometer (m/s²)', acc)
+        plotter.push('Gyroscope (rad/s)',    gyro)
+        plotter.push('Actual pos', pos)
+        plotter.update()
+
+
+    for step  in range(100000):
+        stepping()
+        x = 0
         if controller.start(step) == 1:
             t = (step - 500) * controller.dt   # time since startup finished
             radius = 2.0
-            omega = 0.5   # rad/s → circle period = 2π/0.5 ≈ 12.5s
-            
+            omega = 0.5   
             x = radius * np.cos(omega * t)
             y = radius * np.sin(omega * t)
             z = 1.0
             yaw = 0.0
-            
+
+            pos = controller.get_position()
             controller.position_control(np.array([x, y, z, yaw]))
-            reading = controller.drone.imu.read()
-            acc  = reading.lin_acc.numpy()   # array shape (3,)
-            gyro = reading.ang_vel.numpy()   # array shape (3,)
-            
-            pos= controller.get_position()
-            plotter.push('Accelerometer (m/s²)', acc)
-            plotter.push('Gyroscope (rad/s)',    gyro)
-            plotter.push('Actual pos', pos)
-            plotter.update()
-            controller.drone.camera_show()
+            # controller.position_control(np.array([0,0,1,0]))      
         scene.step()
-        
+
     print("\n✅ Simulation complete!")
     scene.close()
 
+
+
+
+
+   
 if __name__ == "__main__":
     main()
+
+
+
+
+
+
+
+   
+    # for step in range(100000000000):
+        
+    #     if controller.start(step) == 1:
+    #         
+
+    #     scene.step()

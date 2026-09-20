@@ -92,12 +92,12 @@ class CustomScene:
 
         res = (500, 600)
         fov = 85
-
+        cam_saperation = 0.05
         left_cam = self.scene.add_sensor(
             gs.sensors.RasterizerCameraOptions(
                 entity_idx=drone.idx,
                 res=res,
-                pos=(0.0, -0.01, 0.0),        # relative to the link frame once attached
+                pos=(0.0, -1 * cam_saperation/2, 0.0),        # relative to the link frame once attached
                 up=(0, 0, 0),
                 fov=fov,
            )
@@ -107,7 +107,7 @@ class CustomScene:
                 entity_idx=drone.idx,
                 link_idx_local=0,
                 res=res,
-                pos=(0, 0.01, 0.0),        # relative to the link frame once attached
+                pos=(0, cam_saperation/2, 0.0),        # relative to the link frame once attached
                 up=(0, 0, 0),
                 fov=fov,
             )
@@ -117,7 +117,7 @@ class CustomScene:
         self.entities[name] = drone
         self.drones.append(drone)      
         print(f"✓ Added drone: {name} at {position}")
-        return DroneStruct(drone, imu, left_cam, right_cam, res, fov)
+        return DroneStruct(drone, imu, left_cam, right_cam, res, fov, cam_saperation)
 
     
     def add_swarm(self): pass
