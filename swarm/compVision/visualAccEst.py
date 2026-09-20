@@ -11,12 +11,15 @@ class VisulaAcEst:
     def __init__(self, res, fov):
         self.current_frame = EnumFrame() 
         self.buffer = []
-        self.foc_l = (res[0]/2)/ np.tan(fov/2)
+        self.foc_l = (res[0]/2)/ np.tan(np.deg2rad(fov)/2)
+       
 
         self.drone_pos = np.zeros(3)
         self.dt = 0.01
         self.drone_vel = np.zeros(3)#
         self.camera_saperation = 0
+        self.drone_ang_vel = np.zeros(3)
+        self.imu_att = np.zeros(3)
 
     def update_frame(self, frame, idx):
         new_frame_data = EnumFrame()
@@ -131,10 +134,14 @@ class VisulaAcEst:
     def estimate_velocities(self, flow, points):
         for f, p in zip(flow, points):
             if len(p) == 0: return None
+            v_duerot = p[:, 2, None]*(1/np.cos(self.imu_att[:2])**2)*self.drone_ang_vel[:2]
+
             kv = (1/(self.foc_l * self.dt)) * p[:, 2]
-            B = f*kv[:,None]
+            B = f*kv[:,None] - v_duerot
 
             c = np.array(self.frame_size[:2])/2
+
+            
 
             r = (p[:, 2, None] / self.foc_l) * (p[:, :2] - c) + self.camera_saperation / 2
             A = np.column_stack([np.ones(len(p)), np.zeros(len(p)), -r[:, 1]])
@@ -158,9 +165,6 @@ class VisulaAcEst:
 
     def set_dt(self, dt):
         self.dt = dt
-
-    def provide_drone_gyro(self, ang):
-        self.imu_att = ang
 
     def provide_drone_velocity(self, vel):
         self.drone_vel = vel

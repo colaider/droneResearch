@@ -42,8 +42,9 @@ def main():
         controller.step(step)
 
         if step < 1: controller.drone.set_camera_dt(dt_camera)
-        controller.drone.frame_processor.provide_drone_gyro(controller.get_attitude())
+        controller.drone.frame_processor.imu_att = np.array(controller.get_attitude())
         controller.drone.frame_processor.provide_drone_velocity(controller.get_lin_vel())
+        controller.drone.frame_processor.drone_ang_vel = controller.get_ang_vel()
         if step % camer_st == 0: controller.drone.camera_step()
         controller.drone.camera_show()
 
@@ -72,8 +73,8 @@ def main():
             yaw = 0.0
 
             pos = controller.get_position()
-            controller.position_control(np.array([x, y, z, yaw]))
-            # controller.position_control(np.array([0,0,1,0]))      
+            # controller.position_control(np.array([x, y, z, yaw]))
+            controller.position_control(np.array([5,0,1,0]))      
         scene.step()
 
     print("\n✅ Simulation complete!")
