@@ -25,6 +25,7 @@ class VisulaAcEst:
         self.drone_vel = np.zeros(3)
         self.drone_pos = np.zeros(3)
 
+        self.expected_vel_err = 0
         self.previous_cmd_vel = np.zeros(4)
         self.camera_velocity = []
 
@@ -138,8 +139,8 @@ class VisulaAcEst:
         central_flow = central_good_new[:, :2] - central_good_old[:, :2]
         avg_pos = (central_good_old + central_good_new) / 2
 
-        avg_pos[resud_mask]
-        central_flow[resud_mask]
+        avg_pos = avg_pos[resud_mask]
+        central_flow = central_flow[resud_mask]
         return annotated_frame, central_flow, avg_pos
 
 
@@ -152,12 +153,13 @@ class VisulaAcEst:
     def estimate_velocities(self, flow, points):
         v_out = []
         i = 0
+        nph = np.array([self.previous_cmd_vel[0], 
+                                    self.previous_cmd_vel[1], 
+                                    self.previous_cmd_vel[3]
+                                    ])
         if not hasattr(self, 'sfkl'): 
-            nph = np.array([self.previous_cmd_vel[0], 
-                            self.previous_cmd_vel[1], 
-                            self.previous_cmd_vel[3]
-                            ])
             self.sfkp = [nph, nph]
+            self.mean = deque(maxlen=1)
 
         if len(points[0]) < 3:
             self.camera_velocity = self.drone_vel
@@ -185,9 +187,10 @@ class VisulaAcEst:
          
             self.vkf.predict(self.sfkp[i])
             self.vkf.update(x)
-            self.sfkp[i] = self.vkf.get()            
-            v_out.append(self.sfkp[i])
+            self.sfkp[i] = self.vkf.get()        
+            self.mean.append(self.sfkp[i])
 
+            v_out.append(np.mean(self.mean, axis=0))   
             i += 1
 
         vel = (v_out[0] + v_out[1]) / 2
@@ -199,8 +202,6 @@ class VisulaAcEst:
     def point_prediction_filtering(self, old, new, threshold=1.5):
         v = self.previous_cmd_vel[:3]    # (3,) m/s
         ang = self.drone_ang_vel # (3,) rad/s
-        
-    
         c = np.array(self.frame_size[:2]) / 2
 
         u = old[:, 0] - c[0]  
@@ -208,22 +209,18 @@ class VisulaAcEst:
         z = old[:, 2]          
                 
         du_trans = (-self.foc_l * v[0] + u * v[2]) / z * self.dt
-        dv_trans = (-self.foc_l * v[1] + v_pix * v[2]) / z * self.dt
-
         
-        # Yaw contribution only
+        dv_trans = (-self.foc_l * v[1] + v_pix * v[2]) / z * self.dt
         du_yaw = -v_pix * ang[2] * self.dt
         dv_yaw = u * ang[2] * self.dt
-
         predicted_u = old[:, 0] + du_trans + du_yaw
         predicted_v = old[:, 1] + dv_trans + dv_yaw
-        
         predicted = np.column_stack([predicted_u, predicted_v])
         
         # Residuals in pixels
         residuals = np.clip(np.linalg.norm(new[:, :2] - predicted, axis=1), 0, 150)
-        if residuals.sum() > 0: threshold = np.min(residuals) + 0.05*(np.max(residuals) - np.min(residuals))
-
+        self.expected_vel_err = np.mean(residuals)
+        if residuals.sum() > 0: threshold = np.min(residuals) + 0.12*(np.max(residuals) - np.min(residuals))
         return residuals < threshold
 
 
@@ -243,12 +240,8 @@ class VisulaAcEst:
 
 
 
-
-
-
-
 class VelocityKalmanFilter:
-    def __init__(self, process_var=0.6, measurement_var=0.2):
+    def __init__(self, process_var=0.6, measurement_var=5):
         self.state = np.zeros(3)
         self.P = np.eye(3) * 1.0
         self.Q = np.eye(3) * process_var

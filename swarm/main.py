@@ -21,9 +21,10 @@ def main():
 
     plotter = LivePlotter(
         plots={
-            'Accelerometer (m/s²)': ['ax', 'ay', 'az'],
-            'Gyroscope (rad/s)':    ['gx', 'gy', 'gz'],
-            'Actual pos': ['x', 'y', 'z'],
+            'Cam Pos': ['x', 'y', 'z'],
+            'Act Pos':    ['x', 'y', 'z'],
+            # 'Used Pos': ['x', 'y', 'z'],
+            'Camera Vel': ['x', 'y', 'z'],
         },
         buffer_size=1000,
         title='IMU Live',
@@ -59,19 +60,21 @@ def main():
             omega = 0.5  
             x = radius * np.cos(omega * t)
             y = radius * np.sin(omega * t)
-            z = 7.0
+            z = 1.0
             yaw = 0.0
 
             pos = controller.get_position()
             # controller.position_control(np.array([x, y, z, yaw]))
             controller.position_ctrl_fused(np.array([x,0,1,0]))      
-            pos = controller.get_position()
-
+            pos = controller.get_imu_pos()
+            real_pos = controller.get_position()
 
             acc = controller.get_lin_vel()
             vid = controller.get_camera_lin_v()
-            plotter.push('Accelerometer (m/s²)', acc)
-            plotter.push('Gyroscope (rad/s)', vid[:3])
+            plotter.push('Cam Pos', controller.cam_pos[:3])
+            plotter.push('Act Pos', real_pos)
+            # plotter.push('Used Pos', pos[:3])
+            plotter.push('Camera Vel', vid)
             plotter.update()
 
         scene.step()

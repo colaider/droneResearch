@@ -43,4 +43,4 @@ class DroneStruct:
     def set_camera_dt(self, dt):
         self.frame_processor.set_dt(dt)
 
-       
+    
