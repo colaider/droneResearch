@@ -1,6 +1,6 @@
 import genesis as gs
 from swarm.scene_builders.customScene import CustomScene
-from swarm.droneClasses.dronePositionCTRL import DronePositionCTRL
+from swarm.droneClasses.droneVisulaControler import DroneVisulaCTRL 
 import numpy as np
 from swarm.utilities.rtPlotter import LivePlotter
 
@@ -29,25 +29,15 @@ def main():
         title='IMU Live',
     )
 
-    controller = DronePositionCTRL(drone_entity=drone, dt=dt)
+    controller = DroneVisulaCTRL(drone_entity=drone, dt=dt)
     scene.build()
 
     import numpy as np
 
     def stepping():
-        fps = 30
-        dt_camera = 1/fps
-        camer_st = int(dt_camera/ controller.dt)
+        controller.camera_update_step(step)
 
-        controller.step(step)
-
-        if step < 1: controller.drone.set_camera_dt(dt_camera)
-        controller.drone.frame_processor.imu_att = np.array(controller.get_attitude())
-        controller.drone.frame_processor.provide_drone_velocity(controller.get_lin_vel())
-        controller.drone.frame_processor.drone_ang_vel = controller.get_ang_vel()
-        if step % camer_st == 0: controller.drone.camera_step()
-        controller.drone.camera_show()
-
+        
     def plotting():
         reading = controller.drone.imu.read()
         acc  = reading.lin_acc.numpy()   # array shape (3,)
@@ -58,23 +48,32 @@ def main():
         plotter.push('Gyroscope (rad/s)',    gyro)
         plotter.push('Actual pos', pos)
         plotter.update()
-
+    prev_p = np.zeros([3])
 
     for step  in range(100000):
         stepping()
         x = 0
         if controller.start(step) == 1:
             t = (step - 500) * controller.dt   # time since startup finished
-            radius = 2.0
-            omega = 0.5   
+            radius = 8.0
+            omega = 0.5  
             x = radius * np.cos(omega * t)
             y = radius * np.sin(omega * t)
-            z = 1.0
+            z = 7.0
             yaw = 0.0
 
             pos = controller.get_position()
             # controller.position_control(np.array([x, y, z, yaw]))
-            controller.position_control(np.array([5,0,1,0]))      
+            controller.position_ctrl_fused(np.array([x,0,1,0]))      
+            pos = controller.get_position()
+
+
+            acc = controller.get_lin_vel()
+            vid = controller.get_camera_lin_v()
+            plotter.push('Accelerometer (m/s²)', acc)
+            plotter.push('Gyroscope (rad/s)', vid[:3])
+            plotter.update()
+
         scene.step()
 
     print("\n✅ Simulation complete!")

@@ -229,4 +229,7 @@ class DroneCTRL:
     def get_ang_vel(self):
         return np.array([self.v_pitch, self.v_roll, self.v_yaw])
 
+    def set_pose(self, pos):
+        self.lin_pos = pos
+
            

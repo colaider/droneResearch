@@ -1,6 +1,8 @@
 import cv2
 from genesis.utils.misc import tensor_to_array
 from swarm.compVision.visualAccEst import VisulaAcEst
+import numpy as np
+
 
 class DroneStruct:
     def __init__(self, drone, imu, left_cam, right_cam, res = 0, fov = 0, camera_sapartion = 0):
@@ -40,4 +42,5 @@ class DroneStruct:
 
     def set_camera_dt(self, dt):
         self.frame_processor.set_dt(dt)
+
        

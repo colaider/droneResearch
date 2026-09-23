@@ -1,5 +1,7 @@
 import cv2 
 import numpy as np 
+from collections import deque
+
 
 class EnumFrame:
     def __init__(self):
@@ -20,6 +22,14 @@ class VisulaAcEst:
         self.camera_saperation = 0
         self.drone_ang_vel = np.zeros(3)
         self.imu_att = np.zeros(3)
+        self.drone_vel = np.zeros(3)
+        self.drone_pos = np.zeros(3)
+
+        self.previous_cmd_vel = np.zeros(4)
+        self.camera_velocity = []
+
+        self.vkf = VelocityKalmanFilter()
+
 
     def update_frame(self, frame, idx):
         new_frame_data = EnumFrame()
@@ -114,15 +124,23 @@ class VisulaAcEst:
         central_good_new = good_new[mask]
         central_good_old = good_old[mask]
       
-        central_flow = central_good_new - central_good_old
+        
         for new in good_new:
             x2, y2 = new.astype(int)
             collor = (0, 100,200 ) if (x2-xs/2)**2 + (y2-ys/2)**2 < (diameter / 2)**2 else (0, 255, 0)
             cv2.circle(annotated_frame, (x2, y2), 3, collor , -1)
 
+        central_good_old = np.hstack((central_good_old, np.full((central_good_old.shape[0], 1), self.drone_pos[2])))
+        central_good_new = np.hstack((central_good_new, np.full((central_good_new.shape[0], 1), self.drone_pos[2])))
+
+
+        resud_mask = self.point_prediction_filtering(central_good_old,central_good_new)
+        central_flow = central_good_new[:, :2] - central_good_old[:, :2]
         avg_pos = (central_good_old + central_good_new) / 2
-        p_pos = np.hstack((avg_pos, np.full((avg_pos.shape[0], 1), self.drone_pos[2])))
-        return annotated_frame, central_flow, p_pos
+
+        avg_pos[resud_mask]
+        central_flow[resud_mask]
+        return annotated_frame, central_flow, avg_pos
 
 
     def trinagulate_altitude(self, points) -> list:
@@ -132,27 +150,84 @@ class VisulaAcEst:
 
 
     def estimate_velocities(self, flow, points):
+        v_out = []
+        i = 0
+        if not hasattr(self, 'sfkl'): 
+            nph = np.array([self.previous_cmd_vel[0], 
+                            self.previous_cmd_vel[1], 
+                            self.previous_cmd_vel[3]
+                            ])
+            self.sfkp = [nph, nph]
+
+        if len(points[0]) < 3:
+            self.camera_velocity = self.drone_vel
+            print('hui')
+            return None
+        
         for f, p in zip(flow, points):
             if len(p) == 0: return None
             v_duerot = p[:, 2, None]*(1/np.cos(self.imu_att[:2])**2)*self.drone_ang_vel[:2]
 
             kv = (1/(self.foc_l * self.dt)) * p[:, 2]
-            B = f*kv[:,None] - v_duerot
-
+            v = f*kv[:,None]
+            B = v - v_duerot
             c = np.array(self.frame_size[:2])/2
-
-            
 
             r = (p[:, 2, None] / self.foc_l) * (p[:, :2] - c) + self.camera_saperation / 2
             A = np.column_stack([np.ones(len(p)), np.zeros(len(p)), -r[:, 1]])
             A2 = np.column_stack([np.zeros(len(p)), np.ones(len(p)), r[:, 0]])
             A = np.vstack([A, A2])
-            B = B.flatten()
-
+            B = np.concatenate([B[:, 0], B[:, 1]])
             x, *_ = np.linalg.lstsq(A, B, rcond=None)
-            print(x)
-
+            x *= -1
             
+            v_l = v - x[2]*r
+         
+            self.vkf.predict(self.sfkp[i])
+            self.vkf.update(x)
+            self.sfkp[i] = self.vkf.get()            
+            v_out.append(self.sfkp[i])
+
+            i += 1
+
+        vel = (v_out[0] + v_out[1]) / 2
+        np.insert(vel, 2, self.drone_vel[2])
+        self.camera_velocity = vel
+           
+
+
+    def point_prediction_filtering(self, old, new, threshold=1.5):
+        v = self.previous_cmd_vel[:3]    # (3,) m/s
+        ang = self.drone_ang_vel # (3,) rad/s
+        
+    
+        c = np.array(self.frame_size[:2]) / 2
+
+        u = old[:, 0] - c[0]  
+        v_pix = old[:, 1] - c[1]  
+        z = old[:, 2]          
+                
+        du_trans = (-self.foc_l * v[0] + u * v[2]) / z * self.dt
+        dv_trans = (-self.foc_l * v[1] + v_pix * v[2]) / z * self.dt
+
+        
+        # Yaw contribution only
+        du_yaw = -v_pix * ang[2] * self.dt
+        dv_yaw = u * ang[2] * self.dt
+
+        predicted_u = old[:, 0] + du_trans + du_yaw
+        predicted_v = old[:, 1] + dv_trans + dv_yaw
+        
+        predicted = np.column_stack([predicted_u, predicted_v])
+        
+        # Residuals in pixels
+        residuals = np.clip(np.linalg.norm(new[:, :2] - predicted, axis=1), 0, 150)
+        if residuals.sum() > 0: threshold = np.min(residuals) + 0.05*(np.max(residuals) - np.min(residuals))
+
+        return residuals < threshold
+
+
+                               
     @staticmethod
     def add_noise(frames, sigma=20):
         out = []
@@ -166,8 +241,29 @@ class VisulaAcEst:
     def set_dt(self, dt):
         self.dt = dt
 
-    def provide_drone_velocity(self, vel):
-        self.drone_vel = vel
 
-    def provide_drone_pos(self, pos):
-        self.drone_pos = pos
+
+
+
+
+
+class VelocityKalmanFilter:
+    def __init__(self, process_var=0.6, measurement_var=0.2):
+        self.state = np.zeros(3)
+        self.P = np.eye(3) * 1.0
+        self.Q = np.eye(3) * process_var
+        self.R = np.eye(3) * measurement_var
+    
+    def predict(self, commanded_velocity):
+        """Prediction = commanded velocity (with some uncertainty)."""
+        self.state = commanded_velocity
+        self.P = self.P + self.Q  # uncertainty grows
+    
+    def update(self, measured_velocity):
+        """Correct with measurement."""
+        K = self.P @ np.linalg.inv(self.P + self.R)
+        self.state = self.state + K @ (measured_velocity - self.state)
+        self.P = (np.eye(3) - K) @ self.P
+    
+    def get(self):
+        return self.state.copy() 
