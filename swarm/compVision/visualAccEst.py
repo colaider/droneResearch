@@ -72,7 +72,7 @@ class VisulaAcEst:
             flow_lr.append(flow)
             points.append(p)
 
-        points = self.trinagulate_altitude(points)
+        points = self.trinagulate_altitude(points, flow_lr)
 
         self.current_frame.frames = processed
         self.estimate_velocities(flow_lr, points)
@@ -144,9 +144,11 @@ class VisulaAcEst:
         return annotated_frame, central_flow, avg_pos
 
 
-    def trinagulate_altitude(self, points) -> list:
+    def trinagulate_altitude(self, points, flow) -> list:
         #complete
-        out = points
+        out = []
+        for p,f in zip(points, flow):
+            out.append(p)
         return out
 
 
