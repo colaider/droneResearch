@@ -23,11 +23,15 @@ class VisulaAcEst:
         self.drone_ang_vel = np.zeros(3)
         self.imu_att = np.zeros(3)
         self.drone_vel = np.zeros(3)
-        self.drone_pos = np.zeros(3)
+        self.drone_pos = np.zeros(2)
+        self.drone_ang = np.zeros(2)
+
 
         self.expected_vel_err = 0
         self.previous_cmd_vel = np.zeros(4)
         self.camera_velocity = []
+        self.camera_angle = np.zeros(3)
+
 
         self.vkf = VelocityKalmanFilter()
 
@@ -57,22 +61,27 @@ class VisulaAcEst:
     def aply_flow(self):
         processed = []
         flow = 0
-        points = []
-        flow_lr = []
-        
+        points, flow_lr, old_p, new_p = [], [], [], []
         if len(self.buffer) < 2:
-            return flow   # need at least 2 frames
+            return flow   
         
         for i in range(min(len(self.buffer[-2].frames), len(self.buffer[-1].frames))):
             frame1 = self.buffer[-2].frames[i]
             frame2 = self.buffer[-1].frames[i]
-            fr, flow, p = self.lucas_kanade_flow(frame1, frame2)
-            
+            fr, flow, p, old, new = self.lucas_kanade_flow(frame1, frame2)
+
             processed.append(fr)
             flow_lr.append(flow)
             points.append(p)
+            old_p.append(old)
+            new_p.append(new)
 
-        points = self.trinagulate_altitude(points, flow_lr)
+        points = self.trinagulate_altitude(points, flow_lr, old_p)
+
+        for i, _ in enumerate(flow_lr):
+            resud_mask = self.point_prediction_filtering(old_p[i], new_p[i])
+            flow_lr[i] = flow_lr[i][resud_mask]
+            points[i] = points[i][resud_mask]
 
         self.current_frame.frames = processed
         self.estimate_velocities(flow_lr, points)
@@ -93,21 +102,19 @@ class VisulaAcEst:
 
         annotated_frame = frame2.copy()
 
-        if old_points is None: return annotated_frame, None, None
+        if old_points is None: return annotated_frame, None, None, None, None
         new_points, status_fwd, error_fwd = cv2.calcOpticalFlowPyrLK(
             gray1, gray2, old_points, None,
             winSize=(21, 21), maxLevel=3,
             criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 30, 0.01)
         )
-
-        # Backward: frame2 → frame1
         back_points, status_bwd, error_bwd = cv2.calcOpticalFlowPyrLK(
             gray2, gray1, new_points, None,
             winSize=(21, 21), maxLevel=3,
             criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 30, 0.01)
         )
 
-        if new_points is None: return annotated_frame, None, None
+        if new_points is None: return annotated_frame, None, None, None
 
         diff = np.abs(old_points - back_points).reshape(-1, 2).max(axis=1)
         good_mask = (status_fwd.ravel() == 1) & (diff < 0.5)   
@@ -124,30 +131,24 @@ class VisulaAcEst:
         mask = np.sqrt((good_new[:, 0] - xs / 2)**2 + (good_new[:, 1]-ys/2)**2) < diameter / 2
         central_good_new = good_new[mask]
         central_good_old = good_old[mask]
-      
-        
+              
         for new in good_new:
             x2, y2 = new.astype(int)
-            collor = (0, 100,200 ) if (x2-xs/2)**2 + (y2-ys/2)**2 < (diameter / 2)**2 else (0, 255, 0)
+            collor = (0, 100, 200) if (x2-xs/2)**2 + (y2-ys/2)**2 < (diameter / 2)**2 else (0, 255, 0)
             cv2.circle(annotated_frame, (x2, y2), 3, collor , -1)
 
         central_good_old = np.hstack((central_good_old, np.full((central_good_old.shape[0], 1), self.drone_pos[2])))
         central_good_new = np.hstack((central_good_new, np.full((central_good_new.shape[0], 1), self.drone_pos[2])))
 
-
-        resud_mask = self.point_prediction_filtering(central_good_old,central_good_new)
         central_flow = central_good_new[:, :2] - central_good_old[:, :2]
         avg_pos = (central_good_old + central_good_new) / 2
-
-        avg_pos = avg_pos[resud_mask]
-        central_flow = central_flow[resud_mask]
-        return annotated_frame, central_flow, avg_pos
+        return annotated_frame, central_flow, avg_pos, central_good_old, central_good_new
 
 
-    def trinagulate_altitude(self, points, flow) -> list:
+    def trinagulate_altitude(self, points, flow, old) -> list:
         #complete
         out = []
-        for p,f in zip(points, flow):
+        for p, f, o in zip(points, flow, old):
             out.append(p)
         return out
 
@@ -163,35 +164,41 @@ class VisulaAcEst:
             self.sfkp = [nph, nph]
             self.mean = deque(maxlen=1)
 
-        if len(points[0]) < 3:
+        if len(points[0]) < 2:
             self.camera_velocity = self.drone_vel
+            self.camera_angle = self.drone_ang[:2]
             print('hui')
             return None
         
         for f, p in zip(flow, points):
-            if len(p) == 0: return None
-            v_duerot = p[:, 2, None]*(1/np.cos(self.imu_att[:2])**2)*self.drone_ang_vel[:2]
+            v_l = np.array([])
+            v_temp = []
+            for i in range(2):
+                z = np.full(len(p), np.mean(p[:,2])) if i == 1 else p[:, 2]
+                v_duerot = p[:, 2, None]*(1/np.cos(self.imu_att[:2])**2)*self.drone_ang_vel[:2]
 
-            kv = (1/(self.foc_l * self.dt)) * p[:, 2]
-            v = f*kv[:,None]
-            B = v - v_duerot
-            c = np.array(self.frame_size[:2])/2
+                kv = (1/(self.foc_l * self.dt)) * z
+                v = f*kv[:,None]
+                B = v - v_duerot
+                c = np.array(self.frame_size[:2])/2
 
-            r = (p[:, 2, None] / self.foc_l) * (p[:, :2] - c) + self.camera_saperation / 2
-            A = np.column_stack([np.ones(len(p)), np.zeros(len(p)), -r[:, 1]])
-            A2 = np.column_stack([np.zeros(len(p)), np.ones(len(p)), r[:, 0]])
-            A = np.vstack([A, A2])
-            B = np.concatenate([B[:, 0], B[:, 1]])
-            x, *_ = np.linalg.lstsq(A, B, rcond=None)
-            x *= -1
-            
-            v_l = v - x[2]*r
-         
+                r = (p[:, 2, None] / self.foc_l) * (p[:, :2] - c) + self.camera_saperation / 2
+                A = np.column_stack([np.ones(len(p)), np.zeros(len(p)), -r[:, 1]])
+                A2 = np.column_stack([np.zeros(len(p)), np.ones(len(p)), r[:, 0]])
+                A = np.vstack([A, A2])
+                B = np.concatenate([B[:, 0], B[:, 1]])
+                x, *_ = np.linalg.lstsq(A, B, rcond=None)
+                x *= -1
+
+                if i == 1: v_l = v - x[2]*r
+                v_temp.append(x) 
+
+            self.estimate_ang_from_vel(v_l, p)
+
             self.vkf.predict(self.sfkp[i])
-            self.vkf.update(x)
+            self.vkf.update(v_temp[0])
             self.sfkp[i] = self.vkf.get()        
             self.mean.append(self.sfkp[i])
-
             v_out.append(np.mean(self.mean, axis=0))   
             i += 1
 
@@ -199,6 +206,22 @@ class VisulaAcEst:
         np.insert(vel, 2, self.drone_vel[2])
         self.camera_velocity = vel
            
+
+    def estimate_ang_from_vel(self, v, p):
+        c_img = np.array(self.frame_size[:2]) / 2
+        u_pix = p[:, 0] - c_img[0]
+        v_pix = p[:, 1] - c_img[1]
+        
+        A = np.column_stack([u_pix, v_pix, np.ones(len(u_pix))])
+        
+        v_mag = np.sqrt(v[:, 0]**2 + v[:, 1]**2)
+        (a, b, c), *_ = np.linalg.lstsq(A, v_mag, rcond=None)
+        
+        pitch = -self.foc_l * a / (2 * c)
+        roll  = -self.foc_l * b / (2 * c)
+        
+        print(f'pitch={np.degrees(pitch):.2f}°  roll={np.degrees(roll):.2f}°')
+        return pitch, roll
 
 
     def point_prediction_filtering(self, old, new, threshold=1.5):
@@ -243,7 +266,7 @@ class VisulaAcEst:
 
 
 class VelocityKalmanFilter:
-    def __init__(self, process_var=0.6, measurement_var=5):
+    def __init__(self, process_var=1, measurement_var=3):
         self.state = np.zeros(3)
         self.P = np.eye(3) * 1.0
         self.Q = np.eye(3) * process_var

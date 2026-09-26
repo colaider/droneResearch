@@ -52,6 +52,9 @@ class DroneVisulaCTRL(DronePositionCTRL):
         self.drone.frame_processor.drone_vel =  self.get_lin_vel()
         self.drone.frame_processor.drone_ang_vel = self.get_ang_vel()
         self.drone.frame_processor.previous_cmd_vel = self.prev_U
+        self.drone.frame_processor.drone_ang = self.get_attitude()[:2]
+
+
         if step < 1: self.drone.set_camera_dt(dt_camera)
 
         self.stp_count += 1

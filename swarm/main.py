@@ -68,7 +68,7 @@ def main():
             controller.position_ctrl_fused(np.array([x,0,1,0]))      
             pos = controller.get_imu_pos()
             real_pos = controller.get_position()
-
+            real_pos[1] = -1*real_pos[1]
             acc = controller.get_lin_vel()
             vid = controller.get_camera_lin_v()
             plotter.push('Cam Pos', controller.cam_pos[:3])
