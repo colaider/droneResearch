@@ -1,7 +1,7 @@
 import threading
 import time
 import yaml
-from pymavlink import mavutil
+from pathlib import Path
 from enum import IntFlag
 import torch
 
@@ -38,6 +38,8 @@ def clamp(min_val, max_val, value):
     return max(min_val, min(value, max_val))
 
 def mavlink_receive_thread(device="/dev/ttyUSB0", baudrate=2000000, rc_config=None):
+    rc_config = {} if rc_config is None else rc_config
+    from pymavlink import mavutil
     connection = mavutil.mavlink_connection(device, baud=baudrate)
     
     print(f"Connected to {device} at baudrate {baudrate}")
@@ -65,7 +67,7 @@ def mavlink_receive_thread(device="/dev/ttyUSB0", baudrate=2000000, rc_config=No
                     rc_command[0] = clamp(-1, 1, (rc_data[rc_config.get("ROLL", "ch1")] - 1500) / 500)      # scale to range [-1.0, 1.0]
                     rc_command[1] = clamp(-1, 1, (rc_data[rc_config.get("PITCH", "ch2")] - 1500) / 500)
                     rc_command[2] = clamp(-1, 1, (rc_data[rc_config.get("YAW", "ch3")] - 1500) / 500)
-                    rc_command[3] = clamp(0, 1, (rc_data[rc_config.get("throttle", "ch4")] - 1000) / 1000)
+                    rc_command[3] = clamp(0, 1, (rc_data[rc_config.get("THROTTLE", rc_config.get("THRUTTLE", "ch4"))] - 1000) / 1000)
                     temp_angle = rc_data[rc_config.get("ANGLE", "ch6")]
                     temp_arm = rc_data[rc_config.get("ARM", "ch5")]
                     temp_offboard = rc_data[rc_config.get("OFFBOARD", "ch8")]
@@ -81,10 +83,13 @@ def mavlink_receive_thread(device="/dev/ttyUSB0", baudrate=2000000, rc_config=No
             break
 
 
-def start_mavlink_receive_thread(device):
-    rc_config = load_rc_config("config/rc_FPV_eval/flight.yaml")
+def start_mavlink_receive_thread(device=None, rc_config=None):
+    if rc_config is None:
+        rc_config = load_rc_config(Path(__file__).resolve().parents[2] / "config/rc_FPV_eval/flight.yaml")
+    device = device or rc_config.get("USB_path", "/dev/ttyUSB0")
     t = threading.Thread(target=mavlink_receive_thread, args=(device, rc_config["baudrate"], rc_config), daemon=True)
     t.start()
+    return t
 
 if __name__ == "__main__":
 

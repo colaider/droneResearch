@@ -7,7 +7,7 @@ from genesis_drones.controllers import PIDcontroller
 from genesis_drones.sensors.odom import Odom
 
 from genesis_drones.utils.mavlink_rc import rc_command
-from genesis.utils.geom import trans_quat_to_T, transform_quat_by_quat, transform_by_trans_quat
+from genesis.utils.geom import trans_quat_to_T, transform_quat_by_quat, transform_by_trans_quat, transform_by_quat
 
 ASSETS_PATH = os.path.join(os.path.dirname(__file__), "../robots/assets")
 
@@ -30,10 +30,13 @@ class Genesis_env:
         self.render_cam = self.env_config["render_cam"]
         self.use_rc = self.env_config["use_rc"]
         self.use_ros = self.env_config.get("use_ros", False)
+        self.set_ros()
+        if self.env_config.get("load_map", False):
+            raise NotImplementedError("Map loading is not implemented")
 
         # flight
         self.controller = env_config["controller"]
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        self.device = gs.device
         if num_envs is None:
             self.num_envs = self.env_config.get("num_envs", 1)
         else:
@@ -48,7 +51,7 @@ class Genesis_env:
         self.scene = gs.Scene(
             sim_options = gs.options.SimOptions(dt = self.dt, substeps = 1),
             viewer_options = gs.options.ViewerOptions(
-                max_FPS = self.env_config.get("max_vis_FPS", 15),
+                refresh_rate = self.env_config.get("max_vis_FPS", 15),
                 camera_pos = (-3.0, 0.0, 3.0),
                 camera_lookat = (0.0, 0.0, 1.0),
                 camera_fov = 40,
@@ -106,28 +109,33 @@ class Genesis_env:
         # init
         self.drone_init_pos = self.drone.get_pos()
         self.drone_init_quat = self.drone.get_quat()
-        self.drone.set_dofs_damping(torch.tensor([0.0, 0.0, 0.0, 1e-4, 1e-4, 1e-4]))  # Set damping to a small value to avoid numerical instability
+        self.drone.odom.reset(self.drone_init_quat, None)
+        self.drone.set_dofs_damping(torch.tensor([0.0, 0.0, 0.0, 1e-4, 1e-4, 1e-4], device=self.device))  # Set damping to a small value to avoid numerical instability
 
 
-    def step(self, action=None): 
+    def step(self, action=None):
+        # Apply this action to this transition; refresh state once after physics.
+        self.drone.controller.step(action)
         self.scene.step()
+        self.drone.odom.odom_update()
         if self.render_cam:
             self.drone.cam.set_FPV_cam_pose()
             self.drone.cam.depth = self.drone.cam.render(rgb=True, depth=True)[1]   # [1] is idx of depth img
-        self.drone.controller.step(action)
 
 
     def set_drone_odom(self):
         odom = Odom(
             num_envs = self.num_envs,
-            device = torch.device("cuda"),
+            device = self.device,
             dt = self.dt,
         )
         odom.set_drone(self.drone)
         setattr(self.drone, 'odom', odom) 
 
     def set_drone_camera(self):
-        if (self.env_config.get("use_FPV_camera", False)):
+        if not self.env_config.get("use_FPV_camera", False):
+            raise ValueError("render_cam requires use_FPV_camera")
+        if self.render_cam:
             cam = self.scene.add_camera(
                 res=tuple(self.env_config["cam_res"]),
                 pos=(-3.5, 0.0, 2.5),
@@ -137,10 +145,10 @@ class Genesis_env:
             )
         def set_FPV_cam_pose(self):
             self.cam.set_pose(
-                # pos = self.get_pos() + self.cam.cam_pos,
+                # pos = self.get_pos() + transform_by_quat(self.cam.cam_pos, self.odom.body_quat),
                 # lookat = self.get_pos() + self.cam.cam_pos + 1,
                 # up = (0, 1, 0),
-                transform = trans_quat_to_T(trans = self.get_pos() + self.cam.cam_pos, 
+                transform = trans_quat_to_T(trans = self.get_pos() + transform_by_quat(self.cam.cam_pos, self.odom.body_quat),
                                             quat = transform_quat_by_quat(self.cam.cam_quat, self.odom.body_quat))
             )
         setattr(cam, 'cam_quat', self.cam_quat)  
@@ -169,8 +177,8 @@ class Genesis_env:
             self.target = None
 
     def set_ros(self):
-        if self.use_ros is True:
-            pass
+        if self.use_ros:
+            raise NotImplementedError("A live Genesis ROS bridge is not implemented")
 
     def set_drone_controller(self):
         pid = PIDcontroller(
@@ -178,7 +186,7 @@ class Genesis_env:
             rc_command = rc_command,
             odom = self.drone.odom, 
             config = self.flight_config,
-            device = torch.device("cuda"),
+            device = self.device,
             use_rc = self.use_rc,
             controller = self.controller,
         )
@@ -216,12 +224,12 @@ class Genesis_env:
         return aabb_list
 
     def reset(self, env_idx=None):
-        if len(env_idx) == 0:
-            return
         if env_idx is None:
             reset_range = torch.arange(self.num_envs, device=self.device)
         else:
-            reset_range = env_idx    
+            reset_range = torch.as_tensor(env_idx, device=self.device, dtype=torch.long)
+        if reset_range.numel() == 0:
+            return
         init_pos = torch.zeros((self.num_envs, 3), device=self.device)
         init_quat = torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device, dtype=gs.tc_float).unsqueeze(0).repeat(reset_range.shape[-1], 1)
         if self.env_config.get("fixed_init_pos", False):
@@ -238,20 +246,20 @@ class Genesis_env:
         self.drone.set_quat(init_quat, envs_idx=reset_range, zero_velocity=True)
         self.drone.odom.reset(init_quat, envs_idx=reset_range)
         self.drone.controller.reset(reset_range)
-        self.scene.step()
+        # A subset reset must never advance the other environments.
 
     def record(self, flag):
         if flag == "start":
             self.scene.visualizer.viewer._pyrender_viewer._record()
-        elif flag == "stop  ":
+        elif flag == "stop":
             self.scene.visualizer.viewer._pyrender_viewer.save_video()
 
 def random_quat(B):
-    yaw_angles = (torch.rand((B.shape[-1], 1), device="cuda") * 2 * 3.14159) - 3.14159
+    yaw_angles = (torch.rand((B.shape[-1], 1), device=B.device) * 2 * torch.pi) - torch.pi
 
     qw = torch.cos(yaw_angles / 2)
     qz = torch.sin(yaw_angles / 2) 
-    zero = torch.zeros((B.shape[-1], 1), device="cuda")
+    zero = torch.zeros((B.shape[-1], 1), device=B.device)
     quaternions = torch.cat((qw, zero, zero, qz), dim=1)
     
     return quaternions

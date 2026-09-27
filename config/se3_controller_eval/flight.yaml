@@ -66,9 +66,9 @@ inertia_matrix:       # no use
   - [0.0,    0.0014,  0.0,     0.0]
   - [0.0,    0.0,     0.00217, 0.0]
   - [0.0,    0.0,     0.0,     1.0]
-max_roll_rate: 10    # degree/s
-max_pitch_rate: 10   # degree/s
-max_yaw_rate: 3    # degree/s
+max_roll_rate: 10    # rad/s
+max_pitch_rate: 10   # rad/s
+max_yaw_rate: 3    # rad/s
 
 # =========== mavlink_param =============
 USB_path: "/dev/ttyUSB0"
@@ -80,7 +80,7 @@ OFFBOARD:  "ch8"
 YAW:       "ch3" 
 PITCH:     "ch2"
 ROLL:      "ch1"
-THRUTTLE:  "ch4"   
+THROTTLE:  "ch4"
 
 # =========== odom_param =============
 gyro_update_freq: 8000
@@ -103,11 +103,11 @@ se3_control:
   geometry:
     num_rotors: 4
     rotor_pos:
-      r1: [ 0.70710678118,  0.70710678118, 0.0 ]
-      r2: [ 0.70710678118, -0.70710678118, 0.0 ]
-      r3: [ -0.70710678118, -0.70710678118, 0.0 ]
-      r4: [ -0.70710678118,  0.70710678118, 0.0 ]
-    rotor_directions: [1, -1, 1, -1]
+      r1: [ 0.83333333333, -0.83333333333, 0.0 ]
+      r2: [-0.83333333333, -0.83333333333, 0.0 ]
+      r3: [-0.83333333333,  0.83333333333, 0.0 ]
+      r4: [ 0.83333333333,  0.83333333333, 0.0 ]
+    rotor_directions: [-1, 1, -1, 1]
     rI: [0.0, 0.0, 0.0]
 
   aero:
@@ -116,7 +116,7 @@ se3_control:
     c_Dz: 10.311e-3
 
   rotor:
-    k_eta: 1.28e-9
+    k_eta: 3.16e-10
     k_m: 7.94e-12
     k_d: 1.02506e-6
     k_z: 7.553e-7

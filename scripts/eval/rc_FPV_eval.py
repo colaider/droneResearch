@@ -1,3 +1,6 @@
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
 
 
 import shutil
@@ -17,11 +20,11 @@ import warp as wp
 def main():
 
     # logging_level="warning"
-    gs.init()
+    gs.init(backend=gs.cuda if torch.cuda.is_available() else gs.cpu)
     
-    with open("config/rc_FPV_eval/genesis_env.yaml", "r") as file:
+    with open(ROOT / "config/rc_FPV_eval/genesis_env.yaml", "r") as file:
         env_config = yaml.load(file, Loader=yaml.FullLoader)
-    with open("config/rc_FPV_eval/flight.yaml", "r") as file:
+    with open(ROOT / "config/rc_FPV_eval/flight.yaml", "r") as file:
         flight_config = yaml.load(file, Loader=yaml.FullLoader)
 
 
@@ -30,11 +33,11 @@ def main():
         flight_config = flight_config,
     )
 
-    device = "/dev/ttyUSB0"
+    device = flight_config.get("USB_path", "/dev/ttyUSB0")
     if not os.path.exists(device):
         print(f"[MAVLINK] Device {device} not found, skipping mavlink thread.")
     else :
-        start_mavlink_receive_thread(device)
+        start_mavlink_receive_thread(device, rc_config=flight_config)
 
     while True:
         genesis_env.step()

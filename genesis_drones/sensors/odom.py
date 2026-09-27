@@ -5,8 +5,8 @@ from genesis.utils.geom import quat_to_xyz, transform_by_quat, inv_quat, transfo
 
 # NOTE :IMU is not an odomtry, only has anglear_velocity and linear_accerleration
 class Odom:
-    def __init__(self, num_envs, device = torch.device("cuda"), dt=0.01):
-        self.device = device
+    def __init__(self, num_envs, device=None, dt=0.01):
+        self.device = torch.device(device) if device is not None else gs.device
         self.drone = None
         self.num_envs = num_envs
         self.dt = dt
@@ -50,13 +50,12 @@ class Odom:
 
     def cal_cur_quat(self):
         self.body_quat[:] = self.drone.get_quat()
-        self.has_nan[:] = torch.isnan(self.body_quat).any(dim=1)
-        if (torch.any(self.has_nan)):
-            print("get_quat NaN env_idx:", torch.nonzero(self.has_nan).squeeze())
-            self.body_quat_inv[self.has_nan] = inv_quat(self.body_quat[self.has_nan])
-            self.reset(self.has_nan.nonzero(as_tuple=False).flatten())
-        else:
-            self.body_quat_inv = inv_quat(self.body_quat)
+        self.has_nan[:] = (~torch.isfinite(self.body_quat).all(dim=1)
+                           | (self.body_quat.norm(dim=1) < 1e-8))
+        # Keep calculations finite until the task resets invalid environments.
+        self.body_quat[self.has_nan] = self.body_quat.new_tensor([1., 0., 0., 0.])
+        self.body_quat[:] = self.body_quat / self.body_quat.norm(dim=1, keepdim=True)
+        self.body_quat_inv[:] = inv_quat(self.body_quat)
 
     def gyro_update(self):  
         self.last_body_ang_vel[:] = self.body_ang_vel
@@ -96,48 +95,28 @@ class Odom:
         self.vel_update()
         self.acc_update()
         self.pos_update()
+        for value in (self.world_pos, self.world_linear_vel, self.body_ang_vel):
+            self.has_nan |= ~torch.isfinite(value).all(dim=1)
         self.last_time = time.perf_counter()
         
-    def reset(self, rand_quat, envs_idx):
-        # use reset when the status mutation occurs
-        if envs_idx is None:
-            reset_range = torch.arange(self.num_envs, device=self.device)
-        else:
-            reset_range = envs_idx
-        # Reset body data to zero
-        self.body_euler.index_fill_(0, reset_range, 0.0)
-        self.body_linear_vel.index_fill_(0, reset_range, 0.0)
-        self.body_linear_acc.index_fill_(0, reset_range, 0.0)
-        self.body_ang_vel.index_fill_(0, reset_range, 0.0)
-        identity_quat = torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device, dtype=gs.tc_float)
-        self.body_quat[reset_range] = rand_quat
-        self.body_quat_inv[reset_range] = inv_quat(rand_quat)
-        self.body_euler[:] = quat_to_xyz(self.body_quat, rpy=True)
-        
-        self.last_body_linear_vel.index_fill_(0, reset_range, 0.0)
-
-        # Reset global data to zero
-        self.world_linear_vel.index_fill_(0, reset_range, 0.0)
-        self.world_linear_acc.index_fill_(0, reset_range, 0.0)
-        self.world_pos.index_fill_(0, reset_range, 0.0)
-        self.world_ang_vel.index_fill_(0, reset_range, 0.0)
-
-        self.last_world_pos.index_fill_(0, reset_range, 0.0)
-        self.last_world_linear_vel.index_fill_(0, reset_range, 0.0)
-
-        # Reset the time
+    def reset(self, rand_quat, envs_idx=None):
+        """Synchronize only reset rows with the teleported simulator state."""
+        idx = (torch.arange(self.num_envs, device=self.device) if envs_idx is None
+               else torch.as_tensor(envs_idx, device=self.device, dtype=torch.long))
+        for name, value in vars(self).items():
+            if isinstance(value, torch.Tensor) and value.ndim and value.shape[0] == self.num_envs:
+                value[idx] = 0
+        self.body_quat[idx] = rand_quat
+        self.body_quat_inv[idx] = inv_quat(rand_quat)
+        self.body_euler[idx] = quat_to_xyz(rand_quat, rpy=True)
+        self.world_pos[idx] = self.drone.get_pos()[idx]
+        self.last_world_pos[idx] = self.world_pos[idx]
         self.last_time = time.perf_counter()
-
-        # self.odom_update()
-        self.last_world_pos[reset_range] = self.world_pos[reset_range]
-        self.last_world_linear_vel[reset_range] = self.world_linear_vel[reset_range]
-        self.last_body_linear_vel[reset_range] = self.body_linear_vel[reset_range]
-
 
     # utils
     def world_to_body_vector(self, input_tensor):
         """
-        Convert body frame vector tensor to world frame.
+        Convert world frame vectors to the body frame.
         :param:
             input_tensor: vectors like vel, acc ...(N, 3) or quat(N, 3), where N is the number of environments.
         """
@@ -150,7 +129,7 @@ class Odom:
         
     def body_to_world_vector(self, input_tensor):
         """
-        Convert world frame vector tensor to body frame.
+        Convert body frame vectors to the world frame.
         :param:
             input_tensor: vectors like vel, acc ...(N, 3) or quat(N, 4), where N is the number of environments.
         """
@@ -167,7 +146,7 @@ def ve2vb(input_vec: torch.Tensor, yaw: torch.Tensor) -> torch.Tensor:
     assert input_vec.ndim == 2 and input_vec.shape[1] == 3, "input_vec must be (N, 3)"
     assert yaw.ndim == 1 or (yaw.ndim == 2 and yaw.shape[1] == 1), "yaw must be (N,) or (N,1)"
 
-    yaw = -yaw.view(-1)
+    yaw = yaw.view(-1)
     cos_yaw = torch.cos(yaw)
     sin_yaw = torch.sin(yaw)
 

@@ -8,19 +8,32 @@ authors = [
     "Junjie Wang <22532069@zju.edu.cn>"
 ]
 license = "MIT"
-readme = "README.md"
+readme = "READMELIB.md"
 repository = "https://github.com/KafuuChikai/GenesisDroneEnv.git"
 packages = [
-    { include = "genesis_drones" }
+    { include = "genesis_drones" },
+    { include = "swarm" }
 ]
 
 [tool.poetry.dependencies]
 python = ">=3.10"
 tensorboard = "*"
-torch = ">=1.4.0"
+torch = ">=2.2"
 torchvision = ">=0.5.0" 
-numpy = ">=1.16.4"
+numpy = ">=1.26,<3"
+genesis-world = ">=1.4.1,<1.5"
+PyYAML = ">=6"
+pymavlink = ">=2.4"
+tensordict = ">=0.8"
+warp-lang = ">=1.0"
 rsl-rl-lib = { git = "https://github.com/leggedrobotics/rsl_rl.git", tag = "v3.1.3" }
+
+opencv-python = {version = ">=4.12", optional = true}
+pyqtgraph = {version = ">=0.14", optional = true}
+PyQt6 = {version = ">=6.9", optional = true}
+
+[tool.poetry.extras]
+swarm = ["opencv-python", "pyqtgraph", "PyQt6"]
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^7.0"

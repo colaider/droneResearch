@@ -61,7 +61,7 @@ class SE3Controller(object):
         self.nominal_kd_pos = torch.tensor(cfg["gains"]["kd_pos"], device=self.device)
         self.nominal_kp_att = torch.tensor(cfg["gains"]["kp_att"], device=self.device)
         self.nominal_kd_att = torch.tensor(cfg["gains"]["kd_att"], device=self.device)
-        # self.kp_vel = 0.1 * self.kp_pos
+        self.kp_vel = 0.1 * self.nominal_kp_pos.unsqueeze(0)
         self.mass = torch.tensor([self.nominal_mass], device=self.device)
         self.inertia = self.nominal_inertia.unsqueeze(0)  # (1, 3, 3)
         self.kp_pos = self.nominal_kp_pos.unsqueeze(0)  # (1, 3)
@@ -88,6 +88,8 @@ class SE3Controller(object):
         k_m = cfg["rotor"]["k_m"]
         k = k_m / k_eta
         self.k_eta = k_eta
+        self.rotor_speed_min = cfg["motor"]["rotor_speed_min"]
+        self.rotor_speed_max = cfg["motor"]["rotor_speed_max"]
 
         # Build Allocation Matrix (NumPy first, then convert to Torch)
         f_to_TM = np.vstack(
@@ -271,6 +273,12 @@ class SE3Controller(object):
         w_des[:, 0] = w_des[:, 0] * flip_sign
         w_des[:, 2] = w_des[:, 2] * flip_sign
 
+        # The alternate chart also changes the quaternion used by angle control.
+        flip_q = torch.zeros_like(q_tot)
+        flip_q[:, 0] = (~mask_neg).to(q_tot.dtype)
+        flip_q[:, 2] = mask_neg.to(q_tot.dtype)
+        q_tot = self.quat_mul(q_tot, flip_q)
+        q_scipy = torch.cat([q_tot[:, 1:], q_tot[:, :1]], dim=1)
         return R_des, w_des, q_scipy
 
     def randomize_params(self, num_envs, mass_std=0.05, pid_scale_range=(0.8, 1.2)):
@@ -326,9 +334,9 @@ class SE3Controller(object):
         q_input = state["q"] # 期望形状 (B, 4)
         
         if quat_format.lower() == "wxyz":
-            state["q"] = torch.cat([q_input[:, 1:], q_input[:, 0:1]], dim=1)
+            q = torch.cat([q_input[:, 1:], q_input[:, 0:1]], dim=1)
         elif quat_format.lower() == "xyzw":
-            state["q"] = q_input
+            q = q_input
         else:
             raise ValueError(f"Unknown quat_format: {quat_format}")
         # 1. Desired Force
@@ -341,7 +349,7 @@ class SE3Controller(object):
         F_des = self.mass * target_acc  # (B, 3)
 
         # 2. Current Attitude
-        R = self._quat_to_rot_matrix(state["q"])  # (B, 3, 3)
+        R = self._quat_to_rot_matrix(q)  # (B, 3, 3)
         b3 = R[:, :, 2]  # (B, 3)
 
         # 3. Thrust (u1)
@@ -361,7 +369,8 @@ class SE3Controller(object):
         R_err_mat = torch.matmul(R_des_T, R) - torch.matmul(R_T, R_des)
         att_err = self.vee(0.5 * R_err_mat)  # (B, 3)
 
-        w_err = state["w"] - w_des
+        w_des_body = torch.matmul(R_T @ R_des, w_des.unsqueeze(-1)).squeeze(-1)
+        w_err = state["w"] - w_des_body
 
         # Torque u2
         # (J @ att_err)
@@ -373,7 +382,7 @@ class SE3Controller(object):
         w_cross_Jw = torch.linalg.cross(state["w"], Jw, dim=1)
 
         u2 = J_term1 + w_cross_Jw  # (B, 3)
-        cmd_w = w_des - self.kp_att * att_err - self.kd_att * w_err
+        cmd_w = w_des_body - self.kp_att * att_err - self.kd_att * w_err
         # 6. Motor Allocation
         # TM: (4, B)
         TM = torch.stack([u1, u2[:, 0], u2[:, 1], u2[:, 2]], dim=0)
@@ -382,10 +391,11 @@ class SE3Controller(object):
         rotor_thrusts = torch.matmul(self.TM_to_f, TM)  # (4, 4) @ (4, B) -> (4, B)
 
         # Speeds
-        motor_speeds_sq = rotor_thrusts / self.k_eta
-        motor_speeds = torch.sign(motor_speeds_sq) * torch.sqrt(
-            torch.abs(motor_speeds_sq)
+        rotor_thrusts = torch.clamp(
+            rotor_thrusts, self.k_eta * self.rotor_speed_min**2,
+            self.k_eta * self.rotor_speed_max**2,
         )
+        motor_speeds = torch.sqrt(rotor_thrusts / self.k_eta)
 
         return {
             "cmd_motor_speeds": motor_speeds.T,  # (B, 4)

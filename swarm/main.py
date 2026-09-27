@@ -1,3 +1,4 @@
+from pathlib import Path
 import genesis as gs
 from swarm.scene_builders.customScene import CustomScene
 from swarm.droneClasses.droneVisulaControler import DroneVisulaCTRL 
@@ -7,6 +8,19 @@ from swarm.utilities.rtPlotter import LivePlotter
 
 dt = 0.01  # Simulation timestep
 
+def flight_setpoint(elapsed_time):
+    """Return the original demo's [x, y, z, yaw] position reference.
+
+    elapsed_time is seconds since the two-second startup ended. Positions are
+    world metres and yaw is radians. The 8 m cosine has angular frequency
+    0.5 rad/s; its phase puts the first forward peak three seconds after startup
+    (five seconds after simulation starts), matching the original demo.
+    This commands forward/backward travel along x, not a circular flight path.
+    """
+    x = 8.0 * np.cos(0.5 * (elapsed_time - 3.0))
+    return np.array([x, 0., 1., 0.])
+
+
 def main():    
     gs.init(backend=gs.cpu)  
     print("\n📍 Creating scene...")
@@ -14,7 +28,7 @@ def main():
 
     drone = scene.add_drone(
         name="drone_1",
-        urdf_path=r"C:\Users\penturas\Desktop\codits\Python\instullingGenesis\GenesisDroneEnv\genesis_drones\robots\assets\drone_urdf\drone.urdf",
+        urdf_path=str(Path(__file__).resolve().parents[1] / "genesis_drones/robots/assets/drone_urdf/drone.urdf"),
         position=(0, 0, 0),
         orientation=(0,0,0)
     )
@@ -33,43 +47,12 @@ def main():
     controller = DroneVisulaCTRL(drone_entity=drone, dt=dt)
     scene.build()
 
-    import numpy as np
-
-    def stepping():
-        controller.camera_update_step(step)
-
-        
-    def plotting():
-        reading = controller.drone.imu.read()
-        acc  = reading.lin_acc.numpy()   # array shape (3,)
-        gyro = reading.ang_vel.numpy()   # array shape (3,)
-        
-        pos= controller.get_position()
-        plotter.push('Accelerometer (m/s²)', acc)
-        plotter.push('Gyroscope (rad/s)',    gyro)
-        plotter.push('Actual pos', pos)
-        plotter.update()
-    prev_p = np.zeros([3])
-
     for step  in range(100000):
-        stepping()
-        x = 0
+        controller.camera_update_step(step)
         if controller.start(step) == 1:
-            t = (step - 500) * controller.dt   # time since startup finished
-            radius = 8.0
-            omega = 0.5  
-            x = radius * np.cos(omega * t)
-            y = radius * np.sin(omega * t)
-            z = 1.0
-            yaw = 0.0
-
-            pos = controller.get_position()
-            # controller.position_control(np.array([x, y, z, yaw]))
-            controller.position_ctrl_fused(np.array([x,0,1,0]))      
-            pos = controller.get_imu_pos()
+            t = step * controller.dt - 2.0   # time since startup finished
+            controller.position_ctrl_fused(flight_setpoint(t))
             real_pos = controller.get_position()
-            real_pos[1] = -1*real_pos[1]
-            acc = controller.get_lin_vel()
             vid = controller.get_camera_lin_v()
             plotter.push('Cam Pos', controller.cam_pos[:3])
             plotter.push('Act Pos', real_pos)
@@ -80,6 +63,7 @@ def main():
         scene.step()
 
     print("\n✅ Simulation complete!")
+    plotter.close()
     scene.close()
 
 
@@ -89,17 +73,3 @@ def main():
    
 if __name__ == "__main__":
     main()
-
-
-
-
-
-
-
-   
-    # for step in range(100000000000):
-        
-    #     if controller.start(step) == 1:
-    #         
-
-    #     scene.step()

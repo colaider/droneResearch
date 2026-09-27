@@ -1,3 +1,6 @@
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
 import torch
 import yaml
 import genesis as gs
@@ -6,17 +9,17 @@ from genesis_drones.tasks.track_task import Track_task
 from rsl_rl.runners import OnPolicyRunner
 
 def main():
-    gs.init(logging_level="warning")
+    gs.init(backend=gs.cuda if torch.cuda.is_available() else gs.cpu, logging_level="warning")
     max_sim_step = 10000
 
 
-    with open("config/track_rl/genesis_env.yaml", "r") as file:
+    with open(ROOT / "config/track_rl/genesis_env.yaml", "r") as file:
         env_config = yaml.load(file, Loader=yaml.FullLoader)
 
-    with open("config/track_rl/rl_env.yaml", "r") as file:
+    with open(ROOT / "config/track_rl/rl_env.yaml", "r") as file:
         rl_config = yaml.load(file, Loader=yaml.FullLoader)
 
-    with open("config//track_rl/flight.yaml", "r") as file:
+    with open(ROOT / "config//track_rl/flight.yaml", "r") as file:
         flight_config = yaml.load(file, Loader=yaml.FullLoader)
 
     task_config = rl_config["task"]
@@ -37,9 +40,9 @@ def main():
         num_envs=1,
     )
 
-    runner = OnPolicyRunner(track_task, train_config, "", device="cuda:0")
-    runner.load("logs/track_rl/policy_demo/model_500.pt")
-    policy = runner.get_inference_policy(device="cuda:0")
+    runner = OnPolicyRunner(track_task, train_config, "", device=genesis_env.device)
+    runner.load(str(ROOT / "logs/track_rl/policy_demo/model_500.pt"))
+    policy = runner.get_inference_policy(device=genesis_env.device)
     obs = track_task.reset()    # tensordict
 
     with torch.no_grad():

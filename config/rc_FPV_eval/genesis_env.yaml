@@ -11,7 +11,7 @@ cam_pos: [0.02, 0.0, 0.04]
 cam_res: [64, 48]                         # width, height
 drone_init_pos: [0.0, 0.0, 0.0]          # Initial position of the drone
 viewer_follow_drone: False
-load_map: True
+load_map: False
 use_rc: True
 show_viewer: True
 render_cam: False

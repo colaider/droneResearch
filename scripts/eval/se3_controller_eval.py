@@ -1,3 +1,6 @@
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
 import argparse
 import torch
 import yaml
@@ -55,7 +58,7 @@ def circular_trajectory(t, R, omega, center, device=None, dtype=torch.float32):
 
 
 def yaw_cmd(vel_cmd, acc_cmd, jerk_cmd, device=None):
-    with open("config/track_rl/flight.yaml", "r") as file:
+    with open(ROOT / "config/track_rl/flight.yaml", "r") as file:
         flight_config = yaml.load(file, Loader=yaml.FullLoader)
 
     G = torch.tensor([0.0, 0.0, -flight_config["g"]], device=device)
@@ -70,7 +73,7 @@ def yaw_cmd(vel_cmd, acc_cmd, jerk_cmd, device=None):
 
     proj_cmd = torch.eye(3).to(device) - torch.outer(zb_cmd, zb_cmd)
 
-    dz_cmd = proj_cmd @ jerk_cmd / thrust_cmd
+    dz_cmd = flight_config["weight"] * (proj_cmd @ jerk_cmd) / thrust_cmd.clamp_min(1e-6)
 
     dz_mag_cmd = torch.linalg.norm(dz_cmd)
 
@@ -126,19 +129,19 @@ def controller_action_convert(control, flight_config, env_config, device):
         # 2.  Euler Angles (Roll-Pitch-Yaw)
         # Roll (x-axis rotation)
         # atan2( 2(wx - yz), 1 - 2(x^2 + y^2) )
-        sin_roll = 2.0 * (w * x - y * z)
+        sin_roll = 2.0 * (w * x + y * z)
         cos_roll = 1.0 - 2.0 * (x * x + y * y)
         roll = torch.atan2(sin_roll, cos_roll)
         
         # Pitch (y-axis rotation)
         # asin( 2(wy + xz) )
-        sin_pitch = 2.0 * (w * y + x * z)
+        sin_pitch = 2.0 * (w * y - x * z)
         sin_pitch = torch.clamp(sin_pitch, -1.0, 1.0)
         pitch = torch.asin(sin_pitch)
         
         # Yaw (z-axis rotation)
         # atan2( 2(wz - xy), 1 - 2(y^2 + z^2) )
-        sin_yaw = 2.0 * (w * z - x * y)
+        sin_yaw = 2.0 * (w * z + x * y)
         cos_yaw = 1.0 - 2.0 * (y * y + z * z)
         yaw = torch.atan2(sin_yaw, cos_yaw)
         
@@ -162,20 +165,21 @@ def parse_args():
 def main():
     args = parse_args()
     use_trajectory = args.use_trajectory
-    gs.init(logging_level="warning")
+    gs.init(backend=gs.cuda if torch.cuda.is_available() else gs.cpu, logging_level="warning")
     max_sim_step = 10000
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = gs.device
 
-    with open("config/se3_controller_eval/genesis_env.yaml", "r") as file:
+    with open(ROOT / "config/se3_controller_eval/genesis_env.yaml", "r") as file:
         env_config = yaml.load(file, Loader=yaml.FullLoader)
 
-    with open("config/se3_controller_eval/rl_env.yaml", "r") as file:
+    with open(ROOT / "config/se3_controller_eval/rl_env.yaml", "r") as file:
         rl_config = yaml.load(file, Loader=yaml.FullLoader)
 
-    with open("config/se3_controller_eval/flight.yaml", "r") as file:
+    with open(ROOT / "config/se3_controller_eval/flight.yaml", "r") as file:
         flight_config = yaml.load(file, Loader=yaml.FullLoader)
 
     task_config = rl_config["task"]
+    task_config["resample_on_target"] = not use_trajectory
     train_config = rl_config["train"]
 
     genesis_env = Genesis_env(
@@ -232,6 +236,8 @@ def main():
                 "yaw": yaw.view(1, 1),
                 "yaw_dot": yaw_dot.view(1, 1),
             }
+            if use_trajectory:
+                track_task.command_buf[:] = flat["x"]
             ctrl = controller.update(0, state, flat, None, "wxyz")
             action = controller_action_convert(
                 control=ctrl,

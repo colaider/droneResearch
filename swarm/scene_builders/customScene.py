@@ -32,7 +32,7 @@ class CustomScene:
         ),
         surface=gs.surfaces.Rough(
             diffuse_texture=gs.textures.ImageTexture(
-                image_path=r".\swarm\objects\grass.jpg"
+                image_path=str(Path(__file__).resolve().parents[1] / "objects/grass.jpg")
             )
         ))
         self.entities['ground_plane'] = plane
@@ -98,7 +98,9 @@ class CustomScene:
                 entity_idx=drone.idx,
                 res=res,
                 pos=(0.0, -1 * cam_saperation/2, 0.0),        # relative to the link frame once attached
-                up=(0, 0, 0),
+                # OpenGL camera: +x right, +y up, viewing along body -z.
+                offset_T=((1, 0, 0, 0), (0, 1, 0, -cam_saperation/2),
+                          (0, 0, 1, 0), (0, 0, 0, 1)),
                 fov=fov,
            )
         )
@@ -108,7 +110,8 @@ class CustomScene:
                 link_idx_local=0,
                 res=res,
                 pos=(0, cam_saperation/2, 0.0),        # relative to the link frame once attached
-                up=(0, 0, 0),
+                offset_T=((1, 0, 0, 0), (0, 1, 0, cam_saperation/2),
+                          (0, 0, 1, 0), (0, 0, 0, 1)),
                 fov=fov,
             )
         )
@@ -120,7 +123,8 @@ class CustomScene:
         return DroneStruct(drone, imu, left_cam, right_cam, res, fov, cam_saperation)
 
     
-    def add_swarm(self): pass
+    def add_swarm(self):
+        raise NotImplementedError("Multi-drone coordination is not implemented")
 
         
     def build(self):

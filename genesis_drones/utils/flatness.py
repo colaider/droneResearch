@@ -15,7 +15,7 @@ def compute_flatness(vel_cmd, acc_cmd, jerk_cmd, mass, g, max_roll_rate, device=
 
     proj_cmd = torch.eye(3, device=device) - torch.outer(zb_cmd, zb_cmd)
 
-    dz_cmd = proj_cmd @ jerk_cmd / thrust_cmd
+    dz_cmd = mass * (proj_cmd @ jerk_cmd) / thrust_cmd.clamp_min(1e-6)
 
     dz_mag_cmd = torch.norm(dz_cmd)
 

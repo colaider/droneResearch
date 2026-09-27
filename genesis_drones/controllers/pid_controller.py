@@ -6,6 +6,7 @@ import genesis as gs
 import math
 from genesis.utils.geom import quat_to_R
 from genesis_drones.sensors.odom import ve2vb
+from genesis_drones.utils.mavlink_rc import rc_data_lock
 
 
 class PIDcontroller:
@@ -17,13 +18,15 @@ class PIDcontroller:
             config, 
             controller = "angle",
             use_rc = False, 
-            device = torch.device("cuda")):
+            device=None):
 
+        self.rc_source = rc_command
         self.rc_command = rc_command
-        self.device = device
+        self.device = torch.device(device) if device is not None else gs.device
         self.num_envs = num_envs
         self.odom = odom
         self.use_rc = use_rc
+        self.controller_mode = controller
         self.controller = controller
             
         if self.controller == "position":
@@ -80,9 +83,9 @@ class PIDcontroller:
         self.dt = config.get("dt", 0.01)
         self.base_rpm = config.get("base_rpm", 14468.429183500699)
         self.TWR = config.get("TWR", 3.3)
-        self.max_roll_rate=config.get("max_roll_rate", 10)   # degree/s
-        self.max_pitch_rate=config.get("max_pitch_rate", 10) # degree/s
-        self.max_yaw_rate=config.get("max_yaw_rate", 3)      # degree/s
+        self.max_roll_rate=config.get("max_roll_rate", 10)   # rad/s
+        self.max_pitch_rate=config.get("max_pitch_rate", 10) # rad/s
+        self.max_yaw_rate=config.get("max_yaw_rate", 3)      # rad/s
         self.dT = 1 / self.pid_freq                         # no use
         self.tpa_factor = 1
         self.tpa_rate = 0
@@ -105,12 +108,12 @@ class PIDcontroller:
 
 
     def mixer(self, action=None) -> torch.Tensor:
-        throttle_rc = torch.clamp((self.rc_command[3] + self.throttle_command) * 3, 0.0, 3.0) * self.base_rpm
-        if action is None:
-            throttle = throttle_rc
+        if self.controller_mode == "position" and not self.use_rc:
+            throttle = torch.clamp(1.0 / self.TWR + self.throttle_command, 0.0, 1.0)
+        elif action is None:
+            throttle = torch.clamp(self.rc_command[3], 0.0, 1.0).expand(self.num_envs)
         else:
-            throttle_action = torch.clamp(action[:, -1], min=-1.0, max=1.0)
-            throttle = (throttle_action + 1) / 2
+            throttle = (torch.clamp(action[:, -1], -1.0, 1.0) + 1.0) / 2.0
         motor_outputs = torch.stack([
            throttle - self.pid_output[:, 0] - self.pid_output[:, 1] - self.pid_output[:, 2],  # M1
            throttle - self.pid_output[:, 0] + self.pid_output[:, 1] + self.pid_output[:, 2],  # M2
@@ -136,11 +139,12 @@ class PIDcontroller:
         #     quat = random_quaternion(self.num_envs)
         #     self.drone.set_quat(quat)
         #     self.cnt = 0
-        self.odom.odom_update()
         if self.use_rc is True:
+            with rc_data_lock:
+                self.rc_command = self.rc_source.to(self.device).clone()
             self.pid_update_TpaFactor() 
             if(self.rc_command[5] == 0):        # not arm
-                self.drone.set_propellels_rpm(torch.zeros((self.num_envs, 4), device=self.device, dtype=gs.tc_float))
+                self.drone.set_propellers_rpm(torch.zeros((self.num_envs, 4), device=self.device, dtype=gs.tc_float))
                 return
             if self.rc_command[4] == 0:         # angle mode
                 self.angle_controller(action)
@@ -151,7 +155,7 @@ class PIDcontroller:
                 return
         else:
             self.controller(action)
-        self.drone.set_propellels_rpm(self.mixer(action))
+        self.drone.set_propellers_rpm(self.mixer(action))
 
     def rate_controller(self, action=None): 
         """
@@ -182,6 +186,7 @@ class PIDcontroller:
             self.body_set_point[:] = -self.odom.body_euler + self.rc_command[:3]  
         else:               # in RL mode
             self.body_set_point[:] = -self.odom.body_euler + action[:, :3]  # action is in rad, like [[roll, pitch, yaw, thrust]] if num_envs = 1
+        self.body_set_point[:] = torch.atan2(torch.sin(self.body_set_point), torch.cos(self.body_set_point))
         self.cur_setpoint_error[:] = (self.body_set_point * 15 - self.odom.body_ang_vel)
         self.P_term_a[:] = (self.cur_setpoint_error[:] * self.kp_a) * self.tpa_factor
         self.I_term_a[:] = torch.clamp(self.I_term_a + self.cur_setpoint_error[:] * self.ki_a * self.dt, -0.5, 0.5)
@@ -199,7 +204,7 @@ class PIDcontroller:
             head_free: Keep yaw follow the target, namely keep the drone facing the target direction.
         """
         cur_pos_error = (action[:, :3] - self.odom.world_pos)
-        self.cur_setpoint_error[:] = cur_pos_error*5 - self.odom.world_linear_vel
+        self.cur_setpoint_error[:] = ve2vb(cur_pos_error*5 - self.odom.world_linear_vel, self.odom.body_euler[:, 2])
         self.cur_setpoint_error[:, 1] *= -1                       # since roll increase, y decrease
         self.cur_setpoint_error = self.cur_setpoint_error[:, [1, 0, 2]]     # change to (roll, pitch, throttle)
 
@@ -208,11 +213,14 @@ class PIDcontroller:
             print("head_free not implemented yet")
 
         self.P_term_p[:] = (self.cur_setpoint_error[:] * self.kp_p)
-        self.I_term_p[:] = torch.clamp(self.I_term_p + self.cur_setpoint_error[:] * self.ki_p, -0.5, 0.5)
-        self.D_term_p[:] = torch.clamp((self.odom.last_world_linear_vel - self.odom.world_linear_vel) * self.kd_p, -0.5, 0.5)  
+        self.I_term_p[:] = torch.clamp(self.I_term_p + self.cur_setpoint_error[:] * self.ki_p * self.dt, -0.5, 0.5)
+        acceleration = ve2vb(self.odom.world_linear_acc, self.odom.body_euler[:, 2])
+        acceleration = acceleration[:, [1, 0, 2]]
+        acceleration[:, 0] *= -1
+        self.D_term_p[:] = torch.clamp(-acceleration * self.kd_p, -0.5, 0.5)
 
         sum = self.P_term_p + self.I_term_p + self.D_term_p 
-        self.throttle_command = torch.clamp(sum[:,-1], min=0.0, max=0.5)
+        self.throttle_command = torch.clamp(sum[:,-1], min=-1.0 / self.TWR, max=1.0 - 1.0 / self.TWR)
 
         # sum[:,-1] = torch.atan2(action[:, 1], action[:, 0])
         sum[:, -1] = 0
@@ -254,12 +262,12 @@ class PIDcontroller:
         self.tpa_factor = 1
         self.tpa_rate = 0
         # Reset the RC command values if necessary
-        if self.use_rc:
-            self.rc_command = 0
+        self.throttle_command[reset_range] = 0.0
 
 
 
-def random_quaternion(num_envs=1, device="cuda"):
+def random_quaternion(num_envs=1, device=None):
+    device = gs.device if device is None else device
     max_rad = math.radians(180)
     roll  = (torch.rand(num_envs, 1, device=device) * 2 - 1) * max_rad
     pitch = (torch.rand(num_envs, 1, device=device) * 2 - 1) * max_rad

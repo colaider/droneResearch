@@ -17,7 +17,7 @@ class Track_task(VecEnv):
         self.env_config = env_config
         self.task_config = task_config
         self.train_config = train_config
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        self.device = genesis_env.device
 
         # shapes
         if num_envs is None:
@@ -60,20 +60,19 @@ class Track_task(VecEnv):
         # counters
         self.cur_iter = 1
         self.step_cnt = 0
-        self.num_steps_per_env = self.task_config.get("num_steps_per_env", 100)
+        self.num_steps_per_env = self.train_config.get("num_steps_per_env", 80)
+        self.cfg = task_config
 
         self.pi = torch.tensor(torch.pi, dtype=gs.tc_float, device=self.device)
 
 
     def compute_reward(self):
         for name, reward_func in self.reward_functions.items():
-            reward = reward_func() * self._scale(name)
-            self.reward_buf += torch.nan_to_num(reward, nan=-100, posinf=1.0, neginf=-1.0)
+            reward = torch.nan_to_num(reward_func() * self._scale(name), nan=-100, posinf=1.0, neginf=-1.0)
+            self.reward_buf += reward
             self.episode_reward_sums[name] += reward
 
     def _scale(self, name):
-        if self.cur_iter == 150 and name == "agular": 
-            self.reward_scales[name] *= 5.0
         base = self.reward_scales[name]     
         return base * self.step_dt
 
@@ -141,7 +140,7 @@ class Track_task(VecEnv):
     def step(self, action):
         self.reward_buf[:] = 0.0
         self.step_cnt += 1
-        if self.step_cnt == self.num_steps_per_env + 1:
+        if self.step_cnt == self.num_steps_per_env:
             self.step_cnt = 0
             self.cur_iter = self.cur_iter + 1
 
@@ -158,25 +157,31 @@ class Track_task(VecEnv):
         self.cur_pos_error[:] = self.command_buf - self.genesis_env.drone.odom.world_pos
         
         self.crash_condition_buf = (
-            (torch.abs(self.genesis_env.drone.odom.body_euler[:, 1]) > self.task_config["termination_if_pitch_greater_than"])
-            | (torch.abs(self.genesis_env.drone.odom.body_euler[:, 0]) > self.task_config["termination_if_roll_greater_than"])
+            (torch.abs(self.genesis_env.drone.odom.body_euler[:, 1]) > self.task_config["termination_if_pitch_greater_than"] * torch.pi / 180)
+            | (torch.abs(self.genesis_env.drone.odom.body_euler[:, 0]) > self.task_config["termination_if_roll_greater_than"] * torch.pi / 180)
             | (torch.abs(self.cur_pos_error[:, 0]) > self.task_config["termination_if_x_greater_than"])
             | (torch.abs(self.cur_pos_error[:, 1]) > self.task_config["termination_if_y_greater_than"])
             | (torch.abs(self.cur_pos_error[:, 2]) > self.task_config["termination_if_z_greater_than"])
             | (self.genesis_env.drone.odom.world_pos[:, 2] < self.task_config["termination_if_close_to_ground"])
         )
         self.reset_buf = (
-            (self.episode_length_buf > self.max_episode_length) 
+            (self.episode_length_buf >= self.max_episode_length)
             | self.crash_condition_buf 
             | self.genesis_env.drone.odom.has_nan
         )
         self.compute_reward()
-        self.reset(self.reset_buf.nonzero(as_tuple=False).flatten())
-        self._resample_commands(self._at_target())
+        dones = self.reset_buf.clone()
+        reached = ((torch.norm(self.cur_pos_error, dim=1) < self.task_config["target_thr"])
+                   & ~dones).nonzero(as_tuple=False).flatten()
+        self.extras["time_outs"] = ((self.episode_length_buf >= self.max_episode_length)
+                                    & ~self.crash_condition_buf & ~self.genesis_env.drone.odom.has_nan)
+        self.last_actions[:] = self.actions
+        self.reset(dones.nonzero(as_tuple=False).flatten())
+        if self.task_config.get("resample_on_target", True):
+            self._resample_commands(reached)
         self._update_obs()
-        self.last_actions[:] = self.actions[:]  
-
-        return self.get_observations(), self.reward_buf, self.reset_buf, self.extras
+        self.reset_buf = dones
+        return self.get_observations(), self.reward_buf, dones, self.extras
 
 
     def reset(self, env_idx=None):
@@ -185,12 +190,17 @@ class Track_task(VecEnv):
         else:
             reset_range = env_idx
 
+        if len(reset_range) == 0:
+            return self.get_observations()
         self.genesis_env.reset(reset_range)
+        self.actions[reset_range] = 0.0
         self.last_actions[reset_range] = 0.0
         self.episode_length_buf[reset_range] = 0
         self.reset_buf[reset_range] = True
         self._update_extras(reset_range)
         self._resample_commands(reset_range)
+        self._update_obs()
+        self.last_pos_error[reset_range] = self.cur_pos_error[reset_range]
         return self.get_observations()
 
     def get_observations(self):
@@ -201,18 +211,22 @@ class Track_task(VecEnv):
 
 
     def _update_obs(self):
+        self.cur_pos_error[:] = self.command_buf - self.genesis_env.drone.odom.world_pos
         self.obs_buf = torch.cat(
             [
                 self.genesis_env.drone.odom.world_pos,
                 self.command_buf,
-                self.cur_pos_error,
+                self.cur_pos_error * self._obs_scale("cur_pos_error"),
                 self.genesis_env.drone.odom.body_quat,
-                self.genesis_env.drone.odom.world_linear_vel,
-                self.genesis_env.drone.odom.body_ang_vel,
+                self.genesis_env.drone.odom.world_linear_vel * self._obs_scale("lin_vel"),
+                self.genesis_env.drone.odom.body_ang_vel * self._obs_scale("ang_vel"),
                 self.last_actions,
             ],
             axis=-1,
         )
+
+    def _obs_scale(self, name):
+        return self.obs_scales.get(name, 1.0) if self.task_config.get("normalize_observations", False) else 1.0
 
     def get_privileged_observations(self):
         return None
