@@ -28,9 +28,9 @@ class DroneVisulaCTRL(DronePositionCTRL):
         p_imu = self.get_imu_pos() 
         p_mixed = np.zeros(4)
 
-        a = 1
+        a = 0.9
         p_mixed = a*p_imu + (1-a)*self.cam_pos
-        self.set_pose(p_mixed)
+        # self.set_pose(p_mixed)
         self.cam_pos += v_c*self.dt
         self.cam_pos[2] = self.get_bar_z()
 
@@ -40,10 +40,37 @@ class DroneVisulaCTRL(DronePositionCTRL):
 
 
 
+    def fuse_state(self):
+        v_imu = self.get_lin_vel()
+        v_cam = self.drone.frame_processor.camera_velocity
+        
+        # Trust weight based on flow quality
+        err = self.drone.frame_processor.expected_vel_err
+        trust_cam = np.clip(1.0 - err / 20.0, 0.0, 1.0)  # 0 when err>=20, 1 when err=0
+        alpha_v = 0.7 * trust_cam  # camera influence on velocity
+        
+        v_fused = (1 - alpha_v) * v_imu + alpha_v * v_cam
+        
+        # Integrate fused velocity into position estimate
+        if not hasattr(self, 'p_estimate'):
+            self.p_estimate = self.get_imu_pos()
+        self.p_estimate += v_fused * self.dt
+        
+        # Anchor altitude to barometer (drift correction)
+        self.p_estimate[2] = 0.98 * self.p_estimate[2] + 0.02 * self.get_bar_z()
+        
+        # Slow correction toward IMU absolute position (prevents unbounded drift)
+        p_imu = self.get_imu_pos()
+        
+        self.p_estimate = 0.995 * self.p_estimate + 0.005 * p_imu
+        
+        return self.p_estimate, v_fused
+
+
     def camera_update_step(self, step):
         fps = 30
-        dt_camera = 1/fps
-        camer_st = int(dt_camera/ self.dt)
+        camer_st = max(1, round((1 / fps) / self.dt))   # whole sim steps per frame -> 3
+        dt_camera = camer_st * self.dt                  # real frame interval -> 0.03 s
 
         self.step(step)
 
@@ -53,9 +80,10 @@ class DroneVisulaCTRL(DronePositionCTRL):
         self.drone.frame_processor.drone_ang_vel = self.get_ang_vel()
         self.drone.frame_processor.previous_cmd_vel = self.prev_U
         self.drone.frame_processor.drone_ang = self.get_attitude()[:2]
+        self.drone.frame_processor.push_sensors()
 
-
-        if step < 1: self.drone.set_camera_dt(dt_camera)
+        if step < 1: 
+            self.drone.set_camera_dt(dt_camera)
 
         self.stp_count += 1
         if step % camer_st == 0: 

@@ -139,7 +139,6 @@ class DroneCTRL:
     def step(self, step = 0):
         """Call this ONCE per scene.step(). Updates all cached estimates."""
         
-
         reading = self.drone.imu.read()
         acc  = reading.lin_acc.numpy()   # array shape (3,)
         gyro = reading.ang_vel.numpy()   # array shape (3,)
@@ -159,10 +158,6 @@ class DroneCTRL:
             self.v_roll = 0
             self.v_yaw = 0
             
-            
-
-        
-
         self.est_roll  += gyro[0] * self.dt
         self.est_pitch += gyro[1] * self.dt
         self.est_yaw   += gyro[2] * self.dt

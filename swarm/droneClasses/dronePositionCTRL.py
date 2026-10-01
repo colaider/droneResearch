@@ -12,7 +12,11 @@ class DronePositionCTRL(DroneCTRL):
         self.kd_pos = np.diag([0.01, 0.01, 0.01, 0.1])
         self.prev_U = np.zeros(4)
 
-    def position_control(self, setpoint: np.array) -> np.array:
+
+    def position_control(self, setpoint, X_body=None, X_d_body=None):
+        
+        if X_body is None: X_body = self.get_imu_pos()
+        if X_d_body is None: X_d_body = self.get_lin_vel()
 
         if not hasattr(self, 'pr_setpoint'):
             self.pr_setpoint = setpoint.copy()
@@ -20,12 +24,8 @@ class DronePositionCTRL(DroneCTRL):
 
         omega = self.get_attitude()[2]
         omega_d = self.get_ang_vel()[2]
-        S_d = (setpoint -  self.pr_setpoint)/self.dt
+        S_d = (setpoint - self.pr_setpoint)/self.dt
         S_dd = (S_d - self.pr_dr_setpoint)/self.dt
-
-        X_body = self.get_imu_pos()
-        X_d_body = self.get_lin_vel()
-        
 
         X_d_body = np.append(X_d_body, omega_d)
         X_body   = np.append(X_body, omega)
@@ -44,8 +44,6 @@ class DronePositionCTRL(DroneCTRL):
         self.pr_dr_setpoint = S_d
         return U
        
-        
-
 
     def f1(self, omega:float):
         return self.rot(omega) * self.k_f1
