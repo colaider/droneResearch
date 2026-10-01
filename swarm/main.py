@@ -21,7 +21,7 @@ def main():
 
     plotter = LivePlotter(
         plots={
-            'Cam Pos': ['x', 'y', 'z'],
+            'Cam Pos': ['x', 'y', 'z', 'yaw'],
             'Act Pos':    ['x', 'y', 'z'],
             # 'Used Pos': ['x', 'y', 'z'],
             'Camera Vel': ['x', 'y', 'z'],
@@ -65,13 +65,13 @@ def main():
 
             pos = controller.get_position()
             # controller.position_control(np.array([x, y, z, yaw]))
-            controller.position_ctrl_fused(np.array([x,0,1,0]))      
+            controller.position_ctrl_fused(np.array([0,0,1,0]))      
             pos = controller.get_imu_pos()
             real_pos = controller.get_position()
             real_pos[1] = -1*real_pos[1]
             acc = controller.get_lin_vel()
             vid = controller.get_camera_lin_v()
-            plotter.push('Cam Pos', controller.cam_pos[:3])
+            plotter.push('Cam Pos', controller.cam_pos)
             plotter.push('Act Pos', real_pos)
             # plotter.push('Used Pos', acc[:3])
             plotter.push('Camera Vel', vid)

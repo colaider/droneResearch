@@ -12,7 +12,8 @@ class EnumFrame:
 
 class VisulaAcEst:
     def __init__(self, res, fov):
-        self.foc_l = (res[0] / 2) / np.tan(np.deg2rad(fov) / 2)
+        self.fov = fov
+        self.foc_l = (res[1] / 2) / np.tan(np.deg2rad(fov) / 2)
         self.dt = 0.01
         self.camera_saperation = 0
 
@@ -90,59 +91,55 @@ class VisulaAcEst:
             return
 
         prev, curr = self.buffer[-2].frames, self.buffer[-1].frames
-        processed, flows, points, olds, news = [], [], [], [], []
+        if min(len(prev), len(curr)) < 2:
+            self.camera_velocity = self._fallback_velocity()
+            return
 
-        for cam in range(min(len(prev), len(curr))):
-            fr, flow, p, old, new = self.lucas_kanade_flow(prev[cam], curr[cam], cam)
-            if old is None:
-                self.camera_velocity = self.drone_vel
-                return
-            
-            processed.append(fr)
-            flows.append(flow)
-            points.append(p)
-            olds.append(old)
-            news.append(new)
+        processed, flow, olds, news = self.lucas_kanade_flow(prev[0], curr[0], prev[1], curr[1])
+        self.current_frame.frames = processed
+        if flow is None:
+            self.camera_velocity = self._fallback_velocity()
+            return
 
         h = self._current_height()
-        for k in range(len(points)):
-            points[k][:, 2] = h
+        for k in range(2):
             olds[k][:, 2] = h
             news[k][:, 2] = h
+        points = [(o + n) / 2 for o, n in zip(olds, news)]
 
-        points = self.trinagulate_altitude(points, flows, olds)
+        points = self.trinagulate_altitude(points, [flow, flow], olds)
 
-        for k in range(len(flows)):
-            keep = self.point_prediction_filtering(olds[k], news[k])
-            flows[k] = flows[k][keep]
-            points[k] = points[k][keep]
+        keep = self.point_prediction_filtering(olds[0], news[0])
+        flows = [flow[keep], flow[keep]]
+        points = [p[keep] for p in points]
 
-        self.current_frame.frames = processed
         self.estimate_velocities(flows, points)
 
     # ---------------- tracking ----------------
 
-    def lucas_kanade_flow(self, frame1, frame2, cam):
+    def lucas_kanade_flow(self, frame1, frame2, frame_r, frame_r_curr):
         gray1 = cv2.cvtColor(frame1, cv2.COLOR_BGR2GRAY)
         gray2 = cv2.cvtColor(frame2, cv2.COLOR_BGR2GRAY)
+        gray_r = cv2.cvtColor(frame_r, cv2.COLOR_BGR2GRAY)
         annotated_frame = frame2.copy()
-        lost = (annotated_frame, None, None, None, None)
+        annotated_r = frame_r_curr.copy()
+        lost = ([annotated_frame, annotated_r], None, None, None)
         empty = np.empty((0, 2), np.float32)
 
         lk = dict(winSize=(21, 21), maxLevel=3, criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 30, 0.01))
 
-        pts = self._replenish(gray1, self.tracked_points.get(cam, empty), cam)
+        pts = self._replenish(gray1, self.tracked_points.get(0, empty), 0)
         if len(pts) < 3:
-            self.tracked_points[cam] = empty
+            self.tracked_points[0] = empty
             return lost
 
         old = pts.reshape(-1, 1, 2).astype(np.float32)
         new, st_f, _ = cv2.calcOpticalFlowPyrLK(gray1, gray2, old, None, **lk)
-        
+
         if new is None:
-            self.tracked_points[cam] = empty
+            self.tracked_points[0] = empty
             return lost
-        
+
         back, st_b, _ = cv2.calcOpticalFlowPyrLK(gray2, gray1, new, None, **lk)
 
         old, new, back = old.reshape(-1, 2), new.reshape(-1, 2), back.reshape(-1, 2)
@@ -165,25 +162,44 @@ class VisulaAcEst:
             _, _, links, _ = self._build_triangles(good_new)
             good_old, good_new = self.filter_by_neighbors(good_old, good_new, links)
 
+        # match the left old points onto the right camera, reject unmatched ones
+        old_r = empty
+        if len(good_old) >= 3:
+            p = good_old.reshape(-1, 1, 2).astype(np.float32)
+            old_r, st_r, _ = cv2.calcOpticalFlowPyrLK(gray1, gray_r, p, None, **lk)
+            if old_r is None:
+                self.tracked_points[0] = empty
+                return lost
+            back_r, st_rb, _ = cv2.calcOpticalFlowPyrLK(gray_r, gray1, old_r, None, **lk)
+            old_r, back_r = old_r.reshape(-1, 2), back_r.reshape(-1, 2)
+            matched = (st_r.ravel() == 1) & (st_rb.ravel() == 1) & (np.abs(good_old - back_r).max(axis=1) < 1.0)
+            good_old, good_new, old_r = good_old[matched], good_new[matched], old_r[matched]
+
         if len(good_new) < 3:
-            self.tracked_points[cam] = empty
+            self.tracked_points[0] = empty
             return lost
 
         triangles, corners, links, _ = self._build_triangles(good_new)
         for a, b in links: cv2.line(annotated_frame, tuple(corners[a].astype(int)), tuple(corners[b].astype(int)), (255, 255, 0), 1)
         for x, y in corners.astype(int): cv2.circle(annotated_frame, (x, y), 2, (0, 0, 255), -1)
 
-        self.tracked_points[cam] = good_new.copy()
+        self.tracked_points[0] = good_new.copy()
 
         flow, scale, div = self.compensate_vertical(good_old, good_new, triangles)
-        flow = self.smooth_flow_by_neighbors(good_new, good_new - good_old, links)
-        self.prev_med_flow[cam] = np.median(flow, axis=0)
+        flow = self.smooth_flow_by_neighbors(good_new, flow, links)
+        self.prev_med_flow[0] = np.median(flow, axis=0)
+
+        # transport the left flow to the matching right points
+        new_r = old_r + flow
+        for a, b in links: cv2.line(annotated_r, tuple(new_r[a].astype(int)), tuple(new_r[b].astype(int)), (255, 255, 0), 1)
+        for x, y in new_r.astype(int): cv2.circle(annotated_r, (x, y), 2, (0, 0, 255), -1)
 
         z = self._current_height()
-        good_old = np.hstack((good_old, np.full((len(good_old), 1), z)))
-        good_new = np.hstack((good_new, np.full((len(good_new), 1), z)))
-        avg_pos = (good_old + good_new) / 2
-        return annotated_frame, flow, avg_pos, good_old, good_new
+        olds = [np.hstack((good_old, np.full((len(good_old), 1), z))),
+                np.hstack((old_r, np.full((len(old_r), 1), z)))]
+        news = [np.hstack((good_new, np.full((len(good_new), 1), z))),
+                np.hstack((new_r, np.full((len(new_r), 1), z)))]
+        return [annotated_frame, annotated_r], flow, olds, news
 
 
     def _replenish(self, gray, pts, cam, max_points=100, grid=(4, 4), per_empty=3):
@@ -323,7 +339,7 @@ class VisulaAcEst:
 
     def estimate_velocities(self, flow, points):
         if any(len(p) < 2 for p in points):
-            self.camera_velocity = self.drone_vel
+            self.camera_velocity = self._fallback_velocity()
             self.camera_angle = self.drone_ang[:2]
             return None
 
@@ -405,13 +421,16 @@ class VisulaAcEst:
     def set_dt(self, dt):
         self.dt = dt
 
+    def _fallback_velocity(self):
+        return np.array([self.drone_vel[0], self.drone_vel[1], self.drone_ang_vel[2]])
+
 
 class VelocityKalmanFilter:
-    def __init__(self, process_var=0.6, measurement_var=3):
+    def __init__(self, process_var=0.6, measurement_var=3, yaw_process_var=5.0, yaw_measurement_var=0.1):
         self.state = np.zeros(3)
         self.P = np.eye(3)
-        self.Q = np.eye(3) * process_var
-        self.R = np.eye(3) * measurement_var
+        self.Q = np.diag([process_var, process_var, yaw_process_var])
+        self.R = np.diag([measurement_var, measurement_var, yaw_measurement_var])
         self.started = False
 
     def predict(self, prior):
