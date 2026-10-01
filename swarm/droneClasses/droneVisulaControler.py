@@ -21,7 +21,8 @@ class DroneVisulaCTRL(DronePositionCTRL):
     def position_ctrl_fused(self, setpoint:np.ndarray):
 
         if not hasattr(self, 'cam_pos') or self.drone.frame_processor.expected_vel_err >= 20:
-            self.cam_pos = self.get_imu_pos() 
+            self.cam_pos = self.get_imu_pos()
+            self.drone.frame_processor.drone_vel = self.get_lin_vel() 
 
         v_c = self.drone.frame_processor.camera_velocity
         v_imu = self.get_lin_vel()

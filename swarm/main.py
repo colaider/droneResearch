@@ -65,7 +65,7 @@ def main():
 
             pos = controller.get_position()
             # controller.position_control(np.array([x, y, z, yaw]))
-            controller.position_ctrl_fused(np.array([0,0,2,0]))      
+            controller.position_ctrl_fused(np.array([x,0,1,0]))      
             pos = controller.get_imu_pos()
             real_pos = controller.get_position()
             real_pos[1] = -1*real_pos[1]

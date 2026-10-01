@@ -97,6 +97,7 @@ class VisulaAcEst:
             if old is None:
                 self.camera_velocity = self.drone_vel
                 return
+            
             processed.append(fr)
             flows.append(flow)
             points.append(p)
@@ -128,8 +129,7 @@ class VisulaAcEst:
         lost = (annotated_frame, None, None, None, None)
         empty = np.empty((0, 2), np.float32)
 
-        lk = dict(winSize=(21, 21), maxLevel=3,
-                  criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 30, 0.01))
+        lk = dict(winSize=(21, 21), maxLevel=3, criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 30, 0.01))
 
         pts = self._replenish(gray1, self.tracked_points.get(cam, empty), cam)
         if len(pts) < 3:
@@ -138,9 +138,11 @@ class VisulaAcEst:
 
         old = pts.reshape(-1, 1, 2).astype(np.float32)
         new, st_f, _ = cv2.calcOpticalFlowPyrLK(gray1, gray2, old, None, **lk)
+        
         if new is None:
             self.tracked_points[cam] = empty
             return lost
+        
         back, st_b, _ = cv2.calcOpticalFlowPyrLK(gray2, gray1, new, None, **lk)
 
         old, new, back = old.reshape(-1, 2), new.reshape(-1, 2), back.reshape(-1, 2)
@@ -168,11 +170,8 @@ class VisulaAcEst:
             return lost
 
         triangles, corners, links, _ = self._build_triangles(good_new)
-        for a, b in links:
-            cv2.line(annotated_frame, tuple(corners[a].astype(int)), tuple(corners[b].astype(int)),
-                     (255, 255, 0), 1)
-        for x, y in corners.astype(int):
-            cv2.circle(annotated_frame, (x, y), 2, (0, 0, 255), -1)
+        for a, b in links: cv2.line(annotated_frame, tuple(corners[a].astype(int)), tuple(corners[b].astype(int)), (255, 255, 0), 1)
+        for x, y in corners.astype(int): cv2.circle(annotated_frame, (x, y), 2, (0, 0, 255), -1)
 
         self.tracked_points[cam] = good_new.copy()
 
@@ -343,8 +342,7 @@ class VisulaAcEst:
             B = v - v_rot
 
             r = (z[:, None] / self.foc_l) * (p[:, :2] - c) + self.camera_saperation / 2
-            A = np.vstack([np.column_stack([np.ones(n), np.zeros(n), -r[:, 1]]),
-                           np.column_stack([np.zeros(n), np.ones(n), r[:, 0]])])
+            A = np.vstack([np.column_stack([np.ones(n), np.zeros(n), -r[:, 1]]), np.column_stack([np.zeros(n), np.ones(n), r[:, 0]])])
             x, *_ = np.linalg.lstsq(A, np.concatenate([B[:, 0], B[:, 1]]), rcond=None)
             x = -x
 
@@ -397,7 +395,7 @@ class VisulaAcEst:
     # ---------------- utils ----------------
 
     @staticmethod
-    def add_noise(frames, sigma=5):
+    def add_noise(frames, sigma=30):
         out = []
         for frame in frames:
             noisy = frame.astype(np.float32) + np.random.normal(0, sigma, frame.shape)
@@ -409,7 +407,7 @@ class VisulaAcEst:
 
 
 class VelocityKalmanFilter:
-    def __init__(self, process_var=1, measurement_var=6):
+    def __init__(self, process_var=0.6, measurement_var=3):
         self.state = np.zeros(3)
         self.P = np.eye(3)
         self.Q = np.eye(3) * process_var
