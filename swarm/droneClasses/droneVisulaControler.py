@@ -63,7 +63,9 @@ class DroneVisulaCTRL(DronePositionCTRL):
 
         self.stp_count += 1
         if step % camer_st == 0:
-            self.drone.camera_step()
+            frames = self.drone.camera_step()
+            if frames is not None:
+                print([f.time for f in frames])
             self.stp_cam_count += 1
 
         self.drone.camera_show()

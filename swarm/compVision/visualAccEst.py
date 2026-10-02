@@ -2,12 +2,13 @@ import cv2
 import numpy as np
 from collections import deque
 from scipy.spatial import Delaunay
-
+import time
 
 class EnumFrame:
     def __init__(self):
         self.frames = []
         self.idx = 0
+        self.time = 0.0
 
 
 class VisulaAcEst:
@@ -47,7 +48,9 @@ class VisulaAcEst:
     def update_frame(self, frame, idx):
         new_frame_data = EnumFrame()
         new_frame_data.frames = self.add_noise([f.copy() for f in frame])
+        
         new_frame_data.idx = idx
+        new_frame_data.time = time.time()
 
         if not hasattr(self, 'frame_size'):
             self.frame_size = np.shape(frame[0])
@@ -95,7 +98,7 @@ class VisulaAcEst:
             self.camera_velocity = self._fallback_velocity()
             return
 
-        processed, flow, olds, news = self.lucas_kanade_flow(prev[0], curr[0], prev[1], curr[1])
+        processed, flow, olds, news, tris = self.lucas_kanade_flow(prev[0], curr[0], prev[1], curr[1])
         self.current_frame.frames = processed
         if flow is None:
             self.camera_velocity = self._fallback_velocity()
@@ -115,7 +118,7 @@ class VisulaAcEst:
 
         self.estimate_velocities(flows, points)
 
-    # ---------------- tracking ----------------
+# ---------------- tracking ----------------
 
     def lucas_kanade_flow(self, frame1, frame2, frame_r, frame_r_curr):
         gray1 = cv2.cvtColor(frame1, cv2.COLOR_BGR2GRAY)
@@ -123,7 +126,7 @@ class VisulaAcEst:
         gray_r = cv2.cvtColor(frame_r, cv2.COLOR_BGR2GRAY)
         annotated_frame = frame2.copy()
         annotated_r = frame_r_curr.copy()
-        lost = ([annotated_frame, annotated_r], None, None, None)
+        lost = ([annotated_frame, annotated_r], None, None, None, None)
         empty = np.empty((0, 2), np.float32)
 
         lk = dict(winSize=(21, 21), maxLevel=3, criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 30, 0.01))
@@ -148,10 +151,10 @@ class VisulaAcEst:
 
         if len(good_old) >= 6:
             _, inliers = cv2.estimateAffinePartial2D(good_old, good_new,
-                                                     method=cv2.RANSAC,
-                                                     ransacReprojThreshold=2.0,
-                                                     maxIters=2000,
-                                                     confidence=0.99)
+                                                    method=cv2.RANSAC,
+                                                    ransacReprojThreshold=2.0,
+                                                    maxIters=2000,
+                                                    confidence=0.99)
             if inliers is not None:
                 inliers = inliers.ravel().astype(bool)
                 good_old, good_new = good_old[inliers], good_new[inliers]
@@ -170,6 +173,7 @@ class VisulaAcEst:
             if old_r is None:
                 self.tracked_points[0] = empty
                 return lost
+            
             back_r, st_rb, _ = cv2.calcOpticalFlowPyrLK(gray_r, gray1, old_r, None, **lk)
             old_r, back_r = old_r.reshape(-1, 2), back_r.reshape(-1, 2)
             matched = (st_r.ravel() == 1) & (st_rb.ravel() == 1) & (np.abs(good_old - back_r).max(axis=1) < 1.0)
@@ -199,7 +203,9 @@ class VisulaAcEst:
                 np.hstack((old_r, np.full((len(old_r), 1), z)))]
         news = [np.hstack((good_new, np.full((len(good_new), 1), z))),
                 np.hstack((new_r, np.full((len(new_r), 1), z)))]
-        return [annotated_frame, annotated_r], flow, olds, news
+        
+        
+        return [annotated_frame, annotated_r], flow, olds, news, triangles, links 
 
 
     def _replenish(self, gray, pts, cam, max_points=100, grid=(4, 4), per_empty=3):
@@ -212,13 +218,11 @@ class VisulaAcEst:
                     np.clip((p[:, 0] // cw).astype(int), 0, gx - 1))
 
         mask = np.full((h, w), 255, np.uint8)
-        for x, y in pts.astype(int):
-            cv2.circle(mask, (x, y), 7, 0, -1)
+        for x, y in pts.astype(int): cv2.circle(mask, (x, y), 7, 0, -1)
 
         cand = cv2.goodFeaturesToTrack(gray, maxCorners=1000, qualityLevel=0.01,
-                                       minDistance=7, blockSize=7, mask=mask)
-        if cand is None:
-            return pts
+                                       minDistance=7, blockSize=11, mask=mask)
+        if cand is None: return pts
         cand = cand.reshape(-1, 2)
 
         occupied = np.zeros(gy * gx, bool)
@@ -227,15 +231,13 @@ class VisulaAcEst:
 
         cand_cells = cell_of(cand)
         take = []
-        for cell in np.flatnonzero(~occupied):
+        for cell in np.flatnonzero(~occupied): 
             take.extend(np.flatnonzero(cand_cells == cell)[:per_empty])
 
         need = max_points - len(pts) - len(take)
-        if need > 0:
-            take.extend(np.setdiff1d(np.arange(len(cand)), take)[:need])
+        if need > 0: take.extend(np.setdiff1d(np.arange(len(cand)), take)[:need])
 
-        if not take:
-            return pts
+        if not take: return pts
         return np.vstack([pts, cand[take]]).astype(np.float32)
 
     # ---------------- mesh ----------------
@@ -291,8 +293,7 @@ class VisulaAcEst:
         return triangles, points, links, adjacency
 
     def filter_by_neighbors(self, good_old, good_new, links, thresh=2.0, min_links=1):
-        if len(links) == 0:
-            return good_old[:0], good_new[:0]
+        if len(links) == 0: return good_old[:0], good_new[:0]
 
         flow = good_new - good_old
         n = len(flow)
@@ -312,15 +313,13 @@ class VisulaAcEst:
     def smooth_flow_by_neighbors(self, points, flow, links, self_weight=0.7, iterations=3, sigma=None):
         flow = flow.astype(np.float64).copy()
         n = len(flow)
-        if len(links) == 0:
-            return flow
+        if len(links) == 0: return flow
 
         i, j = links[:, 0], links[:, 1]
         if sigma is not None:
             d2 = np.sum((points[i] - points[j]) ** 2, axis=1)
             w = np.exp(-d2 / (2 * sigma ** 2))
-        else:
-            w = np.ones(len(links))
+        else: w = np.ones(len(links))
 
         for _ in range(iterations):
             acc = flow * self_weight
@@ -338,6 +337,7 @@ class VisulaAcEst:
         return list(points)
 
     def estimate_velocities(self, flow, points):
+
         if any(len(p) < 2 for p in points):
             self.camera_velocity = self._fallback_velocity()
             self.camera_angle = self.drone_ang[:2]
@@ -414,14 +414,24 @@ class VisulaAcEst:
     def add_noise(frames, sigma=30):
         out = []
         for frame in frames:
+            # Simple blur with small kernel
+            # Add noise
             noisy = frame.astype(np.float32) + np.random.normal(0, sigma, frame.shape)
             out.append(np.clip(noisy, 0, 255).astype(np.uint8))
         return out
+    
+    
+    @staticmethod
+    def sharpen_kernel(image, strength=0.5):
+        laplacian = cv2.Laplacian(image, cv2.CV_32F, ksize=3)
+        sharpened = image.astype(np.float32) - strength * laplacian
+        return np.clip(sharpened, 0, 255).astype(np.uint8)
 
     def set_dt(self, dt):
         self.dt = dt
 
     def _fallback_velocity(self):
+        print("fallback velocity used")
         return np.array([self.drone_vel[0], self.drone_vel[1], self.drone_ang_vel[2]])
 
 
