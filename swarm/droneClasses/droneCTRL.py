@@ -1,5 +1,3 @@
-import genesis as gs
-from genesis.engine.entities import DroneEntity
 import numpy as np
 from swarm.droneClasses.droneStruct import DroneStruct
 
@@ -121,19 +119,14 @@ class DroneCTRL:
         self.kp_att = np.array([2, 2])   # roll, pitch
         self.kd_att = np.array([0.08,0.08])
         self.ki_att = np.array([0.1, 0.1])
-        self.lats_no_tilt_err = np.array([0, 0])
         self.max_tilt = np.radians(15)  # Maximum tilt angle in radians
 
         self.max_rpm = 93400
         self.hover_rpm = 62300
-        self.hover_throttle = self.hover_rpm / self.max_rpm 
+        self.hover_throttle = self.hover_rpm / self.max_rpm
 
         self.last_error = np.zeros(4)
         self.integral_error = np.zeros(4)
-        self.last_pos = np.zeros(3)
-        self.last_ori = np.zeros(3)
-        self.last_filtered_derivative = np.zeros(4)
-        self.last_control = np.zeros(4)
 
 
     def step(self, step = 0):
@@ -142,7 +135,6 @@ class DroneCTRL:
         reading = self.drone.imu.read()
         acc  = reading.lin_acc.numpy()   # array shape (3,)
         gyro = reading.ang_vel.numpy()   # array shape (3,)
-        mag  = reading.mag.numpy() 
 
         if not hasattr(self, 'est_roll'):
             self.est_roll = 0.0
@@ -151,9 +143,6 @@ class DroneCTRL:
             self.v_x_sum = 0.0
             self.v_y_sum = 0.0
             self.v_z_sum = 0.0
-            self.ax = 0.0
-            self.ay = 0.0
-            self.az = 0.0
             self.v_pitch = 0
             self.v_roll = 0
             self.v_yaw = 0
@@ -172,7 +161,6 @@ class DroneCTRL:
 
         roll, pitch = self.est_roll, self.est_pitch
         ax, ay, az = acc[0], acc[1], acc[2]
-        self.ax, self.ay, self.az = ax, ay, az
 
         a_x_world = ax*np.cos(pitch) + ay*np.sin(roll)*np.sin(pitch) + az*np.cos(roll)*np.sin(pitch)
         a_y_world = ay*np.cos(roll) - az*np.sin(roll)
@@ -205,26 +193,13 @@ class DroneCTRL:
         self.lin_pos += vel * self.dt
 
 
-    def reset_position(self):
-        self.lin_pos = np.zeros(3)
-
-
     def get_imu_pos(self):
-        return self.lin_pos.copy()    
+        return self.lin_pos.copy()
 
 
     def get_lin_vel(self):
         return np.array([self.v_x_sum, self.v_y_sum, self.v_z_sum])
 
 
-    def get_lin_acc(self):
-        return np.array([self.ax, self.ay, self.az])
-
-
     def get_ang_vel(self):
         return np.array([self.v_pitch, self.v_roll, self.v_yaw])
-
-    def set_pose(self, pos):
-        self.lin_pos = pos
-
-           

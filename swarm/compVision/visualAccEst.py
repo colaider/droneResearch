@@ -201,7 +201,7 @@ class VisulaAcEst:
         
         return [annotated_frame, annotated_r], flow, olds, news, triangles, links 
 
-    def _replenish(self, gray, pts, cam, max_points=100):
+    def _replenish(self, gray, pts, cam, max_points=300):
         h, w = gray.shape
         mask = np.full((h, w), 255, np.uint8)
         for x, y in pts.astype(int):
@@ -258,7 +258,6 @@ class VisulaAcEst:
         if not ok.any(): return flow, 1.0, 0.0
 
         s = np.sqrt(np.median(a_new[ok] / a_old[ok]))
-        h, w = self.frame_size[:2]
         h, w = self.frame_size[:2]
         c = np.array([w / 2, h / 2])
 
@@ -320,7 +319,6 @@ class VisulaAcEst:
         neighbor_max_degree = np.zeros(n, dtype=int)
         np.maximum.at(neighbor_max_degree, links[:, 0], count[links[:, 1]].astype(int))
         np.maximum.at(neighbor_max_degree, links[:, 1], count[links[:, 0]].astype(int))
-
         supported = (neighbor_max_degree >= neighbor_min_links) & (mean_diff < thresh)
 
         keep = keep | supported
@@ -447,21 +445,6 @@ class VisulaAcEst:
         self.camera_velocity = kf.get()
 
 
-    def estimate_ang_from_vel(self, v, p):
-        c_img = np.array(self.frame_size[:2]) / 2
-        u_pix = p[:, 0] - c_img[0]
-        v_pix = p[:, 1] - c_img[1]
-
-        A = np.column_stack([u_pix, v_pix, np.ones(len(u_pix))])
-        v_mag = np.sqrt(v[:, 0] ** 2 + v[:, 1] ** 2)
-        (a, b, c), *_ = np.linalg.lstsq(A, v_mag, rcond=None)
-
-        pitch = -self.foc_l * a / (2 * c)
-        roll = -self.foc_l * b / (2 * c)
-        return pitch, roll
-
-
-
     def point_prediction_filtering(self, old, new):
         v = self.previous_cmd_vel[:3]
         ang = self.avg_ang_vel
@@ -480,7 +463,7 @@ class VisulaAcEst:
         self.expected_vel_err = np.mean(residuals)
         threshold = 1.5
         if residuals.sum() > 0:
-            threshold = np.min(residuals) + 0.65 * (np.max(residuals) - np.min(residuals))
+            threshold = np.min(residuals) + 0.45 * (np.max(residuals) - np.min(residuals))
         return residuals < threshold
     
     # ---------------- utils ----------------
@@ -494,13 +477,6 @@ class VisulaAcEst:
             noisy = frame.astype(np.float32) + np.random.normal(0, sigma, frame.shape)
             out.append(np.clip(noisy, 0, 255).astype(np.uint8))
         return out
-    
-    
-    @staticmethod
-    def sharpen_kernel(image, strength=0.5):
-        laplacian = cv2.Laplacian(image, cv2.CV_32F, ksize=3)
-        sharpened = image.astype(np.float32) - strength * laplacian
-        return np.clip(sharpened, 0, 255).astype(np.uint8)
 
     def set_dt(self, dt):
         self.dt = dt
@@ -511,7 +487,7 @@ class VisulaAcEst:
 
 
 class VelocityKalmanFilter:
-    def __init__(self, process_var=0.6, measurement_var=3, yaw_process_var=5.0, yaw_measurement_var=0.1):
+    def __init__(self, process_var=0.6, measurement_var=5, yaw_process_var=5.0, yaw_measurement_var=0.1):
         self.state = np.zeros(3)
         self.P = np.eye(3)
         self.Q = np.diag([process_var, process_var, yaw_process_var])

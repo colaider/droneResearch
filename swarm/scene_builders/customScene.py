@@ -1,6 +1,6 @@
 import genesis as gs
 from pathlib import Path
-from typing import List, Tuple, Optional
+from typing import Tuple
 from swarm.droneClasses.droneStruct import DroneStruct
 
 

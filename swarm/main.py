@@ -32,7 +32,6 @@ def main():
         plots={
             'Cam Pos': ['x', 'y', 'z', 'yaw'],
             'Act Pos':    ['x', 'y', 'z'],
-            # 'Used Pos': ['x', 'y', 'z'],
             'Camera Vel': ['x', 'y', 'z'],
         },
         buffer_size=1000,
