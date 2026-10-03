@@ -4,15 +4,16 @@ from swarm.compVision.visualAccEst import VisulaAcEst
 
 
 class DroneStruct:
-    def __init__(self, drone, imu, left_cam, right_cam, res = 0, fov = 0, camera_sapartion = 0):
+    def __init__(self, drone, imu, left_cam, right_cam, cam_cfg):
         self.imu = imu
         self._drone = drone
         self.left_cam = left_cam
         self.right_cam = right_cam
+        self.cam_cfg = cam_cfg
         self.postpocessed_frames = []
 
-        self.frame_processor = VisulaAcEst(res, fov)
-        self.frame_processor.camera_saperation = camera_sapartion
+        self.frame_processor = VisulaAcEst(cam_cfg.res, cam_cfg.fov)
+        self.frame_processor.camera_saperation = cam_cfg.baseline
         self.steps_cam = 0
 
     def __getattr__(self, attr):
@@ -31,7 +32,7 @@ class DroneStruct:
                 rgb = rgb[0]
             bgr = cv2.cvtColor(tensor_to_array(rgb), cv2.COLOR_RGB2BGR)
             lr_cam.append(bgr)
-        return lr_cam        
+        return list(self.cam_cfg.orient_pair(*lr_cam))
 
 
     def camera_step(self):

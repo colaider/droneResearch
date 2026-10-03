@@ -2,6 +2,7 @@ import genesis as gs
 from pathlib import Path
 from typing import Tuple
 from swarm.droneClasses.droneStruct import DroneStruct
+from swarm.config.cameraConfig import StereoCameraConfig, STEREO_CAM
 
 
 class CustomScene:
@@ -92,7 +93,7 @@ class CustomScene:
         return robot
 
     
-    def add_drone( self, name: str, urdf_path: str, position: Tuple[float, float, float] = (0, 0, 1), orientation = (0,0,0)) -> DroneStruct:
+    def add_drone( self, name: str, urdf_path: str, position: Tuple[float, float, float] = (0, 0, 1), orientation = (0,0,0), cam_cfg: StereoCameraConfig = STEREO_CAM) -> DroneStruct:
         drone = self.scene.add_entity(gs.morphs.Drone(file=urdf_path, pos=position, euler=orientation))
 
         imu = self.scene.add_sensor(
@@ -110,34 +111,19 @@ class CustomScene:
             )
         )
 
-        res = (500, 600)
-        fov = 85
-        cam_saperation = 0.05
+        # poses are relative to the link frame once attached
         left_cam = self.scene.add_sensor(
-            gs.sensors.RasterizerCameraOptions(
-                entity_idx=drone.idx,
-                res=res,
-                pos=(0.0, -1 * cam_saperation/2, 0.0),        # relative to the link frame once attached
-                up=(0, 0, 0),
-                fov=fov,
-           )
+            gs.sensors.RasterizerCameraOptions(entity_idx=drone.idx, **cam_cfg.camera_options('left'))
         )
         right_cam = self.scene.add_sensor(
-            gs.sensors.RasterizerCameraOptions(
-                entity_idx=drone.idx,
-                link_idx_local=0,
-                res=res,
-                pos=(0, cam_saperation/2, 0.0),        # relative to the link frame once attached
-                up=(0, 0, 0),
-                fov=fov,
-            )
+            gs.sensors.RasterizerCameraOptions(entity_idx=drone.idx, **cam_cfg.camera_options('right'))
         )
 
-        
+
         self.entities[name] = drone
-        self.drones.append(drone)      
+        self.drones.append(drone)
         print(f"✓ Added drone: {name} at {position}")
-        return DroneStruct(drone, imu, left_cam, right_cam, res, fov, cam_saperation)
+        return DroneStruct(drone, imu, left_cam, right_cam, cam_cfg)
 
     
     def add_swarm(self): pass
