@@ -22,7 +22,7 @@ class DroneCTRL:
 
     def start(self, step: int):
         elapsed_time = step * self.dt
-        if elapsed_time < 2.0:
+        if elapsed_time < 1.5:
             if not hasattr(self, 'target_z'):
                 self.target_z = 0.5
                 self.z_error_prev = 0

@@ -201,40 +201,53 @@ class VisulaAcEst:
         
         return [annotated_frame, annotated_r], flow, olds, news, triangles, links 
 
-
-    def _replenish(self, gray, pts, cam, max_points=100, grid=(4, 4), per_empty=3):
+    def _replenish(self, gray, pts, cam, max_points=100):
         h, w = gray.shape
-        gy, gx = grid
-        ch, cw = h // gy, w // gx
-
-        def cell_of(p):
-            return (np.clip((p[:, 1] // ch).astype(int), 0, gy - 1) * gx +
-                    np.clip((p[:, 0] // cw).astype(int), 0, gx - 1))
-
         mask = np.full((h, w), 255, np.uint8)
-        for x, y in pts.astype(int): cv2.circle(mask, (x, y), 7, 0, -1)
+        for x, y in pts.astype(int):
+            cv2.circle(mask, (x, y), 7, 0, -1)
 
-        cand = cv2.goodFeaturesToTrack(gray, maxCorners=1000, qualityLevel=0.01,
-                                       minDistance=7, blockSize=11, mask=mask)
+        cand = cv2.goodFeaturesToTrack(gray, maxCorners=500, qualityLevel=0.005, minDistance=15, blockSize=11, mask=mask)
         if cand is None: return pts
         cand = cand.reshape(-1, 2)
-        occupied = np.zeros(gy * gx, bool)
-        if len(pts): occupied[cell_of(pts)] = True
+        edges = cv2.dilate(cv2.Canny(gray, 50, 150), np.ones((5, 5), np.uint8))
 
-        cand_cells = cell_of(cand)
+        # Keep only corners that are near an edge
+        xs = np.clip(cand[:, 0].astype(int), 0, w - 1)
+        ys = np.clip(cand[:, 1].astype(int), 0, h - 1)
+        keep = edges[ys, xs] > 0
+        cand = cand[keep]
+        if len(cand) == 0: return pts
+
+        # Quadrant balancing (unchanged)
+        def quad(p):
+            return (p[:, 0] >= w / 2).astype(int) + 2 * (p[:, 1] >= h / 2).astype(int)
+
+        pt_q = quad(pts) if len(pts) else np.array([], dtype=int)
+        cand_q = quad(cand)
+
+        need = max_points - len(pts)
+        if need <= 0: return pts
+        existing = np.bincount(pt_q, minlength=4)
+        target = (len(pts) + need) // 4
+        quota = np.maximum(target - existing, 0)
+
         take = []
-        for cell in np.flatnonzero(~occupied): 
-            take.extend(np.flatnonzero(cand_cells == cell)[:per_empty])
+        for q in range(4):
+            in_q = np.flatnonzero(cand_q == q)
+            take.extend(in_q[:quota[q]])
 
-        need = max_points - len(pts) - len(take)
-        if need > 0: take.extend(np.setdiff1d(np.arange(len(cand)), take)[:need])
+        remaining_need = need - len(take)
+        if remaining_need > 0:
+            remaining = np.setdiff1d(np.arange(len(cand)), take)
+            take.extend(remaining[:remaining_need])
 
         if not take: return pts
         return np.vstack([pts, cand[take]]).astype(np.float32)
 
     # ---------------- mesh ----------------
 
-    def compensate_vertical(self, good_old, good_new, triangles, min_area=5.0):
+    def compensate_vertical(self, good_old, good_new, triangles, min_area=4.0):
         flow = good_new - good_old
         if len(triangles) == 0: return flow, 1.0, 0.0
         def area(p): return 0.5 * np.abs(np.cross(p[:, 1] - p[:, 0], p[:, 2] - p[:, 0]))
@@ -254,7 +267,7 @@ class VisulaAcEst:
         return flow_comp, s, div
 
 
-    def _build_triangles(self, points, max_edge=80.0, min_area=2.0):
+    def _build_triangles(self, points, max_edge=200.0, min_area=20.0):
         points = np.asarray(points, dtype=np.float32)
         n = len(points)
         empty = (np.zeros((0, 3), int), points, np.zeros((0, 2), int), np.zeros((n, n), bool))
@@ -276,8 +289,16 @@ class VisulaAcEst:
         return triangles, points, links, adjacency
 
 
-    def filter_by_neighbors(self, good_old, good_new, links, thresh=2.0, min_links=1):
-        if len(links) == 0: return good_old[:0], good_new[:0]
+    def filter_by_neighbors(self, good_old, good_new, links, thresh=2.0, 
+                            min_links=1, neighbor_min_links=3):
+        """
+        Filter points by flow consistency with neighbors.
+        A point survives if:
+        - It has enough direct neighbors AND flow agrees, OR
+        - At least one of its neighbors is well-connected (structurally supported).
+        """
+        if len(links) == 0:
+            return good_old[:0], good_new[:0]
 
         flow = good_new - good_old
         n = len(flow)
@@ -290,7 +311,20 @@ class VisulaAcEst:
         np.add.at(count, links[:, 1], 1)
 
         mean_diff = diff_sum / np.maximum(count, 1)
+
+        # Primary rule: direct connectivity + flow agreement
         keep = (count > min_links) & (mean_diff < thresh)
+
+        # Structural support rule: survives if a well-connected neighbor exists
+        # For each point, find the MAX degree among its direct neighbors
+        neighbor_max_degree = np.zeros(n, dtype=int)
+        np.maximum.at(neighbor_max_degree, links[:, 0], count[links[:, 1]].astype(int))
+        np.maximum.at(neighbor_max_degree, links[:, 1], count[links[:, 0]].astype(int))
+
+        supported = (neighbor_max_degree >= neighbor_min_links) & (mean_diff < thresh)
+
+        keep = keep | supported
+
         return good_old[keep], good_new[keep]
 
 

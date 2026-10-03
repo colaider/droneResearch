@@ -42,8 +42,8 @@ class CustomScene:
 
 
 
-    def add_mountain(self, name: str = "mountain", position: Tuple[float, float, float] = (-1.0, 0.0, 0.0), size: float = 0.5, height: float = 0.5, texture_path: str = r".\swarm\objects\rocck.jpg"):
-        """Add a small mountain-like block with texture."""
+    def add_mountain(self, name: str = "mountain", position: Tuple[float, float, float] = (-1.0, 0.0, 0.0), size: float = 0.5, height: float = 0.5, color=(0.4, 0.3, 0.2)):
+        """Add a mountain-like block with solid color."""
         mountain = self.scene.add_entity(
             morph=gs.morphs.Box(
                 size=(size, size, height),
@@ -51,9 +51,7 @@ class CustomScene:
                 fixed=True,
             ),
             surface=gs.surfaces.Rough(
-                diffuse_texture=gs.textures.ImageTexture(
-                    image_path=texture_path
-                )
+                color=color + (1.0,) if len(color) == 3 else color,
             ),
         )
         self.entities[name] = mountain
