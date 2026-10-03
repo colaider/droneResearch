@@ -33,7 +33,7 @@ class CustomScene:
         ),
         surface=gs.surfaces.Rough(
             diffuse_texture=gs.textures.ImageTexture(
-                image_path=r".\swarm\objects\grass.jpg"
+                image_path=str(Path(__file__).resolve().parents[1] / "objects" / "grass.jpg")
             )
         ))
         self.entities['ground_plane'] = plane

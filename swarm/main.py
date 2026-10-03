@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import genesis as gs
 from swarm.scene_builders.customScene import CustomScene
 from swarm.droneClasses.droneVisulaControler import DroneVisulaCTRL 
@@ -14,7 +16,14 @@ def main():
 
     drone = scene.add_drone(
         name="drone_1",
-        urdf_path=r"C:\Users\penturas\Desktop\codits\Python\instullingGenesis\GenesisDroneEnv\genesis_drones\robots\assets\drone_urdf\drone.urdf",
+        urdf_path=str(
+            Path(__file__).resolve().parents[1]
+            / "genesis_drones"
+            / "robots"
+            / "assets"
+            / "drone_urdf"
+            / "drone.urdf"
+        ),
         position=(0, 0, 0),
         orientation=(0,0,0)
     )
@@ -32,8 +41,6 @@ def main():
 
     controller = DroneVisulaCTRL(drone_entity=drone, dt=dt)
     scene.build()
-
-    import numpy as np
 
     def stepping():
         controller.camera_update_step(step)
