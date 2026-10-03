@@ -43,7 +43,7 @@ class CustomScene:
 
 
 
-    def add_mountain(self, name: str = "mountain", position: Tuple[float, float, float] = (-1.0, 0.0, 0.0), size: float = 0.5, height: float = 0.5, color=(0.4, 0.3, 0.2)):
+    def add_mountain(self, name: str = "mountain", position: Tuple[float, float, float] = (0.15, 0.0, 0.0), size: float = 0.1, height: float = 0.5, color=(0.4, 0.3, 0.2)):
         """Add a mountain-like block with solid color."""
         mountain = self.scene.add_entity(
             morph=gs.morphs.Box(

@@ -70,16 +70,53 @@ class StereoCameraConfig:
         left, right = self.orient(left), self.orient(right)
         return (right, left) if self.swap_left_right else (left, right)
 
-    def disparity_direction(self):
-        """
-        Unit (du, dv) in the ORIENTED image: direction a static point moves from the
-        left image to the right image (v grows downwards). Disparity = dot(p_right - p_left, dir).
-        """
+    def camera_axes(self):
+        """Columns x (image right), y (image up), z (backwards, camera looks along -z) in the body frame."""
         z = -np.array(self.look_dir, float)
         z /= np.linalg.norm(z)
         x = np.cross(self.up_dir, z)
         x /= np.linalg.norm(x)
         y = np.cross(z, x)
+        return np.column_stack([x, y, z])
+
+    def unorient_points(self, pts):
+        """Map (N, 2) pixel coords from the ORIENTED image back to the raw camera image."""
+        W, H = self.res
+        Wo, Ho = (H, W) if self.rotate_deg in (90, 270) else (W, H)
+        u, v = pts[:, 0].astype(float), pts[:, 1].astype(float)
+        if self.flip_horizontal:
+            u = Wo - 1 - u
+        if self.flip_vertical:
+            v = Ho - 1 - v
+        if self.rotate_deg == 90:
+            u, v = v, H - 1 - u
+        elif self.rotate_deg == 180:
+            u, v = W - 1 - u, H - 1 - v
+        elif self.rotate_deg == 270:
+            u, v = W - 1 - v, u
+        return np.column_stack([u, v])
+
+    def backproject(self, pts, depth):
+        """
+        (N, 2) oriented pixels of the "left" image + (N,) depth along the optical axis
+        -> (N, 3) points in the drone body frame.
+        """
+        raw = self.unorient_points(pts)
+        W, H = self.res
+        f = self.focal_px
+        p_cam = np.column_stack([(raw[:, 0] - W / 2) * depth / f,
+                                 -(raw[:, 1] - H / 2) * depth / f,
+                                 -depth])
+        side = 'right' if self.swap_left_right else 'left'
+        # einsum instead of @: macOS Accelerate matmul raises spurious overflow warnings
+        return np.einsum('ij,nj->ni', self.camera_axes(), p_cam) + np.array(self.camera_pos(side))
+
+    def disparity_direction(self):
+        """
+        Unit (du, dv) in the ORIENTED image: direction a static point moves from the
+        left image to the right image (v grows downwards). Disparity = dot(p_right - p_left, dir).
+        """
+        x, y, _ = self.camera_axes().T
         shift = np.array(self.camera_pos('right')) - np.array(self.camera_pos('left'))
         if self.swap_left_right:
             shift = -shift

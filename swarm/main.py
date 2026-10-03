@@ -5,6 +5,8 @@ from swarm.scene_builders.customScene import CustomScene
 from swarm.droneClasses.droneVisulaControler import DroneVisulaCTRL 
 import numpy as np
 from swarm.utilities.rtPlotter import LivePlotter
+from swarm.utilities.mapViewer import MapViewer
+from swarm.compVision.terrainMap import TerrainMap
 
 
 dt = 0.01  # Simulation timestep
@@ -37,12 +39,30 @@ def main():
         buffer_size=1000,
         title='IMU Live',
     )
+    depth_plotter = LivePlotter(
+        plots={
+            'Depth (m)': ['stereo', 'true'],
+            'Error (m)': ['stereo - true'],
+            'Valid matches': ['fraction'],
+        },
+        buffer_size=1000,
+        title='Stereo Depth',
+    )
+    terrain = TerrainMap(drone.cam_cfg, size=30.0, cell=0.05)
+    map_viewer = MapViewer(title='Terrain Map')
 
     controller = DroneVisulaCTRL(drone_entity=drone, dt=dt)
     scene.build()
 
     def stepping():
         controller.camera_update_step(step)
+
+        # true pose for now; swap in the estimated pose once the map looks right
+        fp = controller.drone.frame_processor
+        pos = np.asarray(controller.get_position(), dtype=float)
+        quat = np.asarray(controller.drone.get_quat(), dtype=float)
+        terrain.add(fp.depth_points, pos, quat, fp.depth_frame_idx)
+        map_viewer.update(terrain, pos)
 
         
     def plotting():
@@ -82,6 +102,13 @@ def main():
             # plotter.push('Used Pos', acc[:3])
             plotter.push('Camera Vel', vid)
             plotter.update()
+
+            fp = controller.drone.frame_processor
+            true_z = float(controller.get_position()[2])
+            depth_plotter.push('Depth (m)', [fp.depth_median, true_z])
+            depth_plotter.push('Error (m)', fp.depth_median - true_z)
+            depth_plotter.push('Valid matches', fp.depth_valid_frac)
+            depth_plotter.update()
 
         scene.step()
 
