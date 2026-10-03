@@ -98,25 +98,20 @@ class VisulaAcEst:
             self.camera_velocity = self._fallback_velocity()
             return
 
-        processed, flow, olds, news, tris = self.lucas_kanade_flow(prev[0], curr[0], prev[1], curr[1])
+        processed, flow, olds, news, tris, links = self.lucas_kanade_flow(prev[0], curr[0], prev[1], curr[1])
         self.current_frame.frames = processed
         if flow is None:
             self.camera_velocity = self._fallback_velocity()
             return
 
-        h = self._current_height()
-        for k in range(2):
-            olds[k][:, 2] = h
-            news[k][:, 2] = h
-        points = [(o + n) / 2 for o, n in zip(olds, news)]
 
-        points = self.trinagulate_altitude(points, [flow, flow], olds)
+
+
+        olds, news = self.trinagulate_altitude(news, flow, olds, tris, links)
 
         keep = self.point_prediction_filtering(olds[0], news[0])
-        flows = [flow[keep], flow[keep]]
-        points = [p[keep] for p in points]
-
-        self.estimate_velocities(flows, points)
+        flow, news = flow[keep], [news[0][keep], news[1][keep]]
+        self.estimate_velocities(flow, news[0])
 
 # ---------------- tracking ----------------
 
@@ -126,7 +121,7 @@ class VisulaAcEst:
         gray_r = cv2.cvtColor(frame_r, cv2.COLOR_BGR2GRAY)
         annotated_frame = frame2.copy()
         annotated_r = frame_r_curr.copy()
-        lost = ([annotated_frame, annotated_r], None, None, None, None)
+        lost = ([annotated_frame, annotated_r], None, None, None, None, None)
         empty = np.empty((0, 2), np.float32)
 
         lk = dict(winSize=(21, 21), maxLevel=3, criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 30, 0.01))
@@ -190,7 +185,6 @@ class VisulaAcEst:
         self.tracked_points[0] = good_new.copy()
 
         flow, scale, div = self.compensate_vertical(good_old, good_new, triangles)
-        flow = self.smooth_flow_by_neighbors(good_new, flow, links)
         self.prev_med_flow[0] = np.median(flow, axis=0)
 
         # transport the left flow to the matching right points
@@ -224,10 +218,8 @@ class VisulaAcEst:
                                        minDistance=7, blockSize=11, mask=mask)
         if cand is None: return pts
         cand = cand.reshape(-1, 2)
-
         occupied = np.zeros(gy * gx, bool)
-        if len(pts):
-            occupied[cell_of(pts)] = True
+        if len(pts): occupied[cell_of(pts)] = True
 
         cand_cells = cell_of(cand)
         take = []
@@ -244,17 +236,13 @@ class VisulaAcEst:
 
     def compensate_vertical(self, good_old, good_new, triangles, min_area=5.0):
         flow = good_new - good_old
-        if len(triangles) == 0:
-            return flow, 1.0, 0.0
-
-        def area(p):
-            return 0.5 * np.abs(np.cross(p[:, 1] - p[:, 0], p[:, 2] - p[:, 0]))
+        if len(triangles) == 0: return flow, 1.0, 0.0
+        def area(p): return 0.5 * np.abs(np.cross(p[:, 1] - p[:, 0], p[:, 2] - p[:, 0]))
 
         a_old = area(good_old[triangles])
         a_new = area(good_new[triangles])
         ok = a_old > min_area
-        if not ok.any():
-            return flow, 1.0, 0.0
+        if not ok.any(): return flow, 1.0, 0.0
 
         s = np.sqrt(np.median(a_new[ok] / a_old[ok]))
         h, w = self.frame_size[:2]
@@ -270,14 +258,9 @@ class VisulaAcEst:
         points = np.asarray(points, dtype=np.float32)
         n = len(points)
         empty = (np.zeros((0, 3), int), points, np.zeros((0, 2), int), np.zeros((n, n), bool))
-        if n < 3:
-            return empty
-
-        try:
-            tri = Delaunay(points).simplices
-        except Exception:
-            return empty
-
+        if n < 3: return empty
+        tri = Delaunay(points).simplices
+       
         p = points[tri]
         edge_len = np.linalg.norm(p - np.roll(p, 1, axis=1), axis=2)
         area = 0.5 * np.abs(np.cross(p[:, 1] - p[:, 0], p[:, 2] - p[:, 0]))
@@ -291,6 +274,7 @@ class VisulaAcEst:
         adjacency[links[:, 1], links[:, 0]] = True
 
         return triangles, points, links, adjacency
+
 
     def filter_by_neighbors(self, good_old, good_new, links, thresh=2.0, min_links=1):
         if len(links) == 0: return good_old[:0], good_new[:0]
@@ -310,35 +294,91 @@ class VisulaAcEst:
         return good_old[keep], good_new[keep]
 
 
-    def smooth_flow_by_neighbors(self, points, flow, links, self_weight=0.7, iterations=3, sigma=None):
-        flow = flow.astype(np.float64).copy()
-        n = len(flow)
-        if len(links) == 0: return flow
+    def trinagulate_altitude(self, news, flow, olds, triangles, links) -> list:
+        """
+        Estimate altitude per feature using stereo disparity.
+        
+        Parameters
+        ----------
+        news : list of two ndarrays, each shape (N, 3)
+            Current-frame feature positions with altitude placeholder as third column.
+            news[0] : (N, 3) - left camera (x_px, y_px, z_placeholder)
+            news[1] : (N, 3) - right camera (x_px, y_px, z_placeholder)
+            Index i in news[0] corresponds to the SAME physical feature as index i in news[1].
+            The third column currently holds the drone's barometric altitude for all points.
+            This function should REPLACE that column with per-point altitude estimated 
+            from stereo disparity: z = f * B / disparity.
+        
+        flow : ndarray, shape (N, 2)
+            Per-point optical flow in the LEFT camera, pixels per frame.
+            flow[i] = (dx, dy) for feature i, computed as points_new - points_old.
+            Same length and index correspondence as points[0].
+            After this function, flow is used by estimate_velocities to compute
+            drone translational velocity: v_ground = flow * z / (f * dt).
+            More accurate z per point → more accurate velocity per point.
+        
+        olds : list of two ndarrays, each shape (N, 3)
+            Previous-frame feature positions, same format as points.
+            olds[0] : (N, 3) - left camera positions in previous frame
+            olds[1] : (N, 3) - right camera positions in previous frame
+            Same index correspondence as points.
+            Can be used to:
+            - Verify stereo consistency over time (features should maintain 
+            similar disparity if altitude doesn't change rapidly).
+            - Reject features whose disparity changes implausibly between frames
+            (likely bad tracks).
+            - Smooth altitude estimates temporally per feature.
+        
+        triangles : ndarray, shape (T, 3), dtype int
+            Delaunay triangulation of features. Each row is 3 indices into points
+            (same indices work for left and right because of 1:1 correspondence).
+            Can be used to:
+            - Enforce altitude consistency within each triangle (triangle vertices
+            lying on ground should have similar altitudes).
+            - Reject triangles with wildly inconsistent per-vertex altitudes
+            (indicates one vertex is on an obstacle, or a bad stereo match).
+            - Compute per-triangle altitude as median of its 3 vertex altitudes
+            for smoothing.
+            - Detect scene structure: triangles with varying altitudes span 
+            non-planar surfaces (obstacles, terrain variation).
+        
+        links : ndarray, shape (L, 2), dtype int
+            Unique undirected edges of the triangulation. Each row [a, b] means
+            points a and b are triangulation neighbors.
+            Can be used to:
+            - Smooth altitude between neighbors (Laplacian smoothing on altitude field).
+            - Detect altitude discontinuities (large |z[a] - z[b]| → scene edge).
+            - Reject features whose altitude disagrees heavily with all neighbors
+            (likely bad stereo match).
+            - Build a graph where edge weights = altitude difference, for 
+            downstream segmentation of scene by depth.
+        
+        Returns
+        -------
+        list of two ndarrays, each shape (N, 3)
+            points list with third column replaced by estimated altitude per feature.
+            Index correspondence preserved. Same shape as input points.
+        
+        Notes
+        -----
+        Stereo disparity formula:
+            disparity_i = points[0][i, 0] - points[1][i, 0]
+            altitude_i  = focal_length_pixels * baseline_meters / disparity_i
+        
+        For narrow-baseline rectified stereo, use horizontal disparity (x difference).
+        For unrectified stereo, use cv2.triangulatePoints with calibrated projection
+        matrices for full 3D position recovery.
+        
+        Current implementation returns input unchanged — altitude logic to be added.
+        """
+        for k in range(2):
+            olds[k][:, 2] = self._current_height()
+            news[k][:, 2] = self._current_height()
+        return olds, news
 
-        i, j = links[:, 0], links[:, 1]
-        if sigma is not None:
-            d2 = np.sum((points[i] - points[j]) ** 2, axis=1)
-            w = np.exp(-d2 / (2 * sigma ** 2))
-        else: w = np.ones(len(links))
-
-        for _ in range(iterations):
-            acc = flow * self_weight
-            wsum = np.full(n, self_weight, dtype=np.float64)
-            np.add.at(acc, i, flow[j] * w[:, None])
-            np.add.at(acc, j, flow[i] * w[:, None])
-            np.add.at(wsum, i, w)
-            np.add.at(wsum, j, w)
-            flow = acc / wsum[:, None]
-
-        return flow
-
-
-    def trinagulate_altitude(self, points, flow, old) -> list:
-        return list(points)
 
     def estimate_velocities(self, flow, points):
-
-        if any(len(p) < 2 for p in points):
+        if len(points) < 2:
             self.camera_velocity = self._fallback_velocity()
             self.camera_angle = self.drone_ang[:2]
             return None
@@ -346,31 +386,31 @@ class VisulaAcEst:
         ang_vel, att = self.avg_ang_vel, self.avg_att
         h, w = self.frame_size[:2]
         c = np.array([w / 2, h / 2])
-        v_out = []
 
-        for cam, (f, p) in enumerate(zip(flow, points)):
-            n = len(p)
-            z = p[:, 2]
+        n = len(points)
+        z = points[:, 2]
 
-            v = f * (z / (self.foc_l * self.dt))[:, None]
-            w = ang_vel[[1, 0]] * np.array([ 1,  1])   # swapped
-            v_rot = z[:, None] / np.cos(att[[1, 0]]) ** 2 * w
-            B = v - v_rot
+        v = flow * (z / (self.foc_l * self.dt))[:, None]
+        w = ang_vel[[1, 0]] * np.array([1, 1])   # swapped
+        v_rot = z[:, None] / np.cos(att[[1, 0]]) ** 2 * w
+        B = v - v_rot
 
-            r = (z[:, None] / self.foc_l) * (p[:, :2] - c) + self.camera_saperation / 2
-            A = np.vstack([np.column_stack([np.ones(n), np.zeros(n), -r[:, 1]]), np.column_stack([np.zeros(n), np.ones(n), r[:, 0]])])
-            x, *_ = np.linalg.lstsq(A, np.concatenate([B[:, 0], B[:, 1]]), rcond=None)
-            x = -x
+        r = (z[:, None] / self.foc_l) * (points[:, :2] - c) + self.camera_saperation / 2
+        A = np.vstack([
+            np.column_stack([np.ones(n), np.zeros(n), -r[:, 1]]),
+            np.column_stack([np.zeros(n), np.ones(n),  r[:, 0]])
+        ])
+        x, *_ = np.linalg.lstsq(A, np.concatenate([B[:, 0], B[:, 1]]), rcond=None)
+        x = -x
 
-            kf = self.vkfs.setdefault(cam, VelocityKalmanFilter())
-            if not kf.started:
-                kf.state = x.copy()
-                kf.started = True
-            kf.predict(kf.state)
-            kf.update(x)
-            v_out.append(kf.get())
+        kf = self.vkfs.setdefault(0, VelocityKalmanFilter())
+        if not kf.started:
+            kf.state = x.copy()
+            kf.started = True
+        kf.predict(kf.state)
+        kf.update(x)
 
-        self.camera_velocity = np.mean(v_out, axis=0)
+        self.camera_velocity = kf.get()
 
 
     def estimate_ang_from_vel(self, v, p):
@@ -385,6 +425,7 @@ class VisulaAcEst:
         pitch = -self.foc_l * a / (2 * c)
         roll = -self.foc_l * b / (2 * c)
         return pitch, roll
+
 
 
     def point_prediction_filtering(self, old, new):
@@ -405,13 +446,13 @@ class VisulaAcEst:
         self.expected_vel_err = np.mean(residuals)
         threshold = 1.5
         if residuals.sum() > 0:
-            threshold = np.min(residuals) + 0.35 * (np.max(residuals) - np.min(residuals))
+            threshold = np.min(residuals) + 0.65 * (np.max(residuals) - np.min(residuals))
         return residuals < threshold
-
+    
     # ---------------- utils ----------------
 
     @staticmethod
-    def add_noise(frames, sigma=30):
+    def add_noise(frames, sigma=5):
         out = []
         for frame in frames:
             # Simple blur with small kernel

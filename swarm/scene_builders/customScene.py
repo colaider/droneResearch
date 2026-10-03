@@ -21,6 +21,7 @@ class CustomScene:
         
         # Add ground plane by default
         self.add_ground_plane()
+        self.add_mountain()
 
     
     def add_ground_plane(self, size: float = 50.0):
@@ -38,6 +39,27 @@ class CustomScene:
         self.entities['ground_plane'] = plane
         self.static_objects.append(plane)
         return plane
+
+
+
+    def add_mountain(self, name: str = "mountain", position: Tuple[float, float, float] = (-1.0, 0.0, 0.0), size: float = 0.5, height: float = 0.5, texture_path: str = r".\swarm\objects\rocck.jpg"):
+        """Add a small mountain-like block with texture."""
+        mountain = self.scene.add_entity(
+            morph=gs.morphs.Box(
+                size=(size, size, height),
+                pos=(position[0], position[1], position[2] + height / 2),
+                fixed=True,
+            ),
+            surface=gs.surfaces.Rough(
+                diffuse_texture=gs.textures.ImageTexture(
+                    image_path=texture_path
+                )
+            ),
+        )
+        self.entities[name] = mountain
+        self.static_objects.append(mountain)
+        print(f"✓ Added mountain: {name} at {position}")
+        return mountain
 
     
     def add_static_object( self, name: str, mesh_path: str, position: Tuple[float, float, float] = (0, 0, 0), scale: float = 1.0):
