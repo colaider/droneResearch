@@ -16,22 +16,22 @@ class StereoCameraConfig:
     and are rolled 90 deg in opposite senses; that roll is baked straight into their `up`
     vectors (Genesis convention), so no software rotation is needed.
     """
-    res: Tuple[int, int] = (600, 400)        # (width, height) px -- sensor_size (1080, 1920) h:w
+    res: Tuple[int, int] = (1920, 1080)        # (width, height) px -- sensor_size (1080, 1920) h:w
     near: float = 0.01
     far: float = 100.0
 
     # per-camera mean focal length (px) = (fx + fy) / 2 from the TXT
-    left_focal: float = (1718.54 + 1720.12) / 2     # Camera 1 (Left - Long)
-    right_focal: float = (1175.14 + 1177.06) / 2    # Camera 2 (Right - Short)
+    left_focal: float = 1500     # Camera 1 (Left - Long)
+    right_focal: float = 1500   # Camera 2 (Right - Short)
 
     # looking down, rolled 90 deg: left 90 CCW -> up = -Y, right 90 CW -> up = +Y
-    left_up: Tuple[float, float, float] = (0.0, -1.0, 0.0)
-    right_up: Tuple[float, float, float] = (0.0, 1.0, 0.0)
+    left_up: Tuple[float, float, float] = (0.0,    0.0, 0.0)
+    right_up: Tuple[float, float, float] = (0.0, 0.0, 0.0)
 
     # rig geometry (drone body frame)
     baseline: float = 0.125                    # m -- "125mm apart in Y"
     baseline_axis: str = 'y'
-    mount_pos: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+    mount_pos: Tuple[float, float, float] = (baseline / 2, 0.0, 0.0)
     look_dir: Tuple[float, float, float] = (0.0, 0.0, -1.0)   # looking down
     link_idx_local: int = 0
 
@@ -49,7 +49,7 @@ class StereoCameraConfig:
     def camera_pos(self, side):
         """Optical centre of 'left' or 'right' camera in the body frame."""
         sign = -1.0 if side == 'left' else 1.0
-        return tuple(np.array(self.mount_pos) + sign * self.baseline / 2 * np.array(_AXES[self.baseline_axis]))
+        return tuple(np.array(self.mount_pos) * sign)
 
     def camera_options(self, side):
         """Pose + intrinsics kwargs for gs.sensors.RasterizerCameraOptions, per camera.
@@ -60,7 +60,7 @@ class StereoCameraConfig:
         lookat = tuple(np.array(pos) + np.array(self.look_dir))
         up = self.left_up if side == 'left' else self.right_up
         return dict(pos=pos, lookat=lookat, up=up, link_idx_local=self.link_idx_local,
-                    res=self.res, fov=self.fov_of(side), near=self.near, far=self.far)
+                    res=self.res, fov=self.fov_of(side))
 
     # ---------------- left-dominant values ----------------
 
