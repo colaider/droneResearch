@@ -1,11 +1,13 @@
 All lin pixels 
 
-
-Baseline:
-
+Baseline:125mm apart in Y 
 
 Camera 1: (Left - Long)
-Orintation:
+Orientation: 90 CCLKW
+
+Distortion Coefficients:
+[[-4.09575236e-01  7.02761552e+00 -1.41216060e-02  2.01228359e-02 -2.66788786e+01]]
+sensor_size = (1080, 1920) h:w
 
 fx = 1718.54
 fy = 1720.12
@@ -13,61 +15,13 @@ cx = 1054.17
 cy = 454.72
 
 Camera 2: (Right Short)
-Orintation:
+Orientation:90 CLKW 
+
+Distortion Coefficients: 
+[[-0.19956526  0.45415573  0.00144388 -0.00108357 -0.40052569]]
+sensor_size = (1080, 1920) h:w
 
 fx = 1175.14
 fy = 1177.06
 cx = 919.18
 cy = 602.39
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
