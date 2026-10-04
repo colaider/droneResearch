@@ -37,7 +37,7 @@ class DroneStruct:
 
     def camera_step(self):
         frames = self.frame_processor.processing(self.get_two_frames(), self.steps_cam)
-        self.postpocessed_frames = frames 
+        self.postpocessed_frames = frames.frames 
         self.steps_cam += 1
         return frames
 

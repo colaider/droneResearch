@@ -2,13 +2,11 @@ import cv2
 import numpy as np
 from collections import deque
 from scipy.spatial import Delaunay
-import time
 
 class EnumFrame:
     def __init__(self):
         self.frames = []
         self.idx = 0
-        self.time = 0.0
 
 
 class VisulaAcEst:
@@ -48,9 +46,7 @@ class VisulaAcEst:
     def update_frame(self, frame, idx):
         new_frame_data = EnumFrame()
         new_frame_data.frames = self.add_noise([f.copy() for f in frame])
-        
         new_frame_data.idx = idx
-        new_frame_data.time = time.time()
 
         if not hasattr(self, 'frame_size'):
             self.frame_size = np.shape(frame[0])
@@ -61,7 +57,7 @@ class VisulaAcEst:
     def processing(self, frame, idx):
         self.update_frame(frame, idx)
         self.aply_flow()
-        return self.current_frame.frames
+        return self.current_frame
 
     # ---------------- sensors ----------------
 
@@ -487,7 +483,7 @@ class VisulaAcEst:
 
 
 class VelocityKalmanFilter:
-    def __init__(self, process_var=0.6, measurement_var=5, yaw_process_var=5.0, yaw_measurement_var=0.1):
+    def __init__(self, process_var=0.6, measurement_var=3.5, yaw_process_var=5.0, yaw_measurement_var=0.1):
         self.state = np.zeros(3)
         self.P = np.eye(3)
         self.Q = np.diag([process_var, process_var, yaw_process_var])

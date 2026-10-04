@@ -38,48 +38,19 @@ def main():
         title='IMU Live',
     )
 
-    controller = DroneVisulaCTRL(drone_entity=drone, dt=dt)
+    controller = DroneVisulaCTRL(drone_entity=drone, dt=dt, camera_fps=30)
     scene.build()
 
-    def stepping():
-        controller.camera_update_step(step)
-
-        
-    def plotting():
-        reading = controller.drone.imu.read()
-        acc  = reading.lin_acc.numpy()   # array shape (3,)
-        gyro = reading.ang_vel.numpy()   # array shape (3,)
-        
-        pos= controller.get_position()
-        plotter.push('Accelerometer (m/s²)', acc)
-        plotter.push('Gyroscope (rad/s)',    gyro)
-        plotter.push('Actual pos', pos)
-        plotter.update()
-    prev_p = np.zeros([3])
-
-    for step  in range(100000):
-        stepping()
-        x = 0
+    for step in range(100000):
+        sim_time = step * dt
+        controller.camera_update_step(step, sim_time)
         if controller.start(step) == 1:
-            t = (step - 500) * controller.dt   # time since startup finished
-            radius = 8.0
-            omega = 0.5  
-            x = radius * np.cos(omega * t)
-            y = radius * np.sin(omega * t)
-            z = 1.0
-            yaw = 0.0
-
-            pos = controller.get_position()
-            # controller.position_control(np.array([x, y, z, yaw]))
-            controller.position_ctrl_fused(np.array([0,0,1,0]))      
-            pos = controller.get_imu_pos()
+            controller.position_ctrl_fused(np.array([0, 0, 1, 0]))
             real_pos = controller.get_position()
-            real_pos[1] = -1*real_pos[1]
-            acc = controller.get_lin_vel()
+            real_pos[1] = -1 * real_pos[1]
             vid = controller.get_camera_lin_v()
             plotter.push('Cam Pos', controller.cam_pos)
             plotter.push('Act Pos', real_pos)
-            # plotter.push('Used Pos', acc[:3])
             plotter.push('Camera Vel', vid)
             plotter.update()
 
@@ -89,23 +60,5 @@ def main():
     scene.close()
 
 
-
-
-
-   
 if __name__ == "__main__":
     main()
-
-
-
-
-
-
-
-   
-    # for step in range(100000000000):
-        
-    #     if controller.start(step) == 1:
-    #         
-
-    #     scene.step()
