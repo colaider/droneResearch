@@ -2,6 +2,8 @@ import cv2
 import numpy as np
 from collections import deque
 from scipy.spatial import Delaunay
+import time
+import swarm.config.cameraConfig as camConfig
 
 class EnumFrame:
     def __init__(self):
@@ -14,7 +16,7 @@ class VisulaAcEst:
         self.fov = fov
         self.foc_l = (res[1] / 2) / np.tan(np.deg2rad(fov) / 2)
         self.dt = 0.01
-        self.camera_saperation = 0
+        self.camera_saperation = camConfig.STEREO_CAM.baseline
 
         self.current_frame = EnumFrame()
         self.buffer = deque(maxlen=100)
@@ -40,6 +42,10 @@ class VisulaAcEst:
         self.camera_velocity = np.zeros(3)
         self.camera_angle = np.zeros(2)
         self.expected_vel_err = 0
+        self.depth_median = np.nan       # median stereo depth of valid matches
+        self.depth_valid_frac = 0.0      # share of points with a valid stereo match
+        self.depth_points = np.empty((0, 3))   # (u, v, depth) of valid matches, left image
+        self.depth_frame_idx = -1              # camera frame the depth_points belong to
 
     # ---------------- frames ----------------
 
@@ -103,7 +109,7 @@ class VisulaAcEst:
 
 
 
-        olds, news = self.trinagulate_altitude(news, flow, olds, tris, links)
+        news = self.trinagulate_altitude(news, flow, olds, tris, links)
 
         keep = self.point_prediction_filtering(olds[0], news[0])
         flow, news = flow[keep], [news[0][keep], news[1][keep]]
@@ -324,17 +330,17 @@ class VisulaAcEst:
 
     def trinagulate_altitude(self, news, flow, olds, triangles, links) -> list:
         """
-        Estimate altitude per feature using stereo disparity.
+        Estimate depth per feature using stereo disparity.
         
         Parameters
         ----------
         news : list of two ndarrays, each shape (N, 3)
-            Current-frame feature positions with altitude placeholder as third column.
+            Current-frame feature positions with depth placeholder as third column.
             news[0] : (N, 3) - left camera (x_px, y_px, z_placeholder)
             news[1] : (N, 3) - right camera (x_px, y_px, z_placeholder)
             Index i in news[0] corresponds to the SAME physical feature as index i in news[1].
             The third column currently holds the drone's barometric altitude for all points.
-            This function should REPLACE that column with per-point altitude estimated 
+            This function should REPLACE that column with per-point depth estimated 
             from stereo disparity: z = f * B / disparity.
         
         flow : ndarray, shape (N, 2)
@@ -384,25 +390,46 @@ class VisulaAcEst:
         Returns
         -------
         list of two ndarrays, each shape (N, 3)
-            points list with third column replaced by estimated altitude per feature.
-            Index correspondence preserved. Same shape as input points.
-        
+            news with third column replaced by depth along the optical axis per feature.
+            Index correspondence preserved. Same shape as input news.
+            olds gets the same depth written in place (point_prediction_filtering reads it).
+
         Notes
         -----
         Stereo disparity formula:
-            disparity_i = points[0][i, 0] - points[1][i, 0]
-            altitude_i  = focal_length_pixels * baseline_meters / disparity_i
-        
-        For narrow-baseline rectified stereo, use horizontal disparity (x difference).
-        For unrectified stereo, use cv2.triangulatePoints with calibrated projection
-        matrices for full 3D position recovery.
-        
-        Current implementation returns input unchanged — altitude logic to be added.
+            disparity_i = (olds[1][i, :2] - olds[0][i, :2]) . disparity_direction
+            depth_i     = focal_length_pixels * baseline_meters / disparity_i
+
+        Disparity is measured on olds: news[1] is olds[1] + left flow, not a new match,
+        so it carries the same disparity. Points with a bad stereo match (epipolar error
+        or disparity too small) get the median depth of the valid points, or the
+        barometric height if none are valid.
         """
+        L, R = olds[0][:, :2], olds[1][:, :2]
+        delta = R - L
+        disp_dir = camConfig.STEREO_CAM.disparity_direction()
+        perp = np.array([-disp_dir[1], disp_dir[0]])
+        d   = delta @ disp_dir                     # disparity along baseline
+        off = np.abs(delta @ perp)                 # epipolar error
+        keep = (off < 1.0) & (d > 0.3)
+
+        # neighbour consistency in disparity space (step 3) -> update keep
+
+        depth = np.full(len(d), self._current_height())
+        if keep.any():
+            depth[keep] = self.foc_l * self.camera_saperation / d[keep]
+            depth[~keep] = np.median(depth[keep])
+
+        self.depth_valid_frac = keep.mean() if len(keep) else 0.0
+        self.depth_median = np.median(depth[keep]) if keep.any() else np.nan
+
         for k in range(2):
-            olds[k][:, 2] = self._current_height()
-            news[k][:, 2] = self._current_height()
-        return olds, news
+            olds[k][:, 2] = depth
+            news[k][:, 2] = depth
+
+        self.depth_points = news[0][keep].copy()
+        self.depth_frame_idx = self.current_frame.idx
+        return news
 
 
     def estimate_velocities(self, flow, points):
@@ -420,7 +447,11 @@ class VisulaAcEst:
 
         v = flow * (z / (self.foc_l * self.dt))[:, None]
         w = ang_vel[[1, 0]] * np.array([1, 1])   # swapped
+
+        ##############################################################
         v_rot = z[:, None] / np.cos(att[[1, 0]]) ** 2 * w
+
+        ####################################################
         B = v - v_rot
 
         r = (z[:, None] / self.foc_l) * (points[:, :2] - c) + self.camera_saperation / 2
