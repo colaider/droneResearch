@@ -54,8 +54,8 @@ class VisulaAcEst:
 
         left = frame[0]
         right = frame[1]
-        new_frame_data.frames = self.add_noise([left.copy(), right.copy()])
-        # new_frame_data.frames = [self.keep_central_40_precent(f) for f in new_frame_data.frames]
+        new_frame_data.frames = [left.copy(), right.copy()]
+        new_frame_data.frames = [self.keep_central_40_precent(f) for f in new_frame_data.frames]
         # new_frame_data.frames = self.rotateL_R(new_frame_data.frames)
         new_frame_data.idx = idx
 
@@ -127,9 +127,6 @@ class VisulaAcEst:
         if flow is None:
             self.camera_velocity = self._fallback_velocity()
             return
-
-
-
 
         news = self.trinagulate_altitude(news, flow, olds, tris, links)
 
@@ -312,16 +309,8 @@ class VisulaAcEst:
         return triangles, points, links, adjacency
 
 
-    def filter_by_neighbors(self, good_old, good_new, links, thresh=2.0, 
-                            min_links=1, neighbor_min_links=3):
-        """
-        Filter points by flow consistency with neighbors.
-        A point survives if:
-        - It has enough direct neighbors AND flow agrees, OR
-        - At least one of its neighbors is well-connected (structurally supported).
-        """
-        if len(links) == 0:
-            return good_old[:0], good_new[:0]
+    def filter_by_neighbors(self, good_old, good_new, links, thresh=2.0, min_links=1, neighbor_min_links=3):
+        if len(links) == 0: return good_old[:0], good_new[:0]
 
         flow = good_new - good_old
         n = len(flow)
@@ -332,10 +321,7 @@ class VisulaAcEst:
         np.add.at(diff_sum, links[:, 1], d)
         np.add.at(count, links[:, 0], 1)
         np.add.at(count, links[:, 1], 1)
-
         mean_diff = diff_sum / np.maximum(count, 1)
-
-        # Primary rule: direct connectivity + flow agreement
         keep = (count > min_links) & (mean_diff < thresh)
 
         # Structural support rule: survives if a well-connected neighbor exists
@@ -344,7 +330,6 @@ class VisulaAcEst:
         np.maximum.at(neighbor_max_degree, links[:, 0], count[links[:, 1]].astype(int))
         np.maximum.at(neighbor_max_degree, links[:, 1], count[links[:, 0]].astype(int))
         supported = (neighbor_max_degree >= neighbor_min_links) & (mean_diff < thresh)
-
         keep = keep | supported
 
         return good_old[keep], good_new[keep]
@@ -469,13 +454,9 @@ class VisulaAcEst:
 
         v = flow * (z / (self.foc_l * self.dt))[:, None]
         w = ang_vel[[1, 0]] * np.array([1, 1])   # swapped
-
-        ##############################################################
         v_rot = z[:, None] / np.cos(att[[1, 0]]) ** 2 * w
 
-        ####################################################
         B = v - v_rot
-
         r = (z[:, None] / self.foc_l) * (points[:, :2] - c) + self.camera_saperation / 2
         A = np.vstack([
             np.column_stack([np.ones(n), np.zeros(n), -r[:, 1]]),
@@ -488,6 +469,7 @@ class VisulaAcEst:
         if not kf.started:
             kf.state = x.copy()
             kf.started = True
+
         kf.predict(kf.state)
         kf.update(x)
 
@@ -516,16 +498,6 @@ class VisulaAcEst:
         return residuals < threshold
     
     # ---------------- utils ----------------
-
-    @staticmethod
-    def add_noise(frames, sigma=5):
-        out = []
-        for frame in frames:
-            # Simple blur with small kernel
-            # Add noise
-            noisy = frame.astype(np.float32) + np.random.normal(0, sigma, frame.shape)
-            out.append(np.clip(noisy, 0, 255).astype(np.uint8))
-        return out
 
     def set_dt(self, dt):
         self.dt = dt

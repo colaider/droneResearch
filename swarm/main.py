@@ -80,7 +80,7 @@ def main():
         sim_time = step * dt
         stepping(sim_time)
         if controller.start(step) == 1:
-            controller.position_ctrl_fused(np.array([0, 0, 5, 0]))
+            controller.position_ctrl_fused(np.array([0, 0, 1, 0]))
             real_pos = controller.get_position()
             real_pos[1] = -1 * real_pos[1]
             vid = controller.get_camera_lin_v()

@@ -43,16 +43,20 @@ class CustomScene:
 
 
 
-    def add_mountain(self, name: str = "mountain", position: Tuple[float, float, float] = (0.15, 0.0, 0.0), size: float = 0.1, height: float = 0.5, color=(0.4, 0.3, 0.2)):
-        """Add a mountain-like block with solid color."""
+    def add_mountain(self, name: str = "mountain", position: Tuple[float, float, float] = (0.15, 0.0, 0.0), size: float = 0.1, height: float = 0.5):
+        """Add a mountain-like block: a cube STL scaled to (size, size, height), rock-textured."""
+        objects = Path(__file__).resolve().parents[1] / "objects"
         mountain = self.scene.add_entity(
-            morph=gs.morphs.Box(
-                size=(size, size, height),
+            morph=gs.morphs.Mesh(
+                file=str(objects / "cube.obj"),           # centered unit cube (-0.5..0.5) with UVs
+                scale=(size, size, height),
                 pos=(position[0], position[1], position[2] + height / 2),
                 fixed=True,
             ),
             surface=gs.surfaces.Rough(
-                color=color + (1.0,) if len(color) == 3 else color,
+                diffuse_texture=gs.textures.ImageTexture(
+                    image_path=str(objects / "rocck.jpg")
+                )
             ),
         )
         self.entities[name] = mountain
