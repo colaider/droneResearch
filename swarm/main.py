@@ -48,7 +48,7 @@ def main():
         buffer_size=1000,
         title='Stereo Depth',
     )
-    terrain = TerrainMap(drone.cam_cfg, size=30.0, cell=0.05)
+    # terrain = TerrainMap(drone.cam_cfg, size=30.0, cell=0.05)
     map_viewer = MapViewer(title='Terrain Map')
 
     controller = DroneVisulaCTRL(drone_entity=drone, dt=dt, camera_fps=30)
@@ -61,8 +61,8 @@ def main():
         fp = controller.drone.frame_processor
         pos = np.asarray(controller.get_position(), dtype=float)
         quat = np.asarray(controller.drone.get_quat(), dtype=float)
-        terrain.add(fp.depth_points, pos, quat, fp.depth_frame_idx)
-        map_viewer.update(terrain, pos)
+        # terrain.add(fp.depth_points, pos, quat, fp.depth_frame_idx)
+        # map_viewer.update(terrain, pos)
 
         
     def plotting():

@@ -25,14 +25,15 @@ class DroneStruct:
         
 
     def get_two_frames(self):
+        # Cameras are created in their mounted orientation (via `up`), so the frames come out
+        # already oriented -- no software rotation needed here.
         lr_cam = []
-        for name, cam in [('left', self.left_cam), ('right', self.right_cam)]:
+        for cam in (self.left_cam, self.right_cam):
             rgb = cam.read().rgb
             if rgb.ndim > 3:
                 rgb = rgb[0]
-            bgr = cv2.cvtColor(tensor_to_array(rgb), cv2.COLOR_RGB2BGR)
-            lr_cam.append(bgr)
-        return list(self.cam_cfg.orient_pair(*lr_cam))
+            lr_cam.append(cv2.cvtColor(tensor_to_array(rgb), cv2.COLOR_RGB2BGR))
+        return lr_cam
 
 
     def camera_step(self):

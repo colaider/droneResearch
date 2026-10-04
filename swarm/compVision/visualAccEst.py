@@ -51,11 +51,16 @@ class VisulaAcEst:
 
     def update_frame(self, frame, idx):
         new_frame_data = EnumFrame()
-        new_frame_data.frames = self.add_noise([f.copy() for f in frame])
+
+        left = frame[0]
+        right = frame[1]
+        new_frame_data.frames = self.add_noise([left.copy(), right.copy()])
+        # new_frame_data.frames = [self.keep_central_40_precent(f) for f in new_frame_data.frames]
+        # new_frame_data.frames = self.rotateL_R(new_frame_data.frames)
         new_frame_data.idx = idx
 
         if not hasattr(self, 'frame_size'):
-            self.frame_size = np.shape(frame[0])
+            self.frame_size = np.shape(new_frame_data.frames[0])
 
         self.buffer.append(new_frame_data)
         self.current_frame = new_frame_data
@@ -65,6 +70,23 @@ class VisulaAcEst:
         self.aply_flow()
         return self.current_frame
 
+
+
+    def keep_central_40_precent(self, frame):
+        h, w = frame.shape[:2]
+        x_start = int(w * 0.3)
+        x_end = int(w * 0.7)
+        y_start = int(h * 0.3)
+        y_end = int(h * 0.7)
+        return frame[y_start:y_end, x_start:x_end]
+        
+
+    def rotateL_R(self, frame):
+        # Rotate the left and right frames to align with the drone's body frame
+        # This is a placeholder implementation; actual rotation logic will depend on the specific requirements
+        rotated_left = cv2.rotate(frame[0], cv2.ROTATE_90_CLOCKWISE).copy()
+        rotated_right = cv2.rotate(frame[1], cv2.ROTATE_90_COUNTERCLOCKWISE).copy()
+        return [rotated_left, rotated_right]
     # ---------------- sensors ----------------
 
     def push_sensors(self):
