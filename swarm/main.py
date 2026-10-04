@@ -54,8 +54,8 @@ def main():
     controller = DroneVisulaCTRL(drone_entity=drone, dt=dt, camera_fps=30)
     scene.build()
 
-    def stepping():
-        controller.camera_update_step(step)
+    def stepping(sim_time):
+        controller.camera_update_step(step, sim_time)
 
         # true pose for now; swap in the estimated pose once the map looks right
         fp = controller.drone.frame_processor
@@ -75,11 +75,10 @@ def main():
         plotter.push('Gyroscope (rad/s)',    gyro)
         plotter.push('Actual pos', pos)
         plotter.update()
-    prev_p = np.zeros([3])
 
-    for step  in range(100000):
-        stepping()
-        x = 0
+    for step in range(100000):
+        sim_time = step * dt
+        stepping(sim_time)
         if controller.start(step) == 1:
             controller.position_ctrl_fused(np.array([0, 0, 1, 0]))
             real_pos = controller.get_position()

@@ -1,4 +1,11 @@
+All lin pixels 
+
+
+Baseline:
+
+
 Camera 1: (Left - Long)
+Orintation:
 
 fx = 1718.54
 fy = 1720.12
@@ -6,11 +13,14 @@ cx = 1054.17
 cy = 454.72
 
 Camera 2: (Right Short)
+Orintation:
 
 fx = 1175.14
 fy = 1177.06
 cx = 919.18
 cy = 602.39
+
+
 
 
 
