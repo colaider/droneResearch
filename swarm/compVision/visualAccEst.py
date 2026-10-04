@@ -429,7 +429,7 @@ class VisulaAcEst:
         """
         L, R = olds[0][:, :2], olds[1][:, :2]
         delta = R - L
-        disp_dir = camConfig.STEREO_CAM.disparity_direction()
+        disp_dir = -1 * np.array([1, 0])  # baseline is along +x in left camera frame
         perp = np.array([-disp_dir[1], disp_dir[0]])
         d   = delta @ disp_dir                     # disparity along baseline
         off = np.abs(delta @ perp)                 # epipolar error

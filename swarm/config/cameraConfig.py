@@ -16,7 +16,7 @@ class StereoCameraConfig:
     and are rolled 90 deg in opposite senses; that roll is baked straight into their `up`
     vectors (Genesis convention), so no software rotation is needed.
     """
-    res: Tuple[int, int] = (1920, 1080)        # (width, height) px -- sensor_size (1080, 1920) h:w
+    res: Tuple[int, int] = (600, 400)        # (width, height) px -- sensor_size (1080, 1920) h:w
     near: float = 0.01
     far: float = 100.0
 
