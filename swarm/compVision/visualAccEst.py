@@ -20,7 +20,6 @@ class VisulaAcEst:
         self.camera_saperation = camConfig.STEREO_CAM.baseline
 
         # Filters run in this order. Use () for no filters, or combine names.
-        self.image_filters = ("clahe",)  # supported: "clahe", "gaussian", "median"
         self.filter_kernel_size = 3     # positive odd size for Gaussian/median
         self.clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
         self.current_frame = EnumFrame()
@@ -53,44 +52,24 @@ class VisulaAcEst:
 
     # ---------------- frames ----------------
 
-    def _apply_clahe(self, frame):
-        """Enhance brightness while retaining the BGR format used by the pipeline."""
-        lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
-        lab[:, :, 0] = self.clahe.apply(lab[:, :, 0])
-        return cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
+ 
 
     def preprocess_frame(self, frame):
-        """Edit the shared filter pipeline here; tracking and preview use its output."""
-        filtered = frame.copy()
-        for name in self.image_filters:
-            if name == "clahe":
-                filtered = self._apply_clahe(filtered)
-            elif name in ("gaussian", "median"):
-                kernel = self.filter_kernel_size
-                if not isinstance(kernel, int) or kernel < 1 or kernel % 2 == 0:
-                    raise ValueError("filter_kernel_size must be a positive odd integer")
-                if name == "gaussian":
-                    filtered = cv2.GaussianBlur(filtered, (kernel, kernel), 0)
-                else:
-                    filtered = cv2.medianBlur(filtered, kernel)
-            else:
-                raise ValueError(f"Unknown image filter: {name!r}")
-        return filtered
+        lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
+        lab[:, :, 0] = self.clahe.apply(lab[:, :, 0])
+        return  cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
 
     def update_frame(self, frame, idx):
         new_frame_data = EnumFrame()
 
-        left = frame[0]
-        right = frame[1]
-        left = self.preprocess_frame(left)
-        right = self.preprocess_frame(right)
+        left = self.preprocess_frame(frame[0])
+        right = self.preprocess_frame(frame[1])
+
         new_frame_data.frames = [left.copy(), right.copy()]
-        #new_frame_data.frames = [self.keep_central_40_precent(f) for f in new_frame_data.frames]
-        # new_frame_data.frames = self.rotateL_R(new_frame_data.frames)
+        
         new_frame_data.idx = idx
         # Cache the exact detection/flow input once; the bottom display reuses it.
-        new_frame_data.gray_frames = [cv2.cvtColor(f, cv2.COLOR_BGR2GRAY)
-                                      for f in new_frame_data.frames]
+        new_frame_data.gray_frames =  [cv2.cvtColor(f, cv2.COLOR_BGR2GRAY) for f in new_frame_data.frames]
 
         if not hasattr(self, 'frame_size'):
             self.frame_size = np.shape(new_frame_data.frames[0])
@@ -153,7 +132,7 @@ class VisulaAcEst:
             self.camera_velocity = self._fallback_velocity()
             return
 
-        news = self.trinagulate_altitude(news, flow, olds, tris, links)
+        # news = self.trinagulate_altitude(news, flow, olds, tris, links)
 
         keep = self.point_prediction_filtering(olds[0], news[0])
         flow, news = flow[keep], [news[0][keep], news[1][keep]]
@@ -229,7 +208,7 @@ class VisulaAcEst:
         for x, y in pts.astype(int):
             cv2.circle(mask, (x, y), 7, 0, -1)
 
-        cand = cv2.goodFeaturesToTrack(gray, maxCorners=500, qualityLevel=0.005, minDistance=15, blockSize=11, mask=mask)
+        cand = cv2.goodFeaturesToTrack(gray, maxCorners=500, qualityLevel=0.005, minDistance=100, blockSize=11, mask=mask)
         if cand is None: return pts
         cand = cand.reshape(-1, 2)
         edges = cv2.dilate(cv2.Canny(gray, 50, 150), np.ones((5, 5), np.uint8))
