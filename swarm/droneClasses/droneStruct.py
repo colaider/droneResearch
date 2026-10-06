@@ -11,6 +11,8 @@ class DroneStruct:
         self.right_cam = right_cam
         self.cam_cfg = cam_cfg
         self.postpocessed_frames = []
+        self._camera_display = None
+        self._camera_window_ready = False
 
         self.frame_processor = VisulaAcEst(cam_cfg.res, cam_cfg.fov)
         self.frame_processor.camera_saperation = cam_cfg.baseline
@@ -20,7 +22,13 @@ class DroneStruct:
         return getattr(self._drone, attr)
 
     def camera_show(self):
-        for i, frame in enumerate(self.postpocessed_frames): cv2.imshow(str(i), frame)
+        if self._camera_display is not None:
+            if not self._camera_window_ready:
+                cv2.namedWindow("Stereo cameras", cv2.WINDOW_NORMAL | cv2.WINDOW_KEEPRATIO)
+                h, w = self._camera_display.shape[:2]
+                cv2.resizeWindow("Stereo cameras", w, h)
+                self._camera_window_ready = True
+            cv2.imshow("Stereo cameras", self._camera_display)
         cv2.waitKey(1)
         
 
@@ -37,10 +45,36 @@ class DroneStruct:
 
 
     def camera_step(self):
-        frames = self.frame_processor.processing(self.get_two_frames(), self.steps_cam)
-        self.postpocessed_frames = frames.frames 
+        raw_frames = self.get_two_frames()
+        frames = self.frame_processor.processing(raw_frames, self.steps_cam)
+        self.postpocessed_frames = frames.frames
+        # Build only when a new camera sample arrives, not on every physics step.
+        self._camera_display = self._compose_camera_display(self.postpocessed_frames, raw_frames)
         self.steps_cam += 1
         return frames
+
+    @staticmethod
+    def _compose_camera_display(processed, raw):
+        """Color left/right above unannotated grayscale left/right in one grid."""
+        if len(processed) < 2 or len(raw) < 2:
+            return None
+        h, w = processed[0].shape[:2]
+        scale = min(640 / w, 450 / h, 1.0)
+        size = (max(1, round(w * scale)), max(1, round(h * scale)))
+
+        def tile(frame, label, grayscale=False):
+            if grayscale:
+                frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+            image = cv2.resize(frame, size, interpolation=cv2.INTER_AREA)
+            image = cv2.copyMakeBorder(image, 28, 0, 0, 0, cv2.BORDER_CONSTANT, value=(24, 24, 24))
+            cv2.putText(image, label, (10, 19), cv2.FONT_HERSHEY_SIMPLEX,
+                        0.5, (235, 235, 235), 1, cv2.LINE_AA)
+            return image
+
+        top = cv2.hconcat([tile(processed[0], "Left camera"), tile(processed[1], "Right camera")])
+        bottom = cv2.hconcat([tile(raw[0], "Left grayscale", True), tile(raw[1], "Right grayscale", True)])
+        return cv2.vconcat([top, bottom])
 
     def set_camera_dt(self, dt):
         self.frame_processor.set_dt(dt)
