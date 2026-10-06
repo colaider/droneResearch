@@ -89,7 +89,7 @@ class FakeEstimator:
         self.res, self.fov = res, fov
         self.image_filters = ('clahe',)
         self.filter_kernel_size = 3
-        self.camera_velocity = np.zeros(3)
+        self.camera_velocity = np.zeros(4)   # [vx, vy, vz, yaw_rate]
         self.depth_median, self.depth_valid_frac = np.nan, 0.0
         self.indices, self.pushes = [], 0
 
