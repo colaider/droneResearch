@@ -11,7 +11,9 @@ class CustomScene:
    
         self.scene = gs.Scene(
             sim_options=gs.options.SimOptions( dt=dt, gravity=gravity),
-            viewer_options=gs.options.ViewerOptions(camera_pos=camera_pos, camera_lookat=camera_lookat, camera_fov=40),
+            # Help text off: its font texture fails glGenerateMipmap on AMD drivers, which makes Genesis retry the
+            # viewer with a fresh GL context while keeping stale shader ids, and the next draw crashes.
+            viewer_options=gs.options.ViewerOptions(camera_pos=camera_pos, camera_lookat=camera_lookat, camera_fov=40, enable_help_text=False),
             show_viewer=show_viewer,
         )
         
