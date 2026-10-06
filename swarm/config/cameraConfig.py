@@ -78,7 +78,13 @@ class StereoCameraConfig:
         """Columns x (image right), y (image up), z (backwards) of the left image, in body frame."""
         z = -np.array(self.look_dir, float)
         z /= np.linalg.norm(z)
-        x = np.cross(self.left_up, z)
+        
+        up = np.array(self.left_up, float)
+        if np.linalg.norm(up) < 1e-6:
+            # Default: pick any vector perpendicular to z
+            up = np.array([1.0, 0.0, 0.0]) if abs(z[0]) < 0.9 else np.array([0.0, 1.0, 0.0])
+        
+        x = np.cross(up, z)
         x /= np.linalg.norm(x)
         y = np.cross(z, x)
         return np.column_stack([x, y, z])

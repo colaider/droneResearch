@@ -29,7 +29,7 @@ class VisulaAcEst:
         self.drone_pos = np.zeros(3)
         self.drone_vel = np.zeros(3)
         self.drone_ang_vel = np.zeros(3)
-        self.drone_ang = np.zeros(2)
+
         self.imu_att = np.zeros(3)
         self.previous_cmd_vel = np.zeros(4)
 
@@ -41,7 +41,6 @@ class VisulaAcEst:
         self.avg_pos = np.zeros(3)
 
         self.tracked_points = {}
-        self.prev_med_flow = {}
         self.vkfs = {}
 
         self.camera_velocity = np.zeros(3)
@@ -109,22 +108,6 @@ class VisulaAcEst:
         return self.current_frame
 
 
- 
-    def keep_central_40_precent(self, frame):
-        h, w = frame.shape[:2]
-        x_start = int(w * 0.3)
-        x_end = int(w * 0.7)
-        y_start = int(h * 0.3)
-        y_end = int(h * 0.7)
-        return frame[y_start:y_end, x_start:x_end]
-        
-
-    def rotateL_R(self, frame):
-        # Rotate the left and right frames to align with the drone's body frame
-        # This is a placeholder implementation; actual rotation logic will depend on the specific requirements
-        rotated_left = cv2.rotate(frame[0], cv2.ROTATE_90_CLOCKWISE).copy()
-        rotated_right = cv2.rotate(frame[1], cv2.ROTATE_90_COUNTERCLOCKWISE).copy()
-        return [rotated_left, rotated_right]
     # ---------------- sensors ----------------
 
     def push_sensors(self):
@@ -179,49 +162,39 @@ class VisulaAcEst:
 # ---------------- tracking ----------------
 
     def lucas_kanade_flow(self, frame1, frame2, frame_r, frame_r_curr, tracking_gray=None):
-        if tracking_gray is None:
-            # Compatibility for callers passing already-preprocessed BGR frames.
-            tracking_gray = tuple(cv2.cvtColor(f, cv2.COLOR_BGR2GRAY)
-                                  for f in (frame1, frame2, frame_r))
         gray1, gray2, gray_r = tracking_gray
         annotated_frame = frame2.copy()
         annotated_r = frame_r_curr.copy()
+
         lost = ([annotated_frame, annotated_r], None, None, None, None, None)
         empty = np.empty((0, 2), np.float32)
 
         lk = dict(winSize=(21, 21), maxLevel=3, criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 30, 0.01))
         lk_stereo = dict(winSize=(100, 100), maxLevel=4, criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 30, 0.01))
-        pts = self._replenish(gray1, self.tracked_points.get(0, empty), 0)
-        if len(pts) < 3:
+
+        def bad_return():
             self.tracked_points[0] = empty
             return lost
 
+        pts = self._replenish(gray1, self.tracked_points.get(0, empty), 0)
+        
+        if len(pts) < 3: return bad_return()
         old = pts.reshape(-1, 1, 2).astype(np.float32)
         new, st_f, _ = cv2.calcOpticalFlowPyrLK(gray1, gray2, old, None, **lk)
 
-        if new is None:
-            self.tracked_points[0] = empty
-            return lost
-
-        back, st_b, _ = cv2.calcOpticalFlowPyrLK(gray2, gray1, new, None, **lk)
-
+        if new is None: return bad_return()
+        back, st_b, _ = cv2.calcOpticalFlowPyrLK(gray2, gray1, new, None, **lk)  # ✓ new still (N, 1, 2)
         old, new, back = old.reshape(-1, 2), new.reshape(-1, 2), back.reshape(-1, 2)
         good = (st_f.ravel() == 1) & (st_b.ravel() == 1) & (np.abs(old - back).max(axis=1) < 1.0)
         good_old, good_new = old[good], new[good]
-
+       
         if len(good_old) >= 6:
-            _, inliers = cv2.estimateAffinePartial2D(good_old, good_new,
-                                                    method=cv2.RANSAC,
-                                                    ransacReprojThreshold=2.0,
-                                                    maxIters=2000,
-                                                    confidence=0.99)
-            if inliers is not None:
-                inliers = inliers.ravel().astype(bool)
-                good_old, good_new = good_old[inliers], good_new[inliers]
+            _, inliers = cv2.estimateAffinePartial2D(good_old, good_new, method=cv2.RANSAC, ransacReprojThreshold=2.0, maxIters=2000, confidence=0.99)
+            inliers = inliers.ravel().astype(bool)
+            good_old, good_new = good_old[inliers], good_new[inliers]
 
         for _ in range(2):
-            if len(good_new) < 3:
-                break
+            if len(good_new) < 3: break
             _, _, links, _ = self._build_triangles(good_new)
             good_old, good_new = self.filter_by_neighbors(good_old, good_new, links)
 
@@ -229,42 +202,26 @@ class VisulaAcEst:
         if len(good_old) >= 3:
             p = good_old.reshape(-1, 1, 2).astype(np.float32)
             old_r, st_r, _ = cv2.calcOpticalFlowPyrLK(gray1, gray_r, p, None, **lk_stereo)
-            
-            if old_r is None:
-                self.tracked_points[0] = empty
-                return lost
-            
+            if old_r is None: return bad_return()
+                
             old_r = old_r.reshape(-1, 2)
-            # Keep only points that tracked successfully (no backward check)
-            matched = st_r.ravel() == 1
-            good_old, good_new, old_r = good_old[matched], good_new[matched], old_r[matched]
+            good_old, good_new, old_r = good_old[st_r.ravel() == 1], good_new[st_r.ravel() == 1], old_r[st_r.ravel() == 1]
 
-        if len(good_new) < 3:
-            self.tracked_points[0] = empty
-            return lost
+        if len(good_new) < 3: return bad_return()
 
-        triangles, corners, links, _ = self._build_triangles(good_new)
-        for a, b in links: cv2.line(annotated_frame, tuple(corners[a].astype(int)), tuple(corners[b].astype(int)), (255, 0, 0), 2)
-        for x, y in corners.astype(int): cv2.circle(annotated_frame, (x, y), 2, (0, 0, ), -1)
-
+        triangles, _, links, _ = self._build_triangles(good_new)
         self.tracked_points[0] = good_new.copy()
-
         flow, scale, div = self.compensate_vertical(good_old, good_new, triangles)
-        self.prev_med_flow[0] = np.median(flow, axis=0)
-
-        # transport the left flow to the matching right points
+       
         new_r = old_r + flow
-        for a, b in links: cv2.line(annotated_r, tuple(new_r[a].astype(int)), tuple(new_r[b].astype(int)), (255, 0, 0), 2)
-        for x, y in new_r.astype(int): cv2.circle(annotated_r, (x, y), 2, (0, 0, 255), -1)
 
         z = self._current_height()
-        olds = [np.hstack((good_old, np.full((len(good_old), 1), z))),
-                np.hstack((old_r, np.full((len(old_r), 1), z)))]
-        news = [np.hstack((good_new, np.full((len(good_new), 1), z))),
-                np.hstack((new_r, np.full((len(new_r), 1), z)))]
+        olds = [np.hstack((good_old, np.full((len(good_old), 1), z))), np.hstack((old_r, np.full((len(old_r), 1), z)))]
+        news = [np.hstack((good_new, np.full((len(good_new), 1), z))), np.hstack((new_r, np.full((len(new_r), 1), z)))]
         
-        
+        annotated_frame, annotated_r = self.drawing(annotated_frame, annotated_r, good_new, new_r, links)
         return [annotated_frame, annotated_r], flow, olds, news, triangles, links 
+
 
     def _replenish(self, gray, pts, cam, max_points=300):
         h, w = gray.shape
@@ -518,6 +475,24 @@ class VisulaAcEst:
         kf.update(x)
 
         self.camera_velocity = kf.get()
+
+    @staticmethod
+    def drawing(annotated_frame, annotated_r, good_new, new_r, links):
+        """Centralized drawing: triangulation and points on left and right frames."""
+        color = (255, 0, 0)      # Blue
+         
+        for a, b in links:
+            cv2.line(annotated_frame, tuple(good_new[a].astype(int)), tuple(good_new[b].astype(int)), color, 2)
+        for x, y in good_new.astype(int):
+            cv2.circle(annotated_frame, (x, y), 2, color, -1)
+        
+
+        for a, b in links:
+            cv2.line(annotated_r, tuple(new_r[a].astype(int)), tuple(new_r[b].astype(int)), color, 2)
+        for x, y in new_r.astype(int):
+            cv2.circle(annotated_r, (x, y), 2, color, -1)
+        
+        return annotated_frame, annotated_r
 
 
     def point_prediction_filtering(self, old, new):
