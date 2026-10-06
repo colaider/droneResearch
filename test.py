@@ -3,7 +3,7 @@ import numpy as np
 import time
 
 
-img = cv.imread('img.png', cv.IMREAD_GRAYSCALE)
+img = cv.imread('img2.png', cv.IMREAD_GRAYSCALE)
 if img is None:
     raise FileNotFoundError("Could not read 'img.png'")
 
