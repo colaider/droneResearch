@@ -49,14 +49,14 @@ class DroneStruct:
         frames = self.frame_processor.processing(raw_frames, self.steps_cam)
         self.postpocessed_frames = frames.frames
         # Build only when a new camera sample arrives, not on every physics step.
-        self._camera_display = self._compose_camera_display(self.postpocessed_frames, raw_frames)
+        self._camera_display = self._compose_camera_display(self.postpocessed_frames, frames.gray_frames)
         self.steps_cam += 1
         return frames
 
     @staticmethod
-    def _compose_camera_display(processed, raw):
-        """Color left/right above unannotated grayscale left/right in one grid."""
-        if len(processed) < 2 or len(raw) < 2:
+    def _compose_camera_display(processed, tracking_gray):
+        """Filtered color above the exact grayscale inputs used for feature tracking."""
+        if len(processed) < 2 or len(tracking_gray) < 2:
             return None
         h, w = processed[0].shape[:2]
         scale = min(640 / w, 450 / h, 1.0)
@@ -64,7 +64,6 @@ class DroneStruct:
 
         def tile(frame, label, grayscale=False):
             if grayscale:
-                frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
                 frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
             image = cv2.resize(frame, size, interpolation=cv2.INTER_AREA)
             image = cv2.copyMakeBorder(image, 28, 0, 0, 0, cv2.BORDER_CONSTANT, value=(24, 24, 24))
@@ -73,7 +72,7 @@ class DroneStruct:
             return image
 
         top = cv2.hconcat([tile(processed[0], "Left camera"), tile(processed[1], "Right camera")])
-        bottom = cv2.hconcat([tile(raw[0], "Left grayscale", True), tile(raw[1], "Right grayscale", True)])
+        bottom = cv2.hconcat([tile(tracking_gray[0], "Left tracking input", True), tile(tracking_gray[1], "Right tracking input", True)])
         return cv2.vconcat([top, bottom])
 
     def set_camera_dt(self, dt):

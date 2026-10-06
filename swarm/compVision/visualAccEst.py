@@ -8,6 +8,7 @@ import swarm.config.cameraConfig as camConfig
 class EnumFrame:
     def __init__(self):
         self.frames = []
+        self.gray_frames = []
         self.idx = 0
 
 
@@ -18,6 +19,9 @@ class VisulaAcEst:
         self.dt = 0.01
         self.camera_saperation = camConfig.STEREO_CAM.baseline
 
+        # Filters run in this order. Use () for no filters, or combine names.
+        self.image_filters = ("clahe",)  # supported: "clahe", "gaussian", "median"
+        self.filter_kernel_size = 3     # positive odd size for Gaussian/median
         self.clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
         self.current_frame = EnumFrame()
         self.buffer = deque(maxlen=100)
@@ -56,23 +60,48 @@ class VisulaAcEst:
         lab[:, :, 0] = self.clahe.apply(lab[:, :, 0])
         return cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
 
+    def preprocess_frame(self, frame):
+        """Edit the shared filter pipeline here; tracking and preview use its output."""
+        filtered = frame.copy()
+        for name in self.image_filters:
+            if name == "clahe":
+                filtered = self._apply_clahe(filtered)
+            elif name in ("gaussian", "median"):
+                kernel = self.filter_kernel_size
+                if not isinstance(kernel, int) or kernel < 1 or kernel % 2 == 0:
+                    raise ValueError("filter_kernel_size must be a positive odd integer")
+                if name == "gaussian":
+                    filtered = cv2.GaussianBlur(filtered, (kernel, kernel), 0)
+                else:
+                    filtered = cv2.medianBlur(filtered, kernel)
+            else:
+                raise ValueError(f"Unknown image filter: {name!r}")
+        return filtered
+
     def update_frame(self, frame, idx):
         new_frame_data = EnumFrame()
 
         left = frame[0]
         right = frame[1]
-        left = self._apply_clahe(left)
-        right = self._apply_clahe(right)
+        left = self.preprocess_frame(left)
+        right = self.preprocess_frame(right)
         new_frame_data.frames = [left.copy(), right.copy()]
         #new_frame_data.frames = [self.keep_central_40_precent(f) for f in new_frame_data.frames]
         # new_frame_data.frames = self.rotateL_R(new_frame_data.frames)
         new_frame_data.idx = idx
+        # Cache the exact detection/flow input once; the bottom display reuses it.
+        new_frame_data.gray_frames = [cv2.cvtColor(f, cv2.COLOR_BGR2GRAY)
+                                      for f in new_frame_data.frames]
 
         if not hasattr(self, 'frame_size'):
             self.frame_size = np.shape(new_frame_data.frames[0])
 
         self.buffer.append(new_frame_data)
-        self.current_frame = new_frame_data
+        # Keep display annotations separate from the next frame's tracking input.
+        self.current_frame = EnumFrame()
+        self.current_frame.frames = [f.copy() for f in new_frame_data.frames]
+        self.current_frame.gray_frames = new_frame_data.gray_frames
+        self.current_frame.idx = idx
 
     def processing(self, frame, idx):
         self.update_frame(frame, idx)
@@ -126,12 +155,16 @@ class VisulaAcEst:
         if len(self.buffer) < 2:
             return
 
-        prev, curr = self.buffer[-2].frames, self.buffer[-1].frames
+        prev_data, curr_data = self.buffer[-2], self.buffer[-1]
+        prev, curr = prev_data.frames, curr_data.frames
         if min(len(prev), len(curr)) < 2:
             self.camera_velocity = self._fallback_velocity()
             return
 
-        processed, flow, olds, news, tris, links = self.lucas_kanade_flow(prev[0], curr[0], prev[1], curr[1])
+        processed, flow, olds, news, tris, links = self.lucas_kanade_flow(
+            prev[0], curr[0], prev[1], curr[1],
+            tracking_gray=(prev_data.gray_frames[0], curr_data.gray_frames[0], prev_data.gray_frames[1]),
+        )
         self.current_frame.frames = processed
         if flow is None:
             self.camera_velocity = self._fallback_velocity()
@@ -145,10 +178,12 @@ class VisulaAcEst:
 
 # ---------------- tracking ----------------
 
-    def lucas_kanade_flow(self, frame1, frame2, frame_r, frame_r_curr):
-        gray1 = cv2.cvtColor(frame1, cv2.COLOR_BGR2GRAY)
-        gray2 = cv2.cvtColor(frame2, cv2.COLOR_BGR2GRAY)
-        gray_r = cv2.cvtColor(frame_r, cv2.COLOR_BGR2GRAY)
+    def lucas_kanade_flow(self, frame1, frame2, frame_r, frame_r_curr, tracking_gray=None):
+        if tracking_gray is None:
+            # Compatibility for callers passing already-preprocessed BGR frames.
+            tracking_gray = tuple(cv2.cvtColor(f, cv2.COLOR_BGR2GRAY)
+                                  for f in (frame1, frame2, frame_r))
+        gray1, gray2, gray_r = tracking_gray
         annotated_frame = frame2.copy()
         annotated_r = frame_r_curr.copy()
         lost = ([annotated_frame, annotated_r], None, None, None, None, None)
@@ -209,8 +244,8 @@ class VisulaAcEst:
             return lost
 
         triangles, corners, links, _ = self._build_triangles(good_new)
-        for a, b in links: cv2.line(annotated_frame, tuple(corners[a].astype(int)), tuple(corners[b].astype(int)), (255, 255, 0), 1)
-        for x, y in corners.astype(int): cv2.circle(annotated_frame, (x, y), 2, (0, 0, 255), -1)
+        for a, b in links: cv2.line(annotated_frame, tuple(corners[a].astype(int)), tuple(corners[b].astype(int)), (255, 0, 0), 2)
+        for x, y in corners.astype(int): cv2.circle(annotated_frame, (x, y), 2, (0, 0, ), -1)
 
         self.tracked_points[0] = good_new.copy()
 
@@ -219,7 +254,7 @@ class VisulaAcEst:
 
         # transport the left flow to the matching right points
         new_r = old_r + flow
-        for a, b in links: cv2.line(annotated_r, tuple(new_r[a].astype(int)), tuple(new_r[b].astype(int)), (255, 255, 0), 1)
+        for a, b in links: cv2.line(annotated_r, tuple(new_r[a].astype(int)), tuple(new_r[b].astype(int)), (255, 0, 0), 2)
         for x, y in new_r.astype(int): cv2.circle(annotated_r, (x, y), 2, (0, 0, 255), -1)
 
         z = self._current_height()
