@@ -1,6 +1,15 @@
 # Real USB camera test
 
-This folder uses the current `swarm/compVision/visualAccEst.py` through a small USB adapter. Changes to the swarm feature detector, optical flow, filters, drawing, and velocity fitting also apply here. Keep this folder inside the full repository; it no longer contains a separate estimator copy. Python needs OpenCV, NumPy, and SciPy, but the runner does not import Genesis or start a simulation.
+This folder drives the real `swarm/compVision/visualAccEst.py` estimator **directly** with two
+USB cameras. There is no separate/duplicated estimator here anymore: `testRealCameras.py`
+instantiates `swarm.compVision.visualAccEst.VisulaAcEst` and feeds it frames plus every input it
+reads each step. Because there is no flight controller, all **drone/IMU inputs are supplied as
+zero** (`drone_pos`, `drone_vel`, `drone_ang_vel`, `imu_att`, `previous_cmd_vel`, `drone_ang`);
+only the camera calibration (focal length, baseline) comes from `camera_params.txt`.
+
+Changes to the swarm feature detector, optical flow, filters, drawing, and velocity fitting apply
+here automatically. Keep this folder inside the full repository. Python needs OpenCV, NumPy, and
+SciPy, but the runner does not import Genesis or start a simulation.
 
 Run from the repository root:
 
@@ -10,11 +19,14 @@ python realCameraTest/testRealCameras.py 0 1
 python -m realCameraTest.testRealCameras 0 1
 ```
 
-The single resizable window shows left/right filtered color images with tracking overlays above left/right grayscale tracking inputs. Grayscale previews reuse the estimator's cached inputs; filtering is not repeated for display. Velocity/depth text is drawn on the display only.
+The single resizable window shows left/right filtered color images with tracking overlays above
+left/right grayscale tracking inputs (reusing the estimator's cached `gray_frames`). Velocity and
+depth text is drawn on the display only.
 
 ## Try filters
 
-Without `--filters`, the runner inherits `image_filters` and `filter_kernel_size` from the swarm estimator. Custom filter implementations belong in its `preprocess_frame()` method.
+Without `--filters`, the runner inherits `image_filters` and `filter_kernel_size` from the swarm
+estimator. Filter implementations live in its `preprocess_frame()` method.
 
 ```sh
 # Gaussian blur followed by CLAHE:
@@ -25,15 +37,20 @@ python realCameraTest/testRealCameras.py 0 1 --filters median
 python realCameraTest/testRealCameras.py 0 1 --filters
 ```
 
-Filter order matters. Restart the runner after editing code or choosing different filter options. The old independent sharpening/rolling-shutter preprocessing has been replaced by the shared swarm pipeline.
-
 ## Camera setup and controls
 
-- `q` or Escape exits. `s` swaps cameras, their focal calibration, and their mounting rotations, then starts fresh tracking.
-- Calibration constants at the top of `testRealCameras.py` retain the previous USB values: 1920×1080, focal lengths 1719.33 / 1176.10 pixels, baseline 0.125 m. These are constants, not dynamically loaded from a calibration file.
-- Frames are resized to the calibration resolution. The existing left 90° counterclockwise / right 90° clockwise mounting corrections remain enabled. Use `--no-rotate` if the incoming images are already aligned.
-- The USB adapter accepts `disparity_dir`, `epipolar_tol`, `min_disparity`, and `default_depth`. The default disparity axis is horizontal in the images *after* rotation. Adjust these in the runner's `make_estimator()` for your camera arrangement.
-- There is no IMU or commanded velocity: rotation compensation is zero and command-based rejection is skipped. When stereo depth is unavailable, the adapter uses `default_depth` (1 m by default). Metric estimates depend on calibration and camera alignment; resizing/mounting rotation does not stereo-rectify the images.
+- `q` or Escape exits. `s` swaps cameras, their focal calibration, and their mounting rotations,
+  then restarts tracking with a fresh estimator.
+- Calibration constants at the top of `testRealCameras.py`: 1920×1080, focal lengths
+  1719.33 / 1176.10 px, baseline 0.125 m. They are applied to the estimator instance via
+  `est.foc_l` / `est.camera_saperation` — the estimator itself is unmodified.
+- Frames are resized to the calibration resolution. The left 90° CCW / right 90° CW mounting
+  corrections are enabled; use `--no-rotate` if your images are already aligned.
+- No IMU or commanded velocity: all drone inputs are zero, so rotation compensation is zero. The
+  stereo disparity direction and the fallback scene depth are governed by the shared estimator and
+  `swarm/config/cameraConfig.py` (its `disparity_direction()` / barometric height), not by this
+  folder. Metric estimates depend on calibration and camera alignment; resizing/mounting rotation
+  does not stereo-rectify the images.
 
 ## Headless checks
 
@@ -41,4 +58,5 @@ Filter order matters. Restart the runner after editing code or choosing differen
 python -m unittest discover -s realCameraTest/tests -v
 ```
 
-Tests cover shared methods, filter/display consistency, synthetic temporal/stereo motion, depth fallback behavior, camera swapping, and resource cleanup. They do not access physical cameras.
+Tests drive the real estimator with mocked cameras and zeroed drone inputs; they do not access
+physical hardware or start Genesis.

@@ -1,29 +1,69 @@
-"""Test the current swarm estimator with two USB cameras.
+"""Test the real swarm estimator with two USB cameras -- no duplicate estimator.
 
-Run directly or with python -m realCameraTest.testRealCameras.
+This drives swarm.compVision.visualAccEst.VisulaAcEst directly: it feeds the two camera
+frames and supplies every input the estimator reads each step. There is no flight
+controller, so all drone/IMU inputs are provided as ZERO. Only the camera calibration
+(focal length, baseline) comes from camera_params.txt.
+
+Run directly or with `python -m realCameraTest.testRealCameras`.
 Keys: ESC/q quits; s swaps the dominant camera and resets tracking.
-Use --help for filter options. No Genesis installation or IMU is required.
 """
 import argparse
 import sys
 import time
+from pathlib import Path
 
 import cv2
+import numpy as np
+
+# Allow running the file directly from any working directory.
+_REPO_ROOT = str(Path(__file__).resolve().parents[1])
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
+
+from swarm.compVision.visualAccEst import VisulaAcEst   # the real estimator, used as-is
 
 if __package__:
-    from .visualAccEst import VisulaAcEst
     from .display import compose_camera_display
 else:
-    from visualAccEst import VisulaAcEst
     from display import compose_camera_display
 
 
-# Existing USB calibration: focal lengths in pixels at this capture resolution.
+# Camera calibration from camera_params.txt (focal lengths in px at this capture resolution).
 LEFT_FOCAL = (1718.54 + 1720.12) / 2.0
 RIGHT_FOCAL = (1175.14 + 1177.06) / 2.0
 BASELINE = 0.125
 RES = (1920, 1080)
 WINDOW = "Stereo cameras"
+
+
+def zero_drone_inputs(est):
+    """Supply every drone/IMU input the estimator reads as ZERO (no flight controller).
+
+    These are the same attributes the drone controller normally sets each step; with no
+    drone we hand the estimator zeros so there is no invented motion/attitude compensation.
+    `drone_ang` is included because the estimator's velocity path reads it.
+    """
+    est.drone_pos = np.zeros(3)
+    est.drone_vel = np.zeros(3)
+    est.drone_ang_vel = np.zeros(3)
+    est.imu_att = np.zeros(3)
+    est.previous_cmd_vel = np.zeros(4)
+    est.drone_ang = np.zeros(2)
+    est.push_sensors()
+
+
+def make_estimator(focal_px, res, filters=None, kernel_size=None):
+    """Instantiate the real estimator and set the camera calibration it uses."""
+    fov = float(np.degrees(2.0 * np.arctan(res[1] / (2.0 * focal_px))))
+    est = VisulaAcEst(res, fov)
+    est.foc_l = float(focal_px)       # exact focal from camera_params.txt
+    est.camera_saperation = BASELINE  # stereo baseline (m)
+    if filters is not None:
+        est.image_filters = tuple(filters)
+    if kernel_size is not None:
+        est.filter_kernel_size = kernel_size
+    return est
 
 
 def open_camera(index, res):
@@ -36,7 +76,7 @@ def open_camera(index, res):
 
 
 def prepare_frame(frame, rotation):
-    # Keep focal calibration in the same pixel scale even if capture ignores RES.
+    # Keep the focal calibration at the same pixel scale even if capture ignores RES.
     if (frame.shape[1], frame.shape[0]) != RES:
         frame = cv2.resize(frame, RES, interpolation=cv2.INTER_AREA)
     return cv2.rotate(frame, rotation) if rotation is not None else frame
@@ -49,20 +89,16 @@ def main(left_idx=0, right_idx=1, *, filters=None, kernel_size=None, rotate=True
         raise ValueError("Supported filters: clahe, gaussian, median")
     if kernel_size is not None and (kernel_size < 1 or kernel_size % 2 == 0):
         raise ValueError("kernel_size must be a positive odd integer")
+
+    # Zeroed drone height leaves depth undefined when stereo finds no match; silence the
+    # resulting divide warnings (those frames fall back to a zero velocity by design).
+    np.seterr(divide='ignore', invalid='ignore')
+
     left = right = None
     left_focal, right_focal = LEFT_FOCAL, RIGHT_FOCAL
     left_rotation = cv2.ROTATE_90_COUNTERCLOCKWISE if rotate else None
     right_rotation = cv2.ROTATE_90_CLOCKWISE if rotate else None
-    tracking_res = (RES[1], RES[0]) if rotate else RES
-
-    def make_estimator():
-        est = VisulaAcEst(focal_px=left_focal, baseline=BASELINE, res=tracking_res)
-        # Omission inherits the current shared swarm filter settings.
-        if filters is not None:
-            est.image_filters = tuple(filters)
-        if kernel_size is not None:
-            est.filter_kernel_size = kernel_size
-        return est
+    tracking_res = (RES[1], RES[0]) if rotate else RES   # 90-deg rotation swaps W/H
 
     try:
         left = open_camera(left_idx, RES)
@@ -70,8 +106,11 @@ def main(left_idx=0, right_idx=1, *, filters=None, kernel_size=None, rotate=True
         if not left.isOpened() or not right.isOpened():
             print(f"ERROR: could not open cameras left={left_idx}, right={right_idx}")
             return 1
-        est = make_estimator()
-        print(f"left={left_idx} right={right_idx} | focal={left_focal:.1f}px | filters={est.image_filters}")
+
+        est = make_estimator(left_focal, tracking_res, filters, kernel_size)
+        print(f"left={left_idx} right={right_idx} | focal={left_focal:.1f}px "
+              f"baseline={BASELINE}m | filters={est.image_filters}")
+
         idx, failures = 0, 0
         previous_time = None
         window_ready = False
@@ -91,18 +130,24 @@ def main(left_idx=0, right_idx=1, *, filters=None, kernel_size=None, rotate=True
                     return 1
                 continue
             failures = 0
+
             now = time.monotonic()
             est.set_dt(max(now - previous_time, 1e-3) if previous_time is not None else 1 / 30)
             previous_time = now
+
             fl, fr = prepare_frame(fl, left_rotation), prepare_frame(fr, right_rotation)
+
+            zero_drone_inputs(est)                 # no drone -> all drone inputs are 0
             result = est.processing([fl, fr], idx)
             idx += 1
+
             display = compose_camera_display(result.frames, result.gray_frames)
             vx, vy, yaw = est.camera_velocity
             status = (f"vx={vx:+.2f} vy={vy:+.2f} yaw={yaw:+.2f}rad/s "
                       f"depth={est.depth_median:.2f}m valid={est.depth_valid_frac:.0%}")
             display = cv2.copyMakeBorder(display, 28, 0, 0, 0, cv2.BORDER_CONSTANT)
             cv2.putText(display, status, (8, 19), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 0), 1, cv2.LINE_AA)
+
             if not window_ready:
                 cv2.namedWindow(WINDOW, cv2.WINDOW_NORMAL | cv2.WINDOW_KEEPRATIO)
                 cv2.resizeWindow(WINDOW, display.shape[1], display.shape[0])
@@ -116,7 +161,7 @@ def main(left_idx=0, right_idx=1, *, filters=None, kernel_size=None, rotate=True
                 left, right = right, left
                 left_focal, right_focal = right_focal, left_focal
                 left_rotation, right_rotation = right_rotation, left_rotation
-                est = make_estimator()  # No tracks/filter history from the previous dominant eye.
+                est = make_estimator(left_focal, tracking_res, filters, kernel_size)  # reset tracking
                 idx, previous_time = 0, None
                 print(f"swapped -> left={left_idx}, right={right_idx}, focal={left_focal:.1f}px")
         return 0
@@ -136,7 +181,7 @@ def parse_args(argv=None):
     parser.add_argument('--filters', nargs='*', choices=['clahe', 'gaussian', 'median'], default=None,
                         help='ordered filters; omit to inherit swarm defaults, or pass alone for no filters')
     parser.add_argument('--kernel-size', type=int, default=None, help='positive odd blur kernel size')
-    parser.add_argument('--no-rotate', action='store_true', help='disable the existing opposite 90-degree mounting corrections')
+    parser.add_argument('--no-rotate', action='store_true', help='disable the 90-degree mounting corrections')
     args = parser.parse_args(argv)
     if args.left == args.right:
         parser.error('left and right camera indices must differ')
@@ -148,4 +193,5 @@ def parse_args(argv=None):
 if __name__ == '__main__':
     args = parse_args()
     raise SystemExit(main(args.left, args.right, filters=args.filters,
-                         kernel_size=args.kernel_size, rotate=not args.no_rotate))
+                          kernel_size=args.kernel_size, rotate=not args.no_rotate))
+    
