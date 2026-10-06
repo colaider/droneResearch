@@ -55,7 +55,7 @@ class VisulaAcEst:
         left = frame[0]
         right = frame[1]
         new_frame_data.frames = [left.copy(), right.copy()]
-        new_frame_data.frames = [self.keep_central_40_precent(f) for f in new_frame_data.frames]
+        # new_frame_data.frames = [self.keep_central_40_precent(f) for f in new_frame_data.frames]
         # new_frame_data.frames = self.rotateL_R(new_frame_data.frames)
         new_frame_data.idx = idx
 
@@ -146,7 +146,7 @@ class VisulaAcEst:
         empty = np.empty((0, 2), np.float32)
 
         lk = dict(winSize=(21, 21), maxLevel=3, criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 30, 0.01))
-
+        lk_stereo = dict(winSize=(100, 100), maxLevel=4, criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 30, 0.01))
         pts = self._replenish(gray1, self.tracked_points.get(0, empty), 0)
         if len(pts) < 3:
             self.tracked_points[0] = empty
@@ -181,18 +181,18 @@ class VisulaAcEst:
             _, _, links, _ = self._build_triangles(good_new)
             good_old, good_new = self.filter_by_neighbors(good_old, good_new, links)
 
-        # match the left old points onto the right camera, reject unmatched ones
         old_r = empty
         if len(good_old) >= 3:
             p = good_old.reshape(-1, 1, 2).astype(np.float32)
-            old_r, st_r, _ = cv2.calcOpticalFlowPyrLK(gray1, gray_r, p, None, **lk)
+            old_r, st_r, _ = cv2.calcOpticalFlowPyrLK(gray1, gray_r, p, None, **lk_stereo)
+            
             if old_r is None:
                 self.tracked_points[0] = empty
                 return lost
             
-            back_r, st_rb, _ = cv2.calcOpticalFlowPyrLK(gray_r, gray1, old_r, None, **lk)
-            old_r, back_r = old_r.reshape(-1, 2), back_r.reshape(-1, 2)
-            matched = (st_r.ravel() == 1) & (st_rb.ravel() == 1) & (np.abs(good_old - back_r).max(axis=1) < 1.0)
+            old_r = old_r.reshape(-1, 2)
+            # Keep only points that tracked successfully (no backward check)
+            matched = st_r.ravel() == 1
             good_old, good_new, old_r = good_old[matched], good_new[matched], old_r[matched]
 
         if len(good_new) < 3:
