@@ -166,11 +166,14 @@ class FusionKalmanFilter:
 
         return self.x.copy()
 
+
     def get(self):
         return self.x.copy()
 
+
     def camera_is_stale(self):
         return self._time_since_cam > 2.0 * self.expected_cam_interval
+
 
     @staticmethod
     def rotation_matrix(attitude):
