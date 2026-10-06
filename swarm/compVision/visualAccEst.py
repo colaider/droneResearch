@@ -18,6 +18,7 @@ class VisulaAcEst:
         self.dt = 0.01
         self.camera_saperation = camConfig.STEREO_CAM.baseline
 
+        self.clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
         self.current_frame = EnumFrame()
         self.buffer = deque(maxlen=100)
 
@@ -49,13 +50,21 @@ class VisulaAcEst:
 
     # ---------------- frames ----------------
 
+    def _apply_clahe(self, frame):
+        """Enhance brightness while retaining the BGR format used by the pipeline."""
+        lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
+        lab[:, :, 0] = self.clahe.apply(lab[:, :, 0])
+        return cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
+
     def update_frame(self, frame, idx):
         new_frame_data = EnumFrame()
 
         left = frame[0]
         right = frame[1]
+        left = self._apply_clahe(left)
+        right = self._apply_clahe(right)
         new_frame_data.frames = [left.copy(), right.copy()]
-        # new_frame_data.frames = [self.keep_central_40_precent(f) for f in new_frame_data.frames]
+        #new_frame_data.frames = [self.keep_central_40_precent(f) for f in new_frame_data.frames]
         # new_frame_data.frames = self.rotateL_R(new_frame_data.frames)
         new_frame_data.idx = idx
 
@@ -71,7 +80,7 @@ class VisulaAcEst:
         return self.current_frame
 
 
-
+ 
     def keep_central_40_precent(self, frame):
         h, w = frame.shape[:2]
         x_start = int(w * 0.3)
