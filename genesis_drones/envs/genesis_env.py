@@ -52,6 +52,7 @@ class Genesis_env:
                 camera_pos = (-3.0, 0.0, 3.0),
                 camera_lookat = (0.0, 0.0, 1.0),
                 camera_fov = 40,
+                enable_help_text = False,  # help-text font texture crashes the viewer on AMD drivers
             ),
             vis_options = gs.options.VisOptions(
                 show_world_frame = False,
