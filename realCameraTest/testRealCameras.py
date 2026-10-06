@@ -142,7 +142,7 @@ def main(left_idx=0, right_idx=1, *, filters=None, kernel_size=None, rotate=True
             idx += 1
 
             display = compose_camera_display(result.frames, result.gray_frames)
-            vx, vy, yaw = est.camera_velocity
+            vx, vy, _, yaw = est.camera_velocity   # [vx, vy, vz, yaw_rate]
             status = (f"vx={vx:+.2f} vy={vy:+.2f} yaw={yaw:+.2f}rad/s "
                       f"depth={est.depth_median:.2f}m valid={est.depth_valid_frac:.0%}")
             display = cv2.copyMakeBorder(display, 28, 0, 0, 0, cv2.BORDER_CONSTANT)
