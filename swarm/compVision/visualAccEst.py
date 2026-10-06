@@ -20,6 +20,7 @@ class VisulaAcEst:
         self.camera_saperation = camConfig.STEREO_CAM.baseline
 
         # Filters run in this order. Use () for no filters, or combine names.
+        self.image_filters = ("clahe",)  # supported: "clahe", "gaussian", "median"
         self.filter_kernel_size = 3     # positive odd size for Gaussian/median
         self.clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
         self.current_frame = EnumFrame()
@@ -42,9 +43,7 @@ class VisulaAcEst:
         self.tracked_points = {}
         self.vkfs = {}
 
-        self.camera_velocity = np.zeros(3)
-        self.camera_angle = np.zeros(2)
-        self.expected_vel_err = 0
+        self.camera_velocity = np.zeros(4)   # [vx, vy, vz, yaw_rate], body frame
         self.depth_median = np.nan       # median stereo depth of valid matches
         self.depth_valid_frac = 0.0      # share of points with a valid stereo match
         self.depth_points = np.empty((0, 3))   # (u, v, depth) of valid matches, left image
@@ -156,7 +155,7 @@ class VisulaAcEst:
             return lost
 
         pts = self._replenish(gray1, self.tracked_points.get(0, empty), 0)
-        
+    
         if len(pts) < 3: return bad_return()
         old = pts.reshape(-1, 1, 2).astype(np.float32)
         new, st_f, _ = cv2.calcOpticalFlowPyrLK(gray1, gray2, old, None, **lk)
@@ -316,82 +315,6 @@ class VisulaAcEst:
 
 
     def trinagulate_altitude(self, news, flow, olds, triangles, links) -> list:
-        """
-        Estimate depth per feature using stereo disparity.
-        
-        Parameters
-        ----------
-        news : list of two ndarrays, each shape (N, 3)
-            Current-frame feature positions with depth placeholder as third column.
-            news[0] : (N, 3) - left camera (x_px, y_px, z_placeholder)
-            news[1] : (N, 3) - right camera (x_px, y_px, z_placeholder)
-            Index i in news[0] corresponds to the SAME physical feature as index i in news[1].
-            The third column currently holds the drone's barometric altitude for all points.
-            This function should REPLACE that column with per-point depth estimated 
-            from stereo disparity: z = f * B / disparity.
-        
-        flow : ndarray, shape (N, 2)
-            Per-point optical flow in the LEFT camera, pixels per frame.
-            flow[i] = (dx, dy) for feature i, computed as points_new - points_old.
-            Same length and index correspondence as points[0].
-            After this function, flow is used by estimate_velocities to compute
-            drone translational velocity: v_ground = flow * z / (f * dt).
-            More accurate z per point → more accurate velocity per point.
-        
-        olds : list of two ndarrays, each shape (N, 3)
-            Previous-frame feature positions, same format as points.
-            olds[0] : (N, 3) - left camera positions in previous frame
-            olds[1] : (N, 3) - right camera positions in previous frame
-            Same index correspondence as points.
-            Can be used to:
-            - Verify stereo consistency over time (features should maintain 
-            similar disparity if altitude doesn't change rapidly).
-            - Reject features whose disparity changes implausibly between frames
-            (likely bad tracks).
-            - Smooth altitude estimates temporally per feature.
-        
-        triangles : ndarray, shape (T, 3), dtype int
-            Delaunay triangulation of features. Each row is 3 indices into points
-            (same indices work for left and right because of 1:1 correspondence).
-            Can be used to:
-            - Enforce altitude consistency within each triangle (triangle vertices
-            lying on ground should have similar altitudes).
-            - Reject triangles with wildly inconsistent per-vertex altitudes
-            (indicates one vertex is on an obstacle, or a bad stereo match).
-            - Compute per-triangle altitude as median of its 3 vertex altitudes
-            for smoothing.
-            - Detect scene structure: triangles with varying altitudes span 
-            non-planar surfaces (obstacles, terrain variation).
-        
-        links : ndarray, shape (L, 2), dtype int
-            Unique undirected edges of the triangulation. Each row [a, b] means
-            points a and b are triangulation neighbors.
-            Can be used to:
-            - Smooth altitude between neighbors (Laplacian smoothing on altitude field).
-            - Detect altitude discontinuities (large |z[a] - z[b]| → scene edge).
-            - Reject features whose altitude disagrees heavily with all neighbors
-            (likely bad stereo match).
-            - Build a graph where edge weights = altitude difference, for 
-            downstream segmentation of scene by depth.
-        
-        Returns
-        -------
-        list of two ndarrays, each shape (N, 3)
-            news with third column replaced by depth along the optical axis per feature.
-            Index correspondence preserved. Same shape as input news.
-            olds gets the same depth written in place (point_prediction_filtering reads it).
-
-        Notes
-        -----
-        Stereo disparity formula:
-            disparity_i = (olds[1][i, :2] - olds[0][i, :2]) . disparity_direction
-            depth_i     = focal_length_pixels * baseline_meters / disparity_i
-
-        Disparity is measured on olds: news[1] is olds[1] + left flow, not a new match,
-        so it carries the same disparity. Points with a bad stereo match (epipolar error
-        or disparity too small) get the median depth of the valid points, or the
-        barometric height if none are valid.
-        """
         L, R = olds[0][:, :2], olds[1][:, :2]
         delta = R - L
         disp_dir = camConfig.STEREO_CAM.disparity_direction()
@@ -422,7 +345,6 @@ class VisulaAcEst:
     def estimate_velocities(self, flow, points):
         if len(points) < 2:
             self.camera_velocity = self._fallback_velocity()
-            self.camera_angle = self.drone_ang[:2]
             return None
 
         ang_vel, att = self.avg_ang_vel, self.avg_att
@@ -431,6 +353,10 @@ class VisulaAcEst:
 
         n = len(points)
         z = points[:, 2]
+
+        k = max(1, int(len(z) * 0.10))
+        z_biggest = np.partition(z, -k)[-k:]
+        z_estimated = np.median(z_biggest) 
 
         v = flow * (z / (self.foc_l * self.dt))[:, None]
         w = ang_vel[[1, 0]] * np.array([1, 1])   # swapped
@@ -452,8 +378,10 @@ class VisulaAcEst:
 
         kf.predict(kf.state)
         kf.update(x)
-
+        
         self.camera_velocity = kf.get()
+        self.camera_velocity = np.insert(self.camera_velocity, 2, z_estimated)
+        
 
     @staticmethod
     def drawing(annotated_frame, annotated_r, good_new, new_r, links):
@@ -489,10 +417,9 @@ class VisulaAcEst:
         predicted = np.column_stack([old[:, 0] + du, old[:, 1] + dv])
 
         residuals = np.clip(np.linalg.norm(new[:, :2] - predicted, axis=1), 0, 150)
-        self.expected_vel_err = np.mean(residuals)
         threshold = 1.5
         if residuals.sum() > 0:
-            threshold = np.min(residuals) + 0.45 * (np.max(residuals) - np.min(residuals))
+            threshold = np.min(residuals) + 0.75 * (np.max(residuals) - np.min(residuals))
         return residuals < threshold
     
     # ---------------- utils ----------------
@@ -502,11 +429,12 @@ class VisulaAcEst:
 
     def _fallback_velocity(self):
         print("fallback velocity used")
-        return np.array([self.drone_vel[0], self.drone_vel[1], self.drone_ang_vel[2]])
+        # [vx, vy, vz, yaw_rate] -- same layout as the estimated camera_velocity
+        return np.array([self.drone_vel[0], self.drone_vel[1], self.drone_vel[2], self.drone_ang_vel[2]])
 
 
 class VelocityKalmanFilter:
-    def __init__(self, process_var=0.6, measurement_var=3.5, yaw_process_var=5.0, yaw_measurement_var=0.1):
+    def __init__(self, process_var=0.6, measurement_var=4.5, yaw_process_var=5.0, yaw_measurement_var=1):
         self.state = np.zeros(3)
         self.P = np.eye(3)
         self.Q = np.diag([process_var, process_var, yaw_process_var])

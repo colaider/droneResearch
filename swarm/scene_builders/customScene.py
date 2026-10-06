@@ -55,7 +55,7 @@ class CustomScene:
             ),
             surface=gs.surfaces.Rough(
                 diffuse_texture=gs.textures.ImageTexture(
-                    image_path=str(objects / "rocck.jpg")
+                    image_path=str(objects / "box.jpg")
                 )
             ),
         )
