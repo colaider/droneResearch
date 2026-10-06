@@ -61,7 +61,6 @@ class DroneVisulaCTRL(DronePositionCTRL):
         yaw_mid = self.cam_pos[3] + 0.5 * self.fused_yaw_rate * self.dt
         v_body = np.array([fused[0], fused[1], fused[2], self.fused_yaw_rate])
         self.cam_pos += (self.rot(yaw_mid) @ v_body) * self.dt
-        self.cam_pos[2] = self.get_bar_z()                 # anchor altitude to barometer
 
         # Closed loop control on fused state
         U = self.position_control(setpoint, X_body=self.cam_pos[:3], X_d_body=self.fused_vel)
