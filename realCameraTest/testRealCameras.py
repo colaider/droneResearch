@@ -59,6 +59,9 @@ def make_estimator(focal_px, res, filters=None, kernel_size=None):
     est = VisulaAcEst(res, fov)
     est.foc_l = float(focal_px)       # exact focal from camera_params.txt
     est.camera_saperation = BASELINE  # stereo baseline (m)
+    # The USB images are rotated/resized but not stereo-rectified to a common
+    # projection. Enable only after supplying that calibration and rectification.
+    est.use_stereo_depth = False
     if filters is not None:
         est.image_filters = tuple(filters)
     if kernel_size is not None:
@@ -194,4 +197,3 @@ if __name__ == '__main__':
     args = parse_args()
     raise SystemExit(main(args.left, args.right, filters=args.filters,
                           kernel_size=args.kernel_size, rotate=not args.no_rotate))
-    
