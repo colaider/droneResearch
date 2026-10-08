@@ -1,10 +1,4 @@
-"""Simple state machine for drone mission sequencing.
-
-Each Step represents one phase of the mission (takeoff, hover, waypoint, land, etc.).
-Steps have conditions to check completion and connections to possible next steps.
-The StateMachine advances through steps based on their conditions.
-"""
-from dronePositionCTRL import DronePositionCTRL
+from swarm.droneClasses.dronePositionCTRL import DronePositionCTRL
 import numpy as np
 
 
@@ -24,32 +18,27 @@ class Step:
         self.tick_count = 0
 
     def enter(self, ctx, sim_time):
-        """Called once when state machine enters this step."""
         self.entered_at = sim_time
-        self.tick_count = 0
-        if self.on_enter is not None: self.on_enter(ctx)
+        if self.on_enter is not None:
+            self.on_enter(ctx)
 
     def exit(self, ctx):
         if self.on_exit is not None: self.on_exit(ctx)
 
     def run(self, ctx, sim_time):
-        self.tick_count += 1
+        if self.action is not None:
+            self.action(ctx)
 
-        if self.action is not None: self.action(ctx)
+        elapsed = sim_time - self.entered_at
 
-        # Check timeout
-        if self.timeout is not None and self.entered_at is not None:
-            if sim_time - self.entered_at > self.timeout:
-                # Pick first connection as default exit, or stop if none
-                return self.connections[0] if self.connections else -1
+        if self.timeout is not None and elapsed > self.timeout:
+            return self.connections[0] if self.connections else -1
 
-        # Check completion condition
         if self.is_done is not None:
-            next_idx = self.is_done(ctx)
-            
-            if  next_idx is not None and (next_idx in self.connections or not self.connections):
+            next_idx = self.is_done(ctx, elapsed)   # pass elapsed as second arg
+            if next_idx is not None:
                 return next_idx
-                
+
         return None
 
     def time_in_step(self, sim_time):
@@ -94,12 +83,7 @@ class StateMachine:
         self.steps[step.idx] = step
 
     def tick(self, sim_time):
-        """
-        Advance one tick. Runs current step's action, checks for transition.
-        Returns the current step's idx (or -1 if finished).
-        """
-        if self.finished:
-            return -1
+        if self.finished: return -1
 
         step = self.current
         if step is None:
@@ -111,14 +95,10 @@ class StateMachine:
             step.enter(self.ctx, sim_time)
             self._entered_initial = True
 
-        # Run the step
         next_idx = step.run(self.ctx, sim_time)
-
-        # Transition if requested
-        if next_idx is not None:
-            self._transition(next_idx, sim_time)
-
+        if next_idx is not None: self._transition(next_idx, sim_time)
         return self.current_idx if not self.finished else -1
+
 
     def _transition(self, next_idx, sim_time):
         """Move to a new step."""
