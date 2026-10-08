@@ -1,0 +1,24 @@
+#!/bin/bash
+# Load the kernel side of the RB3 stereo camera (idempotent, run as root after every boot, or enable
+# rb3-stereo-setup.service): patched qcom-camss in CSIPHY0 combo mode + CAM0B bring-up module.
+# The modules are installed by drivers/install_board.sh.
+set -e
+[ "$(id -u)" = 0 ] || exec sudo "$0" "$@"
+modprobe i2c-dev
+if [ "$(cat /sys/module/qcom_camss/parameters/combo_phy 2>/dev/null)" != 0 ]; then
+  rmmod qcom_camss 2>/dev/null || true
+  modprobe qcom-camss combo_phy=0 combo_alias=1
+fi
+[ -d /sys/module/cam0b_bridge ] || modprobe cam0b_bridge
+# frame-done interrupts of the two cameras on separate cores (both on CPU0 serializes them and
+# skews the frame timestamps of the second camera by ~85 us) - little A55 cores 2 and 3, so the
+# big A78 cores 4-7 stay free for the vision code
+for n in 0 1; do
+  irq=$(grep -m1 "camss_msm_vfe$n\$" /proc/interrupts | cut -d: -f1 | tr -d ' ')
+  [ -n "$irq" ] && echo $((2 + n)) > "/proc/irq/$irq/smp_affinity_list"
+done
+if [ "$(cat /sys/module/qcom_camss/parameters/combo_phy 2>/dev/null)" != 0 ]; then
+  echo "rb3-stereo-setup: the loaded qcom-camss has no combo mode - run drivers/install_board.sh" >&2
+  exit 1
+fi
+echo "rb3-stereo-setup: camss combo mode on, CAM0B on $(ls /sys/bus/platform/devices/ac4b000.cci | grep -m1 -o 'i2c-[0-9]*')"
