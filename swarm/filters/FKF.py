@@ -1,6 +1,9 @@
 import numpy as np
 from collections import deque
 
+
+# temporary copy of the FusionKalmanFilter class from swarm/filters/FKF.py, so that the visualAccEst.py file can be run standalone for testing.
+
 class FusionKalmanFilter:
     def __init__(self, dim=4, command_gain=0.4,
                  process_var=(0.5, 0.5, 0.3, 1.0),
