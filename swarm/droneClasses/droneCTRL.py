@@ -8,6 +8,7 @@ class DroneCTRL:
         self.dt = dt
         self.__setup_low_level_control_variables()
         self.lin_pos = np.zeros(3)
+        self.gyro_bias = None
 
     def set_propeller_rpm(self, rpms):
         rpms = np.clip(rpms*self.max_rpm, 0, self.max_rpm)
@@ -201,5 +202,16 @@ class DroneCTRL:
         return np.array([self.v_x_sum, self.v_y_sum, self.v_z_sum])
 
 
+
     def get_ang_vel(self):
-        return np.array([self.v_pitch, self.v_roll, self.v_yaw])
+        raw = np.array([self.v_pitch, self.v_roll, self.v_yaw])          
+        if self.gyro_bias is not None: 
+            return raw - self.gyro_bias
+        
+        return raw
+
+
+    def setAttitude(self, roll: float, pitch: float, yaw: float):
+        self.est_roll = roll
+        self.est_pitch = pitch
+        self.est_yaw = yaw

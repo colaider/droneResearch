@@ -1,7 +1,7 @@
 from swarm.droneClasses.dronePositionCTRL import DronePositionCTRL
 from swarm.filters.FKF import FusionKalmanFilter
 import numpy as np
-from swarm.droneClasses.stateMachine import Step, StateMachine
+import time
 
 class DroneVisulaCTRL(DronePositionCTRL):
     def __init__(self, drone_entity, dt=0.01, camera_fps=30):
@@ -10,11 +10,15 @@ class DroneVisulaCTRL(DronePositionCTRL):
         self.camera_step_period = max(1, round(self.camera_frame_interval / dt))
         self.last_frame_time = None
         self.cam_pos = None                      # lazily initialized on first position_ctrl_fused call
-        self.mission = self._build_mission()
+       
         # 4D fusion: body [vx, vy, vz, yaw_rate]
-        self.fkf = FusionKalmanFilter(dim=4)
+        self.fkf = FusionKalmanFilter()
         self.fused_vel = np.zeros(3)             # [vx, vy, vz] body, for logging
         self.fused_yaw_rate = 0.0
+
+
+
+        self.calibrated = False
 
     # ---------------- camera velocity accessors ----------------
 
@@ -28,45 +32,45 @@ class DroneVisulaCTRL(DronePositionCTRL):
         cv = self.drone.frame_processor.camera_velocity
         return np.array([cv[0], cv[1], self.get_lin_vel()[2], cv[3]])
 
-    # ---------------- fused control ----------------
+  # ---------------- fused control ----------------
     def position_ctrl_fused(self, setpoint):
         fp = self.drone.frame_processor
 
+        # Seed the filter's position state once, from IMU/attitude
         if self.cam_pos is None:
-            self.cam_pos = np.append(self.get_imu_pos(), self.get_attitude()[2]).astype(float)
+            p0   = self.get_imu_pos()
+            yaw0 = self.get_attitude()[2]
+            self.fkf.reset_position(p=p0, yaw=yaw0)
+            self.cam_pos = np.append(p0, yaw0).astype(float)  # [x, y, z, yaw]
 
         # Raw sensor readings
-        accel_v = self.get_lin_vel()                       # body [vx, vy, vz]
-        cam_v = fp.camera_velocity                         # body [vx, vy, vz, yaw_rate]
+        accel_v = self.get_lin_vel()                 # [vx, vy, vz]  (3D now)
+        cam_v   = fp.camera_velocity                 # [vx, vy, vz, yaw_rate]
+        command = np.append(self.prev_U[:3], 0.0)    # [vx, vy, vz, 0]
 
-        # Build 4D vectors — pad axes a sensor doesn't measure with 0 (filter ignores via large R)
-        accel_full = np.array([accel_v[0], accel_v[1], accel_v[2], 0.0])
-        cam_full   = np.array([cam_v[0],   cam_v[1],   0.0,         cam_v[3]])
-        command    = np.append(self.prev_U[:3], 0.0)       # [vx, vy, vz, 0]
+        # Camera: vz is noise (R_camera[2]=1e6), so pass 0.0 and let R kill it
+        cam_full = np.array([cam_v[0], cam_v[1], 0.0, cam_v[3]])
 
         fused = self.fkf.step(
             command=command,
-            v_accel=accel_full,
+            v_accel=accel_v,            # 3D now, not 4D
             dt=self.dt,
             v_camera=cam_full,
             camera_id=fp.current_frame.idx,
             attitude=self.get_attitude()
         )
 
-        self.fused_vel = fused[:3]
-        self.fused_yaw_rate = fused[3]
-
-        # Dead-reckon world pose using the fused state
-        yaw_mid = self.cam_pos[3] + 0.5 * self.fused_yaw_rate * self.dt
-        v_body = np.array([fused[0], fused[1], fused[2], self.fused_yaw_rate])
-        self.cam_pos += (self.rot(yaw_mid) @ v_body) * self.dt
+        # Fused 8D state: [px, py, pz, yaw, vx, vy, vz, yaw_rate]
+        self.cam_pos[0:3]   = fused[0:3]
+        self.cam_pos[3]     = fused[3]
+        self.fused_vel      = fused[4:7]
+        self.fused_yaw_rate = fused[7]
 
         # Closed loop control on fused state
-        U = self.position_control(setpoint, X_body=self.cam_pos[:3], X_d_body=self.fused_vel)
+        U = self.position_control(setpoint, X_body=self.cam_pos[0:3], X_d_body=self.fused_vel)
         self.lowLevelControl(U)
         return self.cam_pos
 
-    # ---------------- stepping ----------------
 
     def camera_update_step(self, step, sim_time):
         self.step(step)
@@ -90,7 +94,33 @@ class DroneVisulaCTRL(DronePositionCTRL):
 
         self.drone.camera_show()
 
-    # Add this to the imports in your visual controller file:
-    # from <your module> import Step, StateMachine
+
+    def calibrate(self, duration=1.0, p0=None, yaw0=None):
+        n_samples = max(1, int(duration / self.dt))
+        gyro_samples  = []
+        accel_samples = []
+
+        for _ in range(n_samples):
+            gyro_samples.append(self.get_ang_vel())
+            time.sleep(self.dt)
+
+        gyro_samples  = np.asarray(gyro_samples)
+
+        self.gyro_bias = gyro_samples.mean(axis=0)
+
+        if p0 is None:   p0 = np.zeros(3)
+        if yaw0 is None: yaw0 = 0.0
+        self.fkf.reset_position(p=np.asarray(p0, float), yaw=float(yaw0))
+        
+        self.fkf.x[4:8] = 0.0
+        self.cam_pos = np.append(p0, yaw0).astype(float)
+
+        self.calibrated = True
+        return self.gyro_bias
+
+
     def get_bar_z(self):
         return self.get_position()[2]
+
+
+    

@@ -8,8 +8,8 @@ class DronePositionCTRL(DroneCTRL):
 
         self.k_f1 = np.array([0.5, 0.5, 0.5, 0.8])  
         self.k_f2 = np.array([0.15, 0.15, 0.2, 0.2])
-        self.kp_pos = np.diag([0.45, 0.45, 1, 0.06])
-        self.kd_pos = np.diag([0.01, 0.01, 0.01, 0.1])
+        self.kp_pos = np.diag([0.35, 0.35, 0.45, 0.06])
+        self.kd_pos = np.diag([0.02, 0.02, 0.02, 0.1])
         self.prev_U = np.zeros(4)
 
 
@@ -56,4 +56,5 @@ class DronePositionCTRL(DroneCTRL):
     @staticmethod
     def rot(omega: float) -> np.array:
         return np.array([[np.cos(omega), -1*np.sin(omega),0,0],[np.sin(omega),np.cos(omega),0,0],[0,0,1,0],[0,0,0,1]])
+
 
