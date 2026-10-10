@@ -97,20 +97,28 @@ class PipelineTests(unittest.TestCase):
         self.assertFalse(np.array_equal(out.frames[0], est.buffer[-1].frames[0]))
 
     def test_actual_fine_tracker_depth_and_velocity_run_together(self):
-        est = estimator()
-        base = texture(45)
-        for idx in range(3):
-            left = translate(base, 2 * idx, idx)
-            est.push_sensors()
-            out = est.processing([left, translate(left, -8, 0)], idx)
-        self.assertGreater(len(est.tracked_points[0]), 3)
-        self.assertGreater(len(est.depth_points), 3)
-        self.assertEqual(est.depth_frame_idx, 2)
-        self.assertAlmostEqual(est.depth_median, 7.5, delta=0.2)
-        self.assertEqual(est.camera_velocity.shape, (4,))
-        self.assertTrue(np.isfinite(est.camera_velocity).all())
-        self.assertEqual(est.camera_velocity[2], est.drone_vel[2])
-        self.assertEqual(out.idx, 2)
+        for layer in (0, 1):
+            with self.subTest(layer=layer):
+                est = estimator()
+                est.tracking_layer = layer
+                base = texture(45)
+                for idx in range(3):
+                    left = translate(base, 2 * idx, idx)
+                    est.push_sensors()
+                    out = est.processing([left, translate(left, -8, 0)], idx)
+                self.assertGreater(len(est.tracked_points[0]), 3)
+                self.assertGreater(len(est.depth_points), 3)
+                self.assertEqual(est.depth_frame_idx, 2)
+                self.assertAlmostEqual(est.depth_median, 7.5, delta=0.2)
+                self.assertEqual(est.camera_velocity.shape, (4,))
+                self.assertTrue(np.isfinite(est.camera_velocity).all())
+                self.assertEqual(est.camera_velocity[2], est.drone_vel[2])
+                self.assertEqual(out.idx, 2)
+                width, height = (640, 480) if layer == 0 else (320, 240)
+                self.assertLess(est.tracked_points[0][:, 0].max(), width)
+                self.assertLess(est.tracked_points[0][:, 1].max(), height)
+                self.assertLess(est.depth_points[:, 0].max(), 640)
+                self.assertLess(est.depth_points[:, 1].max(), 480)
 
     def test_velocity_layout_keeps_depth_separate_from_sensor_vz(self):
         est = estimator()

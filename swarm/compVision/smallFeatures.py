@@ -11,13 +11,13 @@ import numpy as np
 from scipy.spatial import Delaunay
 
 
-def replenish(gray, pts, cam, max_points=300):
+def replenish(gray, pts, cam, max_points=300, min_distance=100):
     h, w = gray.shape
     mask = np.full((h, w), 255, np.uint8)
     for x, y in pts.astype(int):
         cv2.circle(mask, (x, y), 7, 0, -1)
 
-    cand = cv2.goodFeaturesToTrack(gray, maxCorners=500, qualityLevel=0.005, minDistance=100, blockSize=11, mask=mask)
+    cand = cv2.goodFeaturesToTrack(gray, maxCorners=500, qualityLevel=0.005, minDistance=min_distance, blockSize=11, mask=mask)
     if cand is None: return pts
     cand = cand.reshape(-1, 2)
     edges = cv2.dilate(cv2.Canny(gray, 50, 150), np.ones((5, 5), np.uint8))

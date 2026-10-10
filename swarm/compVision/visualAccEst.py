@@ -12,14 +12,23 @@ EnumFrame = Frame
 
 
 class VisulaAcEst:
+    # BGR drawing color per pyramid layer (0 = full resolution).
+    LAYER_COLORS = (
+        (255, 0, 0),     # blue
+        (0, 255, 0),     # green
+        (0, 0, 255),     # red
+        (0, 255, 255),   # yellow
+        (255, 0, 255),   # magenta
+        (255, 255, 0),   # cyan
+    )
+
     def __init__(self, res, fov):
         self.fov = fov
         self.foc_l = (res[1] / 2) / np.tan(np.deg2rad(fov) / 2)
         self.dt = 0.01
         self.camera_saperation = camConfig.STEREO_CAM.baseline
 
-        # Only one grayscale level is needed by the current tracker.
-        self.frame_processor = FrameProcessor(pyramid_levels=1)
+        self.frame_processor = FrameProcessor(pyramid_levels=3, image_filters=("clahe",), filter_kernel_size=3)
         self.resolution = tuple(res)  # calibrated output (width, height)
         self.use_stereo_depth = True
         self.current_frame = EnumFrame()
@@ -40,6 +49,7 @@ class VisulaAcEst:
         self.avg_pos = np.zeros(3)
 
         self.tracked_points = {}
+        self._tracking_layers = (0, 1, 2)
         self.vkfs = {}
 
         self.camera_velocity = np.zeros(4)   # [vx, vy, vz, yaw_rate], body frame
@@ -75,6 +85,33 @@ class VisulaAcEst:
     @clahe.setter
     def clahe(self, value):
         self.frame_processor.clahe = value
+
+    @property
+    def tracking_layers(self):
+        """Grayscale-pyramid levels tracked independently by Lucas-Kanade."""
+        return self._tracking_layers
+
+    @tracking_layers.setter
+    def tracking_layers(self, value):
+        value = tuple(value)
+        if not value or any(
+            isinstance(v, (bool, np.bool_)) or not isinstance(v, (int, np.integer)) or v < 0
+            for v in value
+        ):
+            raise ValueError("tracking_layers must be nonempty nonnegative integers")
+        value = tuple(sorted({int(v) for v in value}))
+        if value != self._tracking_layers:
+            self._tracking_layers = value
+            self.tracked_points.clear()
+
+    @property
+    def tracking_layer(self):
+        """Single-layer alias: the finest tracked pyramid level."""
+        return self._tracking_layers[0]
+
+    @tracking_layer.setter
+    def tracking_layer(self, value):
+        self.tracking_layers = (value,)
 
     def preprocess_frame(self, frame):
         """Compatibility adapter for filtering an already-normalized BGR image."""
@@ -130,15 +167,47 @@ class VisulaAcEst:
         if min(len(prev), len(curr)) < 2:
             self.camera_velocity = self._fallback_velocity()
             return
+        n_levels = min(len(prev_data.pyramids[0]), len(curr_data.pyramids[0]), len(prev_data.pyramids[1]))
+        if self.tracking_layers[-1] >= n_levels:
+            raise ValueError(
+                f"tracking_layers {self.tracking_layers} unavailable in the "
+                f"stored image pyramids ({n_levels} levels)"
+            )
 
-        processed, flow, olds, news, tris, links = self.lucas_kanade_flow(
-            prev[0], curr[0], prev[1], curr[1],
-            tracking_gray=(prev_data.gray_frames[0], curr_data.gray_frames[0], prev_data.gray_frames[1]),
-        )
+        # Track every pyramid layer separately; each layer draws its mesh on
+        # top of the previous one, so pass the annotated frames along.
+        processed = [curr[0].copy(), curr[1].copy()]
+        flows, olds_l, olds_r, news_l, news_r, tris, links = [], [], [], [], [], [], []
+        offset = 0
+        for layer in self.tracking_layers:
+            out, l_flow, l_olds, l_news, l_tris, l_links = self.lucas_kanade_flow(
+                prev[0], processed[0], prev[1], processed[1],
+                tracking_gray=(
+                    prev_data.pyramids[0][layer],
+                    curr_data.pyramids[0][layer],
+                    prev_data.pyramids[1][layer],
+                ),
+                layer=layer,
+            )
+            processed = out
+            if l_flow is None:
+                continue
+            flows.append(l_flow)
+            olds_l.append(l_olds[0]); olds_r.append(l_olds[1])
+            news_l.append(l_news[0]); news_r.append(l_news[1])
+            tris.append(l_tris + offset)
+            links.append(l_links + offset)
+            offset += len(l_flow)
+
         self.current_frame.frames = processed
-        if flow is None:
+        if not flows:
             self.camera_velocity = self._fallback_velocity()
             return
+
+        flow = np.vstack(flows)
+        olds = [np.vstack(olds_l), np.vstack(olds_r)]
+        news = [np.vstack(news_l), np.vstack(news_r)]
+        tris, links = np.vstack(tris), np.vstack(links)
 
         # news = self.trinagulate_altitude(news, flow, olds, tris, links)
 
@@ -148,22 +217,28 @@ class VisulaAcEst:
 
 # ---------------- tracking ----------------
 
-    def lucas_kanade_flow(self, frame1, frame2, frame_r, frame_r_curr, tracking_gray=None):
+    def lucas_kanade_flow(self, frame1, frame2, frame_r, frame_r_curr, tracking_gray=None, layer=0):
         gray1, gray2, gray_r = tracking_gray
         annotated_frame = frame2.copy()
         annotated_r = frame_r_curr.copy()
 
         lost = ([annotated_frame, annotated_r], None, None, None, None, None)
         empty = np.empty((0, 2), np.float32)
+        pixel_scale = np.array(
+            [frame1.shape[1] / gray1.shape[1], frame1.shape[0] / gray1.shape[0]],
+            dtype=np.float32,
+        )
 
-        lk = dict(winSize=(21, 21), maxLevel=3, criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 30, 0.01))
+        lk = dict(winSize=(21, 21), maxLevel=1, criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 30, 0.01))
         lk_stereo = dict(winSize=(100, 100), maxLevel=4, criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 30, 0.01))
 
         def bad_return():
-            self.tracked_points[0] = empty
+            self.tracked_points[layer] = empty
             return lost
 
-        pts = self._replenish(gray1, self.tracked_points.get(0, empty), 0)
+        # Keep the same full-resolution corner spacing on every layer.
+        pts = self._replenish(gray1, self.tracked_points.get(layer, empty), 0,
+                              min_distance=max(1, int(100 / pixel_scale[0])))
     
         if len(pts) < 3: return bad_return()
         old = pts.reshape(-1, 1, 2).astype(np.float32)
@@ -172,8 +247,11 @@ class VisulaAcEst:
         if new is None: return bad_return()
         back, st_b, _ = cv2.calcOpticalFlowPyrLK(gray2, gray1, new, None, **lk)  # ✓ new still (N, 1, 2)
         old, new, back = old.reshape(-1, 2), new.reshape(-1, 2), back.reshape(-1, 2)
-        good = (st_f.ravel() == 1) & (st_b.ravel() == 1) & (np.abs(old - back).max(axis=1) < 1.0)
-        good_old, good_new = old[good], new[good]
+        good = (
+            (st_f.ravel() == 1) & (st_b.ravel() == 1)
+            & (np.abs((old - back) * pixel_scale).max(axis=1) < 1.0)
+        )
+        good_old, good_new = old[good] * pixel_scale, new[good] * pixel_scale
        
         if len(good_old) >= 6:
             _, inliers = cv2.estimateAffinePartial2D(good_old, good_new, method=cv2.RANSAC, ransacReprojThreshold=2.0, maxIters=2000, confidence=0.99)
@@ -187,17 +265,17 @@ class VisulaAcEst:
 
         old_r = empty
         if len(good_old) >= 3:
-            p = good_old.reshape(-1, 1, 2).astype(np.float32)
+            p = (good_old / pixel_scale).reshape(-1, 1, 2).astype(np.float32)
             old_r, st_r, _ = cv2.calcOpticalFlowPyrLK(gray1, gray_r, p, None, **lk_stereo)
             if old_r is None: return bad_return()
                 
-            old_r = old_r.reshape(-1, 2)
+            old_r = old_r.reshape(-1, 2) * pixel_scale
             good_old, good_new, old_r = good_old[st_r.ravel() == 1], good_new[st_r.ravel() == 1], old_r[st_r.ravel() == 1]
 
         if len(good_new) < 3: return bad_return()
 
         triangles, _, links, _ = self._build_triangles(good_new)
-        self.tracked_points[0] = good_new.copy()
+        self.tracked_points[layer] = good_new / pixel_scale
         flow, scale, div = self.compensate_vertical(good_old, good_new, triangles)
        
         new_r = old_r + flow
@@ -206,13 +284,14 @@ class VisulaAcEst:
         olds = [np.hstack((good_old, np.full((len(good_old), 1), z))), np.hstack((old_r, np.full((len(old_r), 1), z)))]
         news = [np.hstack((good_new, np.full((len(good_new), 1), z))), np.hstack((new_r, np.full((len(new_r), 1), z)))]
         
-        annotated_frame, annotated_r = self.drawing(annotated_frame, annotated_r, good_new, new_r, links)
+        color = self.LAYER_COLORS[layer % len(self.LAYER_COLORS)]
+        annotated_frame, annotated_r = self.drawing(annotated_frame, annotated_r, good_new, new_r, links, color)
         return [annotated_frame, annotated_r], flow, olds, news, triangles, links 
 
 
-    def _replenish(self, gray, pts, cam, max_points=300):
+    def _replenish(self, gray, pts, cam, max_points=300, min_distance=100):
         """Compatibility adapter for smallFeratures.replenish."""
-        return replenish(gray, pts, cam, max_points)
+        return replenish(gray, pts, cam, max_points, min_distance)
 
     # ---------------- mesh ----------------
 
@@ -308,9 +387,8 @@ class VisulaAcEst:
         
 
     @staticmethod
-    def drawing(annotated_frame, annotated_r, good_new, new_r, links):
+    def drawing(annotated_frame, annotated_r, good_new, new_r, links, color=(255, 0, 0)):
         """Centralized drawing: triangulation and points on left and right frames."""
-        color = (255, 0, 0)      # Blue
          
         for a, b in links:
             cv2.line(annotated_frame, tuple(good_new[a].astype(int)), tuple(good_new[b].astype(int)), color, 2)
