@@ -1,6 +1,7 @@
 import cv2
 from genesis.utils.misc import tensor_to_array
 from swarm.compVision.visualAccEst import VisulaAcEst
+from swarm.compVision.frame import prepare_camera_frame, compose_camera_display
 
 
 class DroneStruct:
@@ -16,6 +17,7 @@ class DroneStruct:
 
         self.frame_processor = VisulaAcEst(cam_cfg.res, cam_cfg.fov)
         self.frame_processor.camera_saperation = cam_cfg.baseline
+        self.frame_processor.disparity_direction = cam_cfg.disparity_direction()
         self.steps_cam = 0
 
     def __getattr__(self, attr):
@@ -40,7 +42,7 @@ class DroneStruct:
             rgb = cam.read().rgb
             if rgb.ndim > 3:
                 rgb = rgb[0]
-            lr_cam.append(cv2.cvtColor(tensor_to_array(rgb), cv2.COLOR_RGB2BGR))
+            lr_cam.append(prepare_camera_frame(tensor_to_array(rgb), color_order="RGB"))
         return lr_cam
 
 
@@ -55,25 +57,7 @@ class DroneStruct:
 
     @staticmethod
     def _compose_camera_display(processed, tracking_gray):
-        """Filtered color above the exact grayscale inputs used for feature tracking."""
-        if len(processed) < 2 or len(tracking_gray) < 2:
-            return None
-        h, w = processed[0].shape[:2]
-        scale = min(640 / w, 450 / h, 1.0)
-        size = (max(1, round(w * scale)), max(1, round(h * scale)))
-
-        def tile(frame, label, grayscale=False):
-            if grayscale:
-                frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
-            image = cv2.resize(frame, size, interpolation=cv2.INTER_AREA)
-            image = cv2.copyMakeBorder(image, 28, 0, 0, 0, cv2.BORDER_CONSTANT, value=(24, 24, 24))
-            cv2.putText(image, label, (10, 19), cv2.FONT_HERSHEY_SIMPLEX,
-                        0.5, (235, 235, 235), 1, cv2.LINE_AA)
-            return image
-
-        top = cv2.hconcat([tile(processed[0], "Left camera"), tile(processed[1], "Right camera")])
-        bottom = cv2.hconcat([tile(tracking_gray[0], "Left tracking input", True), tile(tracking_gray[1], "Right tracking input", True)])
-        return cv2.vconcat([top, bottom])
+        return compose_camera_display(processed, tracking_gray)
 
     def set_camera_dt(self, dt):
         self.frame_processor.set_dt(dt)

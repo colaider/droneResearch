@@ -44,7 +44,11 @@ class FrameProcessor:
 
     SUPPORTED_FILTERS = frozenset(("clahe", "gaussian", "median"))
 
-    def __init__(self, image_filters=("clahe",), filter_kernel_size=3):
+    def __init__(self, image_filters=("clahe",), filter_kernel_size=3,
+                 pyramid_levels=3):
+        if not isinstance(pyramid_levels, int) or pyramid_levels < 1:
+            raise ValueError("pyramid_levels must be a positive integer")
+        self.pyramid_levels = pyramid_levels
         self.image_filters = tuple(image_filters)
         self.filter_kernel_size = filter_kernel_size
         self.clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
@@ -99,15 +103,14 @@ class FrameProcessor:
         return result
 
     def process(self, frames, idx):
-        """Prepare exactly two equal-size BGR images and their Gaussian pyramids.
+        """Normalize two equal-size images to BGR and build grayscale/pyramid inputs.
 
         ``pyrDown`` smooths before reducing each image dimension. Tracking and
         stereo matching can keep using the original-resolution gray frames.
         """
         if not isinstance(frames, (list, tuple)) or len(frames) != 2:
             raise ValueError("Expected exactly two stereo images: [left, right]")
-        for image in frames:
-            self._validate_image(image)
+        frames = [prepare_camera_frame(image) for image in frames]
         if frames[0].shape != frames[1].shape:
             raise ValueError("Left and right stereo images must have the same size")
 
@@ -115,6 +118,65 @@ class FrameProcessor:
         gray_frames = [cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) for image in prepared]
         pyramids = []
         for gray in gray_frames:
-            half = cv2.pyrDown(gray)
-            pyramids.append([gray, half, cv2.pyrDown(half)])
-        return Frame(frames=prepared, gray_frames=gray_frames, pyramids=pyramids, idx=idx)
+            levels = [gray]
+            for _ in range(1, self.pyramid_levels):
+                levels.append(cv2.pyrDown(levels[-1]))
+            pyramids.append(levels)
+        return Frame(frames=prepared, gray_frames=gray_frames, pyramids=pyramids,
+                     idx=idx)
+
+
+def prepare_camera_frame(image, *, color_order="BGR", rotation=None, resolution=None):
+    """Normalize a runner-provided uint8 image to BGR without changing its input.
+
+    resolution is optional (width, height), applied before rotation to preserve
+    the existing USB-runner convention. The caller must provide calibration for
+    the resulting pixel scale/orientation. This does not stereo-rectify images.
+    No camera is opened or read here.
+    """
+    if (not isinstance(image, np.ndarray) or image.dtype != np.uint8 or
+            image.ndim not in (2, 3) or not image.size):
+        raise ValueError("Camera frame must be a nonempty uint8 image")
+    if color_order == "GRAY":
+        if image.ndim != 2:
+            raise ValueError("GRAY input must have shape (height, width)")
+        result = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
+    elif color_order in ("BGR", "RGB"):
+        FrameProcessor._validate_image(image)
+        result = cv2.cvtColor(image, cv2.COLOR_RGB2BGR) if color_order == "RGB" else image.copy()
+    else:
+        raise ValueError("color_order must be BGR, RGB or GRAY")
+    if resolution is not None:
+        if (len(resolution) != 2 or any(isinstance(v, (bool, np.bool_)) or
+                not isinstance(v, (int, np.integer)) or v <= 0 for v in resolution)):
+            raise ValueError("resolution must be positive integer (width, height)")
+        resolution = tuple(int(v) for v in resolution)
+        if (result.shape[1], result.shape[0]) != resolution:
+            result = cv2.resize(result, resolution, interpolation=cv2.INTER_AREA)
+    if rotation is not None:
+        if rotation not in (cv2.ROTATE_90_CLOCKWISE, cv2.ROTATE_180, cv2.ROTATE_90_COUNTERCLOCKWISE):
+            raise ValueError("rotation must be an OpenCV rotation constant or None")
+        result = cv2.rotate(result, rotation)
+    return result
+
+
+def compose_camera_display(processed, tracking_gray):
+        """Filtered color above the exact grayscale inputs used for feature tracking."""
+        if len(processed) < 2 or len(tracking_gray) < 2:
+            return None
+        h, w = processed[0].shape[:2]
+        scale = min(640 / w, 450 / h, 1.0)
+        size = (max(1, round(w * scale)), max(1, round(h * scale)))
+
+        def tile(frame, label, grayscale=False):
+            if grayscale:
+                frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+            image = cv2.resize(frame, size, interpolation=cv2.INTER_AREA)
+            image = cv2.copyMakeBorder(image, 28, 0, 0, 0, cv2.BORDER_CONSTANT, value=(24, 24, 24))
+            cv2.putText(image, label, (10, 19), cv2.FONT_HERSHEY_SIMPLEX,
+                        0.5, (235, 235, 235), 1, cv2.LINE_AA)
+            return image
+
+        top = cv2.hconcat([tile(processed[0], "Left camera"), tile(processed[1], "Right camera")])
+        bottom = cv2.hconcat([tile(tracking_gray[0], "Left tracking input", True), tile(tracking_gray[1], "Right tracking input", True)])
+        return cv2.vconcat([top, bottom])

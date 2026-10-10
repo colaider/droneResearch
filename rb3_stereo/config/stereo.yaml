@@ -1,0 +1,31 @@
+# Defaults of the stereo_camera node. Every value can be overridden on the launch command line
+# (e.g. fps:=60) or changed at runtime: ros2 param set /stereo/stereo_camera <name> <value>
+/**:
+  ros__parameters:
+    # mode: 640x400 @ 30/60/120 fps, 1280x800 @ 30/60 fps (one MIPI lane per camera)
+    resolution: "640x400"
+    fps: 30                         # 30 = rate of the swarm simulation's vision loop
+    left_camera: "cam0a"            # connector of the left camera (cam0a / cam0b)
+    flip: false                     # rotate both images 180 deg
+    genlock: true                   # keep both cameras' frames aligned (< 30 us)
+
+    # exposure (no ISP: raw sensor, software auto exposure)
+    auto_exposure: true
+    exposure_us: 2000.0             # manual exposure, used when auto_exposure is false
+    gain: 1.0                       # manual analogue gain 1.0 .. 15.9
+    ae_target: 100.0                # mean brightness 0..255
+    ae_max_exposure_us: 4000.0      # motion blur limit
+    ae_max_gain: 8.0                # noise limit
+
+    # output
+    stamp: "exposure_center"        # or frame_end
+    frame_id_left: "stereo_left_optical_frame"
+    frame_id_right: "stereo_right_optical_frame"
+    left_calibration: ""            # camera_calibration YAML; "" = nominal pinhole model below
+    right_calibration: ""
+    nominal_vfov_deg: 85.0          # simulation values until the real cameras are calibrated
+    baseline_m: 0.05
+    preview_fps: 10.0               # side-by-side JPEG on preview/compressed, 0 = off
+    preview_scale: 0.5
+    preview_quality: 75
+    qos_reliable: false             # true for tools that only subscribe reliably (startup only)

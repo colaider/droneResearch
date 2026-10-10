@@ -1,0 +1,113 @@
+// OV9282 on the RB3 Gen 2 vision mezzanine CAM0A, driven by upstream camss + ov9282 (no CamX).
+// Wiring taken from Qualcomm's own CamX node (qcom,cam-sensor1) in the running DT:
+//   CCI_I2C0 = cci0 i2c-bus@0, CSI0 = csiphy0 (2 lanes with DIP2-1 OFF), MCLK0 = GPIO64,
+//   reset = GPIO20, DOVDD = vreg_l18b_1p8. Sensor address 0xc0 (8-bit) = 0x60.
+// Build: dtc -@ -I dts -O dtb -o ov9282-cam0a.dtbo ov9282-cam0a.dtso
+/dts-v1/;
+/plugin/;
+
+&camss {
+	status = "okay";
+	vdda-phy-supply = <&vreg_l10c_0p88>;
+	vdda-pll-supply = <&vreg_l6b_1p2>;
+
+	// The shipped node uses early-patch clock names (and misspells power-domain-names), so the
+	// camss driver failed with "Fail to init vfe0 sub-device: -2". List every clock under both the
+	// upstream names and the old names so either driver version finds what it asks for.
+	// IDs: include/dt-bindings/clock/qcom,camcc-sc7280.h and qcom,gcc-sc7280.h
+	clocks = <&camcc 22>, <&camcc 30>,
+		 <&camcc 42>, <&camcc 32>, <&camcc 43>, <&camcc 34>, <&camcc 44>,
+		 <&camcc 36>, <&camcc 45>, <&camcc 38>, <&camcc 46>, <&camcc 40>,
+		 <&gcc 12>, <&gcc 13>, <&camcc 49>,
+		 <&camcc 53>, <&camcc 52>, <&camcc 55>, <&camcc 56>,
+		 <&camcc 60>, <&camcc 59>, <&camcc 62>, <&camcc 63>,
+		 <&camcc 67>, <&camcc 66>, <&camcc 69>, <&camcc 70>,
+		 <&camcc 73>, <&camcc 75>, <&camcc 76>,
+		 <&camcc 78>, <&camcc 80>, <&camcc 81>,
+		 /* old names */
+		 <&camcc 56>, <&camcc 63>, <&camcc 70>, <&camcc 76>, <&camcc 81>,
+		 <&gcc 11>, <&gcc 12>, <&camcc 30>,
+		 <&camcc 73>, <&camcc 75>, <&camcc 78>, <&camcc 80>;
+	clock-names = "camnoc_axi", "cpas_ahb",
+		      "csiphy0", "csiphy0_timer", "csiphy1", "csiphy1_timer", "csiphy2",
+		      "csiphy2_timer", "csiphy3", "csiphy3_timer", "csiphy4", "csiphy4_timer",
+		      "gcc_axi_hf", "gcc_axi_sf", "icp_ahb",
+		      "vfe0", "vfe0_axi", "vfe0_cphy_rx", "vfe0_csid",
+		      "vfe1", "vfe1_axi", "vfe1_cphy_rx", "vfe1_csid",
+		      "vfe2", "vfe2_axi", "vfe2_cphy_rx", "vfe2_csid",
+		      "vfe_lite0", "vfe_lite0_cphy_rx", "vfe_lite0_csid",
+		      "vfe_lite1", "vfe_lite1_cphy_rx", "vfe_lite1_csid",
+		      "csi0", "csi1", "csi2", "csi3", "csi4",
+		      "gcc_camera_ahb", "gcc_camera_axi", "soc_ahb",
+		      "vfe0_lite", "vfe0_lite_cphy_rx", "vfe1_lite", "vfe1_lite_cphy_rx";
+	power-domain-names = "ife0", "ife1", "ife2", "top";
+
+	ports {
+		port@0 {
+			reg = <0>;
+
+			csiphy0_ep: endpoint {
+				bus-type = <4>;			/* MEDIA_BUS_TYPE_CSI2_DPHY */
+				clock-lanes = <7>;
+				/* The CMK OV9282 module on CAM0A runs ONE data lane: CamX programs
+				 * CSIPHY0 lane-enable 0x81 and CSID NUM_ACTIVE_LANES=0 (measured). */
+				data-lanes = <0>;
+				remote-endpoint = <&ov9282_ep>;
+			};
+		};
+	};
+};
+
+&cci0 {
+	status = "okay";
+	// driver expects a 37.5 MHz CCI clock (it found 19.2 MHz); CAM_CC_CCI_0_CLK_SRC = 26
+	assigned-clocks = <&camcc 26>;
+	assigned-clock-rates = <37500000>;
+};
+
+&cci0_i2c0 {
+	#address-cells = <1>;
+	#size-cells = <0>;
+	clock-frequency = <400000>;
+
+	camera@60 {
+		compatible = "ovti,ov9282";
+		reg = <0x60>;
+
+		clocks = <&camcc 92>;			/* CAM_CC_MCLK0_CLK */
+		assigned-clocks = <&camcc 92>;
+		assigned-clock-rates = <24000000>;
+
+		reset-gpios = <&tlmm 20 0>;		/* GPIO_ACTIVE_HIGH: driver sets 1 = running */
+		dovdd-supply = <&vreg_l18b_1p8>;
+
+		pinctrl-names = "default";
+		pinctrl-0 = <&ov9282_cam0a_default>;
+
+		port {
+			ov9282_ep: endpoint {
+				data-lanes = <1 2>;
+				link-frequencies = /bits/ 64 <400000000>;
+				remote-endpoint = <&csiphy0_ep>;
+			};
+		};
+	};
+};
+
+&tlmm {
+	ov9282_cam0a_default: ov9282-cam0a-default-state {
+		mclk-pins {
+			pins = "gpio64";
+			function = "cam_mclk";
+			drive-strength = <2>;
+			bias-disable;
+		};
+
+		rst-pins {
+			pins = "gpio20";
+			function = "gpio";
+			drive-strength = <2>;
+			bias-disable;
+		};
+	};
+};
