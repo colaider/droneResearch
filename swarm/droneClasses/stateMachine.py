@@ -28,7 +28,6 @@ class StateMachine:
         done = self._reached()
 
         if done: self.target = None
-
         return done
 
     def heading_to_relative(self, cmd):
@@ -36,7 +35,6 @@ class StateMachine:
 
         self.controller.position_ctrl_fused(self.target)
         done = self._reached()
-
         if done: self.target = None
 
         return done

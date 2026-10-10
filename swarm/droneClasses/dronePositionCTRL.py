@@ -12,6 +12,9 @@ class DronePositionCTRL(DroneCTRL):
         self.kd_pos = np.diag([0.02, 0.02, 0.02, 0.1])
         self.prev_U = np.zeros(4)
 
+        self.kp_vel = np.array([2.0, 2.0, 1.0])    
+        self.kd_vel = np.array([0.01, 0.01, 0.01])
+        self.ki_vel = np.array([0.4,  0.04, 0.4])
 
     def position_control(self, setpoint, X_body=None, X_d_body=None):
         
@@ -42,8 +45,34 @@ class DronePositionCTRL(DroneCTRL):
         np.clip(U, -2,2)
         self.pr_setpoint = setpoint
         self.pr_dr_setpoint = S_d
-        return U
+        return self.velocity_to_cmd(U)
+
        
+
+    def velocity_to_cmd(self, U):
+        vx_target, vy_target, vz_target, yaw_rate_target = U[0], U[1], U[2], U[3]
+
+        if not hasattr(self, 'last_vel_err'):
+            self.last_vel_err = np.zeros(3)
+            self.vel_err_sum  = np.zeros(3)
+
+        vel = self.get_lin_vel()
+        vel_err = np.array([ vx_target - vel[0], vy_target - vel[1], vz_target - vel[2] ])
+
+        P = self.kp_vel * vel_err
+        D = self.kd_vel * (vel_err - self.last_vel_err) / self.dt
+        I = self.ki_vel * self.vel_err_sum
+
+
+        target_pitch = np.clip(   P[0] + I[0] + D[0],  -self.max_tilt, self.max_tilt)
+        target_roll  = np.clip( -(P[1] + I[1] + D[1]), -self.max_tilt, self.max_tilt)
+        throttle = self.hover_throttle + P[2] + I[2] + D[2]
+
+        self.last_vel_err = vel_err
+        self.vel_err_sum += vel_err * self.dt
+
+        return np.array([target_roll, target_pitch, yaw_rate_target, throttle])
+        
 
     def f1(self, omega:float):
         return self.rot(omega) * self.k_f1
