@@ -26,6 +26,23 @@ class CustomScene:
         self.add_ground_plane()
         self.add_mountain()
 
+        # Varied footprints and roof heights for tracking and depth comparisons.
+        # (x, y, footprint width, height), in metres; keep the takeoff area open.
+        blocks = (
+            (0.70, 0.55, 0.30, 0.25),
+            (-0.75, 0.45, 0.40, 0.40),
+            (0.55, -0.85, 0.35, 0.60),
+            (-0.80, -0.75, 0.50, 0.30),
+            (1.65, 0.20, 0.65, 0.80),
+            (-1.70, 0.00, 0.70, 0.55),
+            (0.15, 1.70, 0.80, 1.00),
+            (0.00, -1.85, 0.60, 0.45),
+            (1.65, 1.65, 0.90, 1.20),
+        )
+        for index, (x, y, size, height) in enumerate(blocks, start=1):
+            self.add_mountain(name=f"block_{index}", position=(x, y, 0.0),
+                              size=size, height=height)
+
     
     def add_ground_plane(self, size: float = 50.0):
         """Add a ground plane to the scene."""

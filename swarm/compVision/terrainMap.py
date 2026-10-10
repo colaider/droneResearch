@@ -33,12 +33,14 @@ class TerrainMap:
         self.hits = np.zeros((self.n, self.n), dtype=np.int32)
         self.last_frame_idx = None
 
-    def add(self, pts_uvz, drone_pos, drone_quat, frame_idx=None):
+    def add(self, pts_uvz, drone_pos, drone_quat, frame_idx=None, weight_scale=None):
         """
-        pts_uvz    : (N, 3) oriented left-image pixels + depth along the optical axis
-        drone_pos  : (3,) world position of the drone body
-        drone_quat : (4,) world orientation of the drone body, (w, x, y, z)
-        frame_idx  : camera frame index, the same frame is only added once
+        pts_uvz      : (N, 3) oriented left-image pixels + depth along the optical axis
+        drone_pos    : (3,) world position of the drone body
+        drone_quat   : (4,) world orientation of the drone body, (w, x, y, z)
+        frame_idx    : camera frame index, the same frame is only added once
+        weight_scale : optional (N,) multiplier on each point's inverse-variance weight,
+                       e.g. to let structure points beat dense stereo at roof edges
         """
         if frame_idx is not None:
             if frame_idx == self.last_frame_idx:
@@ -54,10 +56,11 @@ class TerrainMap:
         ij = np.floor((p_world[:, :2] - self.origin) / self.cell).astype(int)
         inside = ((ij >= 0) & (ij < self.n)).all(axis=1)
         ij, z, depth = ij[inside], p_world[inside, 2], depth[inside]
+        scale = 1.0 if weight_scale is None else np.asarray(weight_scale, dtype=float)[inside]
 
         fB = self.cam_cfg.focal_px * self.cam_cfg.baseline
         sigma_z = depth ** 2 / fB * self.sigma_d
-        w = 1.0 / np.maximum(sigma_z, 1e-6) ** 2
+        w = scale / np.maximum(sigma_z, 1e-6) ** 2
 
         np.add.at(self.sum_w, (ij[:, 0], ij[:, 1]), w)
         np.add.at(self.sum_wz, (ij[:, 0], ij[:, 1]), w * z)

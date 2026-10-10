@@ -10,6 +10,8 @@ On the drone, from the repo root:
     source ~/ros2_ws/install/setup.bash
     python3 realCameraTest/testRB3Cameras.py                 # 640x400 @ 30 fps
     python3 realCameraTest/testRB3Cameras.py --height 1.0    # assume 1 m above the scene
+    python3 realCameraTest/testRB3Cameras.py --structures    # overlay boxes/buildings (2D only)
+    python3 realCameraTest/testRB3Cameras.py --calib swarm/config/stereo_calib.npz   # + dense depth/map
 On WSL / another machine:
     bash scripts/view_stereo.sh --ns /vo
 
@@ -33,6 +35,8 @@ if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
 from swarm.compVision.visualAccEst import VisulaAcEst   # the real estimator, used as-is
+from swarm.compVision.denseStereo import StereoRectifier
+from swarm.compVision.structureMap import StructureMapper, camera_for
 
 BIG_CORES, LITTLE_CORES = {4, 5, 6, 7}, {0, 1, 2, 3}     # Cortex-A78 / Cortex-A55 of the QCS6490
 
@@ -172,6 +176,15 @@ def main(args):
     est = VisulaAcEst((w, h), args.vfov)
     est.camera_saperation = args.baseline
     est.use_stereo_depth = args.stereo_depth
+    rectifier = StereoRectifier.from_npz(args.calib) if args.calib else None
+    if rectifier is not None:
+        est.foc_l, est.camera_saperation = rectifier.focal_px, rectifier.baseline
+    mapper = None
+    if args.structures or rectifier is not None:
+        # 640x400 is small: levels 1-2 are cheap and still grass-free.
+        mapper = StructureMapper(camera_for(rectifier, (w, h)), levels=(1, 2),
+                                 depth_level=1 if rectifier is not None else None,
+                                 check_direction=False)
     print(f"{w}x{h} @ {args.fps} fps | focal {est.foc_l:.0f}px (vfov {args.vfov} deg) baseline {args.baseline} m | "
           f"stereo depth {'on' if est.use_stereo_depth else 'off'} | assumed height {args.height} m"
           + ("" if args.no_ros else f" | live view: view_stereo.sh --ns {args.ns}"))
@@ -187,9 +200,15 @@ def main(args):
             est.set_dt(max(pair.t_left - prev_t, 1e-3) if prev_t is not None else 1 / args.fps)
             prev_t = pair.t_left
             set_drone_inputs(est, args.height)
-            frames = [cv2.cvtColor(pair.left, cv2.COLOR_GRAY2BGR), cv2.cvtColor(pair.right, cv2.COLOR_GRAY2BGR)]
+            left_img, right_img = pair.left, pair.right
+            if rectifier is not None:
+                left_img, right_img = rectifier.rectify(left_img, right_img)
+            frames = [cv2.cvtColor(left_img, cv2.COLOR_GRAY2BGR), cv2.cvtColor(right_img, cv2.COLOR_GRAY2BGR)]
             t0 = time.perf_counter()
             result = est.processing(frames, idx)       # the estimator takes BGR frames
+            if mapper is not None:
+                mapper.step(result)                    # no pose: map in the camera body frame
+                mapper.draw(result.frames[0])
             busy += time.perf_counter() - t0
             if ae:
                 ae.update(cam, pair.left, pair.right)
@@ -211,6 +230,8 @@ def main(args):
                           "depth_m": None if math.isnan(est.depth_median) else round(float(est.depth_median), 2),
                           "exposure_us": round(cam.exposure_us), "gain": round(cam.gain, 2),
                           "auto_exposure": ae is not None}
+                if mapper is not None:
+                    status.update(mapper.stats())
                 print(" | ".join(f"{k} {v}" for k, v in status.items()), flush=True)
                 if view:
                     view.status(status)
@@ -237,6 +258,8 @@ def parse_args(argv=None):
     p.add_argument('--baseline', type=float, default=0.05, help='stereo baseline in m')
     p.add_argument('--height', type=float, default=0.0, help='assumed height above the scene in m (0 = like testRealCameras)')
     p.add_argument('--stereo-depth', action='store_true', help='stereo depth (needs calibrated, rectified cameras)')
+    p.add_argument('--structures', action='store_true', help='overlay large structures (boxes/buildings)')
+    p.add_argument('--calib', default=None, help='stereo calibration .npz: rectify + dense structure depth')
     p.add_argument('--ns', default='/vo', help='ROS namespace of the live view')
     p.add_argument('--preview-fps', type=float, default=10.0)
     p.add_argument('--preview-scale', type=float, default=0.5)
