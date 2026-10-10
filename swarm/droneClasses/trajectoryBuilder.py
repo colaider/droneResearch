@@ -32,3 +32,17 @@ class Segment:
     def get_trajectory(self):
         return self.c
 
+
+
+class MINCO:
+    def __init__(self, w:np.ndarray):
+        self.w = w
+
+    def create_sub_trajectories(self):
+        pass
+
+    def interconect_trajectory(self):
+        pass
+
+    def discritize_trajectory(self):
+        pass

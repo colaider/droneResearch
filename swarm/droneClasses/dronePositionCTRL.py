@@ -8,8 +8,8 @@ class DronePositionCTRL(DroneCTRL):
 
         self.k_f1 = np.array([0.5, 0.5, 0.5, 0.8])  
         self.k_f2 = np.array([0.15, 0.15, 0.2, 0.2])
-        self.kp_pos = np.diag([0.3, 0.3, 0.35, 0.06])
-        self.kd_pos = np.diag([0.02, 0.02, 0.02, 0.1])
+        self.kp_pos = np.diag([0.3, 0.3, 0.75, 0.06])
+        self.kd_pos = np.diag([0.02, 0.02, 0.005, 0.1])
         self.prev_U = np.zeros(4)
 
         self.kp_vel = np.array([2.0, 2.0, 1.0])    
