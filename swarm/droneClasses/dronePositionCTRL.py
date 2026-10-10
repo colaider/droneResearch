@@ -36,14 +36,14 @@ class DronePositionCTRL(DroneCTRL):
         X_d = self.rot(omega) @ X_d_body
         
         X_err = setpoint - X_body
-        X_err_d = X_d - S_d
+        X_err_d = S_d - X_d
 
         v = S_dd + self.kp_pos @ X_err + self.kd_pos @ X_err_d
 
         U = np.linalg.inv(self.f1(omega)) @ (v + self.f2(omega) @ X_d_body)
         self.prev_U = U
         np.clip(U, -2,2)
-        self.pr_setpoint = setpoint
+        self.pr_setpoint = setpoint.copy()
         self.pr_dr_setpoint = S_d
         return self.velocity_to_cmd(U)
 
