@@ -22,6 +22,7 @@ if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
 from swarm.compVision.visualAccEst import VisulaAcEst   # the real estimator, used as-is
+from swarm.compVision.frame import prepare_camera_frame
 
 if __package__:
     from .display import compose_camera_display
@@ -79,10 +80,8 @@ def open_camera(index, res):
 
 
 def prepare_frame(frame, rotation):
-    # Keep the focal calibration at the same pixel scale even if capture ignores RES.
-    if (frame.shape[1], frame.shape[0]) != RES:
-        frame = cv2.resize(frame, RES, interpolation=cv2.INTER_AREA)
-    return cv2.rotate(frame, rotation) if rotation is not None else frame
+    """Compatibility adapter; image preparation lives in frame.py."""
+    return prepare_camera_frame(frame, resolution=RES, rotation=rotation)
 
 
 def main(left_idx=0, right_idx=1, *, filters=None, kernel_size=None, rotate=True):

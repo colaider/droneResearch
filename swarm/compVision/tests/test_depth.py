@@ -6,7 +6,7 @@ from unittest.mock import patch
 import cv2
 import numpy as np
 
-from swarm.compVision.depth import DepthEstimator
+from swarm.compVision.visualDepthEst import DepthEstimator
 
 
 class DepthEstimatorTests(unittest.TestCase):

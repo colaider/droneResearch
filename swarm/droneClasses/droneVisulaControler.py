@@ -1,7 +1,7 @@
 from swarm.droneClasses.dronePositionCTRL import DronePositionCTRL
 from swarm.filters.FKF import FusionKalmanFilter
 import numpy as np
-from swarm.droneClasses.stateMachine import Step, StateMachine
+
 
 class DroneVisulaCTRL(DronePositionCTRL):
     def __init__(self, drone_entity, dt=0.01, camera_fps=30):
@@ -10,7 +10,7 @@ class DroneVisulaCTRL(DronePositionCTRL):
         self.camera_step_period = max(1, round(self.camera_frame_interval / dt))
         self.last_frame_time = None
         self.cam_pos = None                      # lazily initialized on first position_ctrl_fused call
-        self.mission = self._build_mission()
+
         # 4D fusion: body [vx, vy, vz, yaw_rate]
         self.fkf = FusionKalmanFilter(dim=4)
         self.fused_vel = np.zeros(3)             # [vx, vy, vz] body, for logging
@@ -29,6 +29,7 @@ class DroneVisulaCTRL(DronePositionCTRL):
         return np.array([cv[0], cv[1], self.get_lin_vel()[2], cv[3]])
 
     # ---------------- fused control ----------------
+
     def position_ctrl_fused(self, setpoint):
         fp = self.drone.frame_processor
 
@@ -90,7 +91,5 @@ class DroneVisulaCTRL(DronePositionCTRL):
 
         self.drone.camera_show()
 
-    # Add this to the imports in your visual controller file:
-    # from <your module> import Step, StateMachine
     def get_bar_z(self):
         return self.get_position()[2]
