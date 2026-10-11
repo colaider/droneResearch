@@ -4,6 +4,9 @@ from dataclasses import dataclass
 import cv2
 import numpy as np
 
+from swarm.compVision.frame import compose_depth_display
+from swarm.compVision.smallFeatures import LAYER_COLORS, unique_point_mask
+
 
 def triangulate_altitude(news, olds, *, focal_px, baseline, disparity_direction,
                          frame_size=None, use_stereo_depth=True,
@@ -90,6 +93,91 @@ class StereoDepth:
     valid: np.ndarray
     scores: np.ndarray       # normalized patch correlation, not a probability
     sigma_depth: np.ndarray  # approximate depth uncertainty for map weighting
+
+
+@dataclass
+class FrameDepth:
+    """Aggregated stereo-depth results for one frame."""
+    by_layer: list
+    points: np.ndarray
+    colors: np.ndarray
+    sigma: np.ndarray
+    median: float
+    valid_fraction: float
+    view: np.ndarray
+
+
+def estimate_frame_depth(frame, all_points, point_colors, layer_tracks, stereo, *,
+                         use_stereo_depth, focal_px, baseline, direction,
+                         cross_layer_min_distance):
+    """Estimate and aggregate current-frame stereo depth for all feature layers.
+
+    Per-layer results remain aligned with their input points. The returned
+    ``points`` contains valid, de-duplicated full-resolution (u, v, Z) samples.
+    The right image in ``frame`` is annotated with valid stereo matches.
+    """
+    depth_by_layer = []
+    depth_points = np.empty((0, 3))
+    depth_colors = np.empty((0, 3), np.uint8)
+    depth_sigma = np.empty(0)
+    depth_median, depth_valid_frac = np.nan, 0.0
+    points, colors, sigma = [], [], []
+    valid_count = 0
+
+    for layer, uv in enumerate(all_points):
+        if use_stereo_depth:
+            result = stereo.estimate(
+                frame.pyramids[0][layer], frame.pyramids[1][layer], uv,
+                focal_px=focal_px, baseline=baseline,
+                direction=direction, pixel_scale=2 ** layer,
+            )
+        else:
+            n = len(uv)
+            result = StereoDepth(
+                np.full((n, 2), np.nan, np.float32),
+                np.full(n, np.nan),
+                np.zeros(n, bool),
+                np.full(n, np.nan),
+                np.full(n, np.nan),
+            )
+        depth_by_layer.append(result)
+        valid = result.valid
+        valid_count += int(valid.sum())
+        points.append(np.column_stack((uv[valid], result.depths[valid])))
+        colors.append(point_colors[layer][valid])
+        sigma.append(result.sigma_depth[valid])
+
+        right = frame.frames[1]
+        for a, b in layer_tracks[layer].links:
+            if valid[a] and valid[b]:
+                cv2.line(
+                    right,
+                    tuple(result.right_points[a].astype(int)),
+                    tuple(result.right_points[b].astype(int)),
+                    LAYER_COLORS[layer % len(LAYER_COLORS)],
+                    1,
+                )
+        for x, y in result.right_points[valid].astype(int):
+            cv2.circle(right, (x, y), 2, LAYER_COLORS[layer % len(LAYER_COLORS)], -1)
+
+    total = sum(map(len, all_points))
+    depth_valid_frac = valid_count / total if total else 0.0
+    if valid_count:
+        points, colors, sigma = np.vstack(points), np.vstack(colors), np.concatenate(sigma)
+        keep = unique_point_mask(points[:, :2], cross_layer_min_distance)
+        depth_points, depth_colors, depth_sigma = points[keep], colors[keep], sigma[keep]
+        depth_median = float(np.median(depth_points[:, 2]))
+
+    depth_view = compose_depth_display(frame.gray_frames[0], depth_points, total)
+    return FrameDepth(
+        by_layer=depth_by_layer,
+        points=depth_points,
+        colors=depth_colors,
+        sigma=depth_sigma,
+        median=depth_median,
+        valid_fraction=depth_valid_frac,
+        view=depth_view,
+    )
 
 
 class SparseStereoDepth:

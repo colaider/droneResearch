@@ -5,7 +5,7 @@ import cv2
 import numpy as np
 
 from swarm.compVision.visualDepthEst import SparseStereoDepth, triangulate_altitude
-from swarm.compVision.visualAccEst import VisulaAcEst
+from swarm.compVision.visualEst import VisulaEst
 from swarm.compVision.terrainMap import PointMap
 from swarm.config.cameraConfig import StereoCameraConfig
 
@@ -20,6 +20,48 @@ def translate(im, dx, dy=0):
 
 
 class StereoTests(unittest.TestCase):
+    def test_processing_fits_velocity_before_independent_stereo_depth(self):
+        est = VisulaEst((640, 480), 60)
+        est.image_filters = ()
+        est.foc_l, est.camera_saperation = 400.0, .12
+        est.disparity_direction = np.array([-1.0, 0.0])
+        est.drone_pos[2] = 99.0
+        est.drone_vel[2] = .75
+        base = cv2.cvtColor(texture(), cv2.COLOR_GRAY2BGR)
+        est.processing([base, translate(base, -8)], 0)
+
+        current = translate(base, 2, 1)
+        with patch.object(est, 'estimate_velocities', wraps=est.estimate_velocities) as fit:
+            est.processing([current, translate(current, -8)], 1)
+
+        fit.assert_called_once()
+        flow, points = fit.call_args.args
+        self.assertGreaterEqual(len(flow), 2)
+        np.testing.assert_allclose(points[:, 2], 99.0)
+        self.assertGreater(len(est.depth_points), 2)
+        np.testing.assert_allclose(est.depth_points[:, 2], 6.0, atol=.15)
+        self.assertEqual(est.camera_velocity[2], .75)
+
+    def test_velocity_uses_supplied_height_regardless_of_stereo_availability(self):
+        est = VisulaEst((640, 480), 60)
+        est.image_filters = ()
+        est.foc_l, est.camera_saperation = 400.0, .12
+        est.disparity_direction = np.array([-1.0, 0.0])
+        est.drone_pos[2] = 99.0
+        base = cv2.cvtColor(texture(), cv2.COLOR_GRAY2BGR)
+        blank_right = np.zeros_like(base)
+        est.processing([base, blank_right], 0)
+
+        current = translate(base, 2, 1)
+        with patch.object(est, 'estimate_velocities', wraps=est.estimate_velocities) as fit:
+            est.processing([current, blank_right], 1)
+
+        fit.assert_called_once()
+        _, points = fit.call_args.args
+        self.assertGreaterEqual(len(points), 2)
+        np.testing.assert_allclose(points[:, 2], 99.0)
+        self.assertEqual(est.depth_valid_frac, 0.0)
+
     def test_two_surface_depths_at_three_scales(self):
         left = texture()
         right = translate(left, -8)
@@ -79,7 +121,7 @@ class StereoTests(unittest.TestCase):
 
     def test_pipeline_uses_current_stereo_when_disparity_changes_and_clears_disabled_depth(self):
         base = cv2.cvtColor(texture(), cv2.COLOR_GRAY2BGR)
-        est = VisulaAcEst((640, 480), 60); est.image_filters=()
+        est = VisulaEst((640, 480), 60); est.image_filters=()
         est.frame_processor.pyramid_levels=3; est.feature_min_distance=20
         est.foc_l=400; est.camera_saperation=.12; est.disparity_direction=np.array([-1.,0.])
         est.drone_pos[2]=99 # must not become measured depth

@@ -6,7 +6,7 @@ import cv2
 import numpy as np
 
 from swarm.compVision.smallFeatures import LAYER_COLORS, build_triangles, replenish, unique_point_mask
-from swarm.compVision.visualAccEst import VisulaAcEst
+from swarm.compVision.visualEst import VisulaEst
 
 
 class TrackingLayerTests(unittest.TestCase):
@@ -16,7 +16,7 @@ class TrackingLayerTests(unittest.TestCase):
         texture = np.random.default_rng(4).integers(0, 256, (61, 81), dtype=np.uint8)
         self.image = cv2.cvtColor(cv2.resize(texture, (self.width, self.height),
                                            interpolation=cv2.INTER_NEAREST), cv2.COLOR_GRAY2BGR)
-        self.est = VisulaAcEst((self.width, self.height), 60)
+        self.est = VisulaEst((self.width, self.height), 60)
         self.est.frame_processor.pyramid_levels = 3  # fixed fixture; production may use more layers
         self.est.disparity_direction = np.array([0., 1.])  # synthetic right image shifts down
         self.est.image_filters = ()
@@ -52,7 +52,7 @@ class TrackingLayerTests(unittest.TestCase):
 
     def test_combined_output_clears_on_lost_tracks_and_recovers(self):
         self.run_layers()
-        with patch('swarm.compVision.visualAccEst.cv2.calcOpticalFlowPyrLK',
+        with patch('swarm.compVision.visualVelEst.cv2.calcOpticalFlowPyrLK',
                    return_value=(None, None, None)):
             self.est.processing(self.stereo(2), 2)
         self.assertEqual([p.shape for p in self.est.all_points], [(0, 2)] * 3)
@@ -81,6 +81,7 @@ class TrackingLayerTests(unittest.TestCase):
             self.assertLessEqual(len(self.est.layer_tracks[layer].new_points), 60)
         self.assertEqual(len(self.est.point_layers), len(self.est.velocity_point_mask))
         self.assertTrue(np.isfinite(self.est.camera_velocity).all())
+        self.assertGreater(len(self.est.depth_points), 20)
         expected_vx = -4 * 10 / (self.est.foc_l * self.est.dt)
         self.assertAlmostEqual(self.est.camera_velocity[0], expected_vx, delta=.05)
 
@@ -112,9 +113,23 @@ class TrackingLayerTests(unittest.TestCase):
         with patch.object(self.est, 'lucas_kanade_flow', wraps=self.est.lucas_kanade_flow) as track:
             self.est.processing(self.stereo(1), 1)
         self.assertEqual([call.kwargs['layer'] for call in track.call_args_list], [0, 1, 2, 3])
+        self.assertEqual([len(call.kwargs['tracking_gray']) for call in track.call_args_list], [2] * 4)
         self.assertEqual([call.kwargs['tracking_gray'][0].shape for call in track.call_args_list],
                          [(481, 641), (241, 321), (121, 161), (61, 81)])
         self.assertEqual(set(self.est.layer_tracks), {0, 1, 2, 3})
+
+    def test_temporal_tracking_does_not_require_right_image_pyramids(self):
+        self.est.update_frame(self.stereo(0), 0)
+        self.est.buffer[-1].pyramids[1] = []
+        self.est.current_frame.pyramids[1] = []
+        self.est.update_frame(self.stereo(1), 1)
+        self.est.buffer[-1].pyramids[1] = []
+        self.est.current_frame.pyramids[1] = []
+
+        self.est.aply_flow()
+
+        self.assertEqual(set(self.est.layer_tracks), {0, 1, 2})
+        self.assertGreater(sum(len(points) for points in self.est.all_points), 0)
 
     def test_one_failed_layer_does_not_erase_other_layers(self):
         self.run_layers()
@@ -123,7 +138,7 @@ class TrackingLayerTests(unittest.TestCase):
             if previous.shape == (241, 321):
                 return None, None, None
             return actual_lk(previous, current, points, next_points, **options)
-        with patch('swarm.compVision.visualAccEst.cv2.calcOpticalFlowPyrLK',
+        with patch('swarm.compVision.visualVelEst.cv2.calcOpticalFlowPyrLK',
                    side_effect=fail_half_resolution):
             self.est.processing(self.stereo(2), 2)
         self.assertEqual(len(self.est.all_points), 3)
@@ -166,7 +181,7 @@ class TrackingLayerTests(unittest.TestCase):
     def test_feature_spacing_scales_with_native_resolution(self):
         self.est.processing(self.stereo(0), 0)
         from swarm.compVision.smallFeatures import replenish as actual_replenish
-        with patch('swarm.compVision.visualAccEst.replenish', wraps=actual_replenish) as detect:
+        with patch('swarm.compVision.visualVelEst.replenish', wraps=actual_replenish) as detect:
             self.est.processing(self.stereo(1), 1)
         self.assertEqual([call.kwargs['min_distance'] for call in detect.call_args_list],
                          [30, 15, 7.5])

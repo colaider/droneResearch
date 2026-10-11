@@ -67,6 +67,5 @@ three pyramid levels, a 1,500-point budget, 3 m camera height, 500 px focal leng
 tracks produced 66 accumulated voxels. Accepted stereo depth had 0.0654 m mean
 absolute error and 0.1155 m RMSE against the renderer's optical-axis depth at the
 sampled pixels. Sparse tracking/depth processing took 15.2 ms and 14.5 ms on this
-machine (rendering and the separate dense structure mapper excluded). This small
-smoke check is not a full-resolution or flight benchmark. Textureless ground and
-smooth roofs remain sparsely observed; the map does not fill those gaps.
+machine (rendering and the separate dense structure mapper excluded). This small smoke check is not a full-resolution or flight benchmark. Textureless
+ground and smooth roofs remain sparsely observed; the map does not fill those gaps.
