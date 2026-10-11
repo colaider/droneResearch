@@ -30,8 +30,9 @@ Minimal use (no runner needed):
     #     U = ctrl.position_control(setpoint)   # [roll, pitch, yaw_rate, throttle]
     d.close()
 """
-import threading
 
+
+import threading
 import numpy as np
 
 
@@ -64,11 +65,6 @@ class _IMU:
 # --- the real drone struct -----------------------------------------------------------------
 
 class RealDroneStruct:
-    """Same interface as the sim DroneStruct, fed from /drone topics.
-
-    Pass an existing rclpy `node` to share one, or leave it None and the struct makes its own
-    node and spins it in a background thread (so callbacks keep the values fresh on their own).
-    """
 
     def __init__(self, drone_ns="/drone", node=None):
         import rclpy

@@ -1,7 +1,7 @@
 import cv2
 import numpy as np
 from swarm.compVision.terrainMap import PointMap
-from genesis.utils.misc import tensor_to_array
+
 from swarm.compVision.visualEst import VisulaEst
 from swarm.compVision.frame import prepare_camera_frame, compose_camera_display
 
@@ -78,6 +78,7 @@ class DroneStruct:
 
 
     def camera_step(self):
+        from genesis.utils.misc import tensor_to_array
         # Capture pose in the same simulation step as the stereo exposure.
         # Ground-truth pose is used ONLY to register/validate the map, never for stereo depth.
         self.map_pose_position = tensor_to_array(self._drone.get_pos()).reshape(-1, 3)[0].copy()
