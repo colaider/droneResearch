@@ -156,6 +156,7 @@ class RB3DroneBridge:
         self.gyro = np.zeros(3)
         self.mag = np.zeros(3)
         self.quat = np.array([1.0, 0.0, 0.0, 0.0])  # (w, x, y, z)
+        self.att = np.zeros(3)                       # measured [roll, pitch, yaw] from the FC [rad]
         self.baro_z = 0.0
         self._last_pair = None
 
@@ -280,6 +281,7 @@ class RealDroneNode:
     def _on_att(self, m):
         if self._bridge is None:
             return
+        self._bridge.att = np.array([m.vector.x, m.vector.y, m.vector.z])   # measured roll/pitch/yaw [rad]
         self._bridge.quat = _euler_to_quat(m.vector.x, m.vector.y, m.vector.z)
 
     def _on_baro(self, m):
@@ -325,8 +327,11 @@ class RealDroneNode:
             throttle_cap=a.throttle_cap, yaw_rate_cap=a.yaw_rate_cap)
 
         mode = "DRY RUN (publishing nothing)" if a.dry_run else "FLYING (publishing cmd_attitude)"
+        cam_period = max(1, int(round((1.0 / a.fps) / a.dt)))   # control steps per camera frame
         print(f"=== {mode} === hover={a.altitude} m  hover_throttle={sm.controller.hover_throttle:.3f}  "
               f"tilt<= {a.max_tilt_deg} deg  throttle<= {a.throttle_cap}", flush=True)
+        print(f"    control dt={a.dt:.4f}s ({1.0/a.dt:.0f} Hz)  camera fps={a.fps} "
+              f"(camera_step every {cam_period} control steps)", flush=True)
 
         step, t0, next_t = 0, time.monotonic(), time.monotonic()
         try:
@@ -343,12 +348,70 @@ class RealDroneNode:
 
                 if step % 50 == 0:
                     fp = self._bridge.frame_processor
-                    vx, vy, vz, yaw = (float(x) for x in fp.camera_velocity)
+                    # camera_velocity = [vx, vy, z_estimated, yaw_rate]  (index 2 is the vision DEPTH
+                    # scale, not a vertical velocity -- the controller replaces vz with IMU vz).
+                    vx, vy, z_est, yaw = (float(x) for x in fp.camera_velocity)
                     cam = getattr(sm.controller, "cam_pos", None)
                     cmd = getattr(sm.controller, "last_cmd", None)
+
+                    # --- camera: are any points actually detected / used this frame? ---
+                    n_pts = int(len(fp.point_layers))                               # features tracked
+                    n_vel = int(fp.velocity_point_mask.sum()) if fp.velocity_point_mask.size else 0
+                    depth_pct = fp.depth_valid_frac * 100.0                          # % with stereo depth
+
+                    # --- depth source check (the barometer question) ---
+                    # Horizontal velocity scale comes ONLY from per-point stereo depth. When stereo
+                    # drops out the swarm estimator falls back to IMU dead-reckoning for vx/vy -- the
+                    # baro CANNOT scale horizontal flow from here (it only knows altitude). Altitude
+                    # itself is always baro+IMU driven (vision vz is discarded), so z stays covered.
+                    stereo_ok = np.isfinite(fp.depth_median) and fp.depth_valid_frac > 0.0
+                    depth_src = ("stereo" if stereo_ok
+                                 else "LOST -> vx/vy=IMU dead-reckoning (baro still holds altitude)")
+
+                    # --- altitude actually used by the controller ---
+                    baro_alt = self._bridge.baro_z              # RB3 baro altitude (BIASED: rel. to start-up level)
+                    ctrl_alt = None if cam is None else float(cam[2])   # fused z the loop closes on
+
+                    # --- motor bias: we publish cmd_attitude; Betaflight does the mixing ---
+                    if cmd is None:
+                        bias = "cmd=None (no attitude output yet -> nothing biasing motors)"
+                    else:
+                        r, pt, yr, th = cmd
+                        bias = (f"cmd roll={r:+.3f} pitch={pt:+.3f} yaw_rate={yr:+.3f} throttle={th:.3f}"
+                                f"  (FC mixes this to the 4 motors)")
+
+                    # attitude the CONTROL LOOP itself uses (IMU-integrated in DroneCTRL.step);
+                    # this is what the bias U is computed against, not external telemetry.
+                    try:
+                        croll, cpitch, cyaw = sm.controller.get_attitude()
+                        ctrl_att = f"ctrl_att roll={croll:+.3f} pitch={cpitch:+.3f} yaw={cyaw:+.3f} rad"
+                    except AttributeError:
+                        ctrl_att = "ctrl_att n/a (controller.step not run yet)"
+                    # attitude the FC reports back on /drone/attitude (telemetry; 0 until FC streams)
+                    mroll, mpitch, myaw = self._bridge.att
+                    fc_att = f"fc_att roll={mroll:+.3f} pitch={mpitch:+.3f} yaw={myaw:+.3f} rad"
+
+                    # yaw channel: the loop DOES bias yaw (cmd[2]=yaw_rate), but the gain is small
+                    # and at rest the error is ~0, so the rate is tiny. Show the error driving it:
+                    #   yaw_sp  = held yaw setpoint (captured at hover start, cam_pos[3])
+                    #   yaw_now = fused yaw the loop uses, yaw_err = what produces the yaw-rate cmd
+                    tgt = getattr(sm, "target", None)
+                    yaw_sp = None if tgt is None else float(tgt[3])
+                    yaw_now = None if cam is None else float(cam[3])
+                    if yaw_sp is not None and yaw_now is not None:
+                        yaw_dbg = (f"yaw_sp={yaw_sp:+.4f} yaw_now={yaw_now:+.4f} "
+                                   f"yaw_err={yaw_sp - yaw_now:+.4f} rad")
+                    else:
+                        yaw_dbg = "yaw_sp=n/a (hover not started -> yaw not commanded yet)"
+
                     print(f"[{step}] stage={sm.stage} armed={self.armed} "
-                          f"vx={vx:+.2f} vy={vy:+.2f} depth={fp.depth_median:.2f} "
-                          f"cam_pos={None if cam is None else np.round(cam,2)} cmd={cmd}", flush=True)
+                          f"dt={a.dt:.4f}s({1.0/a.dt:.0f}Hz) fps={a.fps} | "
+                          f"points={n_pts} vel_used={n_vel} depth_valid={depth_pct:.0f}% "
+                          f"depth_src={depth_src} | "
+                          f"vx={vx:+.2f} vy={vy:+.2f} z_est={z_est:.2f} depth={fp.depth_median:.2f} | "
+                          f"baro_alt={baro_alt:+.2f}m "
+                          f"ctrl_alt={'n/a' if ctrl_alt is None else f'{ctrl_alt:+.2f}m'} "
+                          f"setpoint={a.altitude:.2f}m | {bias} | {ctrl_att} | {fc_att} | {yaw_dbg}", flush=True)
 
                 step += 1
                 next_t += a.dt

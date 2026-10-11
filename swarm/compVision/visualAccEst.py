@@ -447,7 +447,7 @@ class VisulaAcEst:
         self.dt = dt
 
     def _fallback_velocity(self):
-        print("fallback velocity used")
+        # print("fallback velocity used")
         # [vx, vy, vz, yaw_rate] -- same layout as the estimated camera_velocity
         return np.array([self.drone_vel[0], self.drone_vel[1], self.drone_vel[2], self.drone_ang_vel[2]])
 
