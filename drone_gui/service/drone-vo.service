@@ -1,4 +1,7 @@
 [Unit]
+# Keep retrying for as long as it takes: giving up permanently is worse than a retry
+# every 5 s. This key is only honoured in [Unit] - systemd ignores it in [Service].
+StartLimitIntervalSec=0
 # The stereo visual-odometry estimator (realCameraTest/testRB3Cameras.py): the swarm
 # VisulaAcEst running on the drone's own cameras, publishing /vo/preview/compressed and
 # /vo/status.
@@ -21,7 +24,6 @@ ExecStart=/bin/bash -lc 'source /opt/ros/jazzy/setup.bash && source /home/ubuntu
 SyslogIdentifier=drone-vo
 Restart=always
 RestartSec=5
-StartLimitIntervalSec=0
 KillSignal=SIGINT
 TimeoutStopSec=10
 
