@@ -1,0 +1,26 @@
+[Unit]
+# The flight controller bridge, as a supervised service so the control panel can start and
+# stop it and so exactly ONE process owns /dev/ttyACM0: a second opener gets corrupted MSP
+# replies and both die.
+Description=Drone flight controller bridge (rb3_control, MSP over USB + RB3 sensors)
+After=rb3-usb-host.service sscrpcd.service
+Wants=rb3-usb-host.service
+ConditionPathExists=/dev/ttyACM0
+
+[Service]
+Type=simple
+User=ubuntu
+Environment=ROS_DOMAIN_ID=42
+# ros2 launch needs the workspace on PYTHONPATH/AMENT_PREFIX_PATH, which only the setup
+# scripts provide, hence the login-style shell.
+ExecStart=/bin/bash -lc 'source /opt/ros/jazzy/setup.bash && source /home/ubuntu/ros2_ws/install/setup.bash && exec ros2 launch rb3_control control.launch.py'
+SyslogIdentifier=drone-control
+Restart=on-failure
+RestartSec=3
+# The radio keeps arm/disarm, so a restart cannot take the drone over on its own: the node
+# requires the MSP OVERRIDE switch to go off->on before it sends anything.
+KillSignal=SIGINT
+TimeoutStopSec=10
+
+[Install]
+WantedBy=multi-user.target

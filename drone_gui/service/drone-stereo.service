@@ -1,0 +1,20 @@
+[Unit]
+# The stereo camera node. Needs the kernel side up first (camss combo mode + CAM0B bridge),
+# which rb3-stereo-setup.service does.
+Description=Drone stereo camera node (rb3_stereo, /stereo topics)
+After=rb3-stereo-setup.service
+Requires=rb3-stereo-setup.service
+
+[Service]
+Type=simple
+User=ubuntu
+Environment=ROS_DOMAIN_ID=42
+ExecStart=/bin/bash -lc 'source /opt/ros/jazzy/setup.bash && source /home/ubuntu/ros2_ws/install/setup.bash && export FASTRTPS_DEFAULT_PROFILES_FILE=$(ros2 pkg prefix rb3_stereo)/share/rb3_stereo/config/fastdds.xml && exec ros2 launch rb3_stereo stereo.launch.py'
+SyslogIdentifier=drone-stereo
+Restart=on-failure
+RestartSec=3
+KillSignal=SIGINT
+TimeoutStopSec=10
+
+[Install]
+WantedBy=multi-user.target
