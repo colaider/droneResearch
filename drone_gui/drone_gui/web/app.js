@@ -74,6 +74,7 @@ function render(state) {
   }
 
   renderSensors(flight);
+  renderPosition(state.position);
 
   // --- camera
   const sub = $('camera-sub');
@@ -117,9 +118,63 @@ function render(state) {
   if (label) label.textContent = 'last ' + Math.round((state.window_seconds || 120) / 60 * 10) / 10 + ' minutes';
 }
 
-// The RB3's own IMU, barometer and magnetometer. These come from the sensor core and are
-// independent of the flight controller, so they keep reading even when the FC link is down -
-// which is exactly when you want to know whether the board itself is still healthy.
+// The RB3's own IMU, barometer and magnetometer. The sensors themselves are on the sensor
+// core and owe nothing to the flight controller, but they are PUBLISHED by the rb3_control
+// node, so they stop with it. Hence "not streaming" here whenever drone-control is down,
+// rather than the board's own motion.
+// Position is deliberately explicit about where each number came from. The flight
+// controller supplies height only - Betaflight has no X/Y without GPS, and none is fitted -
+// so X/Y can only come from the stereo estimator publishing odometry.
+function renderPosition(position) {
+  position = position || {};
+  const odom = position.odom, vo = position.vo;
+
+  const set = (id, value, digits) => {
+    const cell = $(id);
+    if (cell) cell.textContent = (value === null || value === undefined) ? '--' : fmt(value, digits);
+  };
+
+  set('pos-x', odom ? odom.position[0] : null, 2);
+  set('pos-y', odom ? odom.position[1] : null, 2);
+  set('pos-z', odom ? odom.position[2] : (position.fc_altitude_m ?? null), 2);
+  const posSource = $('pos-source');
+  if (posSource) {
+    const missing = !odom;
+    posSource.classList.toggle('dead', missing);
+    posSource.textContent = odom
+      ? ('odom' + (odom.frame ? ' · frame ' + odom.frame : ''))
+      : 'no X/Y — nothing publishes odometry yet (z is the FC height)';
+  }
+
+  // The estimator reports velocity, not position: /vo/status carries vx, vy and yaw rate.
+  const velocity = odom ? odom.velocity
+    : (vo ? [vo.vx, vo.vy, null] : null);
+  set('vel-x', velocity ? velocity[0] : null, 2);
+  set('vel-y', velocity ? velocity[1] : null, 2);
+  set('vel-z', velocity ? velocity[2] : null, 2);
+  const velSource = $('vel-source');
+  if (velSource) {
+    velSource.classList.toggle('dead', !velocity);
+    velSource.textContent = odom ? 'odom twist'
+      : vo ? 'stereo estimator (vx, vy only)'
+      : 'no velocity source';
+  }
+
+  set('vo-tracked', vo ? vo.tracked : null, 0);
+  set('vo-depth', vo && vo.depth_m !== null ? vo.depth_m : null, 2);
+  set('vo-fps', vo ? vo.fps : null, 1);
+  const voSource = $('vo-source');
+  if (voSource) {
+    voSource.classList.toggle('dead', !vo);
+    voSource.textContent = vo
+      ? ((vo.estimator_ms ? vo.estimator_ms + ' ms/frame · ' : '') + (vo.mode || ''))
+      : 'estimator not running (realCameraTest/testRB3Cameras.py)';
+  }
+
+  set('pos-alt-fc', position.fc_altitude_m, 2);
+  set('pos-alt-baro', position.baro_altitude_m, 2);
+}
+
 function renderSensors(flight) {
   const axes = (prefix, values, digits) => {
     ['x', 'y', 'z'].forEach((axis, i) => {

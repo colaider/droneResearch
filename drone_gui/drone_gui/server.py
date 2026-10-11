@@ -131,6 +131,15 @@ class State:
                 "mag_ut": list(mag) if mag else None,
                 "sensors": status.get("rb3_sensors") if live else None,
             },
+            # Where the drone thinks it is. Z comes from the flight controller (fused
+            # baro+IMU); there is no X/Y from it at all, since Betaflight only knows position
+            # with GPS and none is configured. X/Y has to come from the stereo estimator.
+            "position": {
+                "odom": ros.get("odom", 5.0),
+                "vo": ros.get("vo_status", 10.0),
+                "fc_altitude_m": ros.get("altitude", 2.0),
+                "baro_altitude_m": ros.get("baro_altitude", 2.0),
+            },
             "camera": {
                 "age": round(ros.frame_age(), 1) if ros.frame_age() is not None else None,
                 "frames": ros.frame_count,

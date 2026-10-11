@@ -53,8 +53,9 @@ class SshLink:
     def command(self):
         remote = ("source /opt/ros/jazzy/setup.bash && "
                   "source ~/ros2_ws/install/setup.bash 2>/dev/null; "
-                  "export ROS_DOMAIN_ID=%d && exec python3 -u - %s %s"
-                  % (self.cfg.domain_id, self.cfg.drone_ns, self.cfg.stereo_ns))
+                  "export ROS_DOMAIN_ID=%d && exec python3 -u - %s %s %s"
+                  % (self.cfg.domain_id, self.cfg.drone_ns, self.cfg.stereo_ns,
+                     self.cfg.vo_ns))
         return [
             "ssh", "-i", self.cfg.ssh_key,
             "-o", "BatchMode=yes",

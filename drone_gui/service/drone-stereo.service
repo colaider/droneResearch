@@ -4,6 +4,8 @@
 Description=Drone stereo camera node (rb3_stereo, /stereo topics)
 After=rb3-stereo-setup.service
 Requires=rb3-stereo-setup.service
+# Both open the cameras directly, so only one of them can run.
+Conflicts=drone-vo.service
 
 [Service]
 Type=simple
@@ -11,8 +13,10 @@ User=ubuntu
 Environment=ROS_DOMAIN_ID=42
 ExecStart=/bin/bash -lc 'source /opt/ros/jazzy/setup.bash && source /home/ubuntu/ros2_ws/install/setup.bash && export FASTRTPS_DEFAULT_PROFILES_FILE=$(ros2 pkg prefix rb3_stereo)/share/rb3_stereo/config/fastdds.xml && exec ros2 launch rb3_stereo stereo.launch.py'
 SyslogIdentifier=drone-stereo
-Restart=on-failure
-RestartSec=3
+# Same reasoning as drone-control: ros2 launch exits 0 when the node dies under it.
+Restart=always
+RestartSec=5
+StartLimitIntervalSec=0
 KillSignal=SIGINT
 TimeoutStopSec=10
 

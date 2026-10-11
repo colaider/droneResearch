@@ -5,7 +5,6 @@
 Description=Drone flight controller bridge (rb3_control, MSP over USB + RB3 sensors)
 After=rb3-usb-host.service sscrpcd.service
 Wants=rb3-usb-host.service
-ConditionPathExists=/dev/ttyACM0
 
 [Service]
 Type=simple
@@ -15,8 +14,16 @@ Environment=ROS_DOMAIN_ID=42
 # scripts provide, hence the login-style shell.
 ExecStart=/bin/bash -lc 'source /opt/ros/jazzy/setup.bash && source /home/ubuntu/ros2_ws/install/setup.bash && exec ros2 launch rb3_control control.launch.py'
 SyslogIdentifier=drone-control
-Restart=on-failure
-RestartSec=3
+# Restart=always, not on-failure: `ros2 launch` exits 0 when the node under it dies, so a
+# failure looks like a clean stop to systemd. The flight controller re-enumerating on USB
+# (which it does on a power glitch) kills the node with
+#   SerialException: device reports readiness to read but returned no data
+# and the service would otherwise stay dead until someone noticed.
+Restart=always
+RestartSec=5
+# Keep retrying for as long as it takes; with the FC unplugged the node exits immediately,
+# and giving up permanently is worse than a retry every 5 s.
+StartLimitIntervalSec=0
 # The radio keeps arm/disarm, so a restart cannot take the drone over on its own: the node
 # requires the MSP OVERRIDE switch to go off->on before it sends anything.
 KillSignal=SIGINT

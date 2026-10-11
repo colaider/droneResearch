@@ -52,6 +52,7 @@ def main():
 
     drone = (sys.argv[1] if len(sys.argv) > 1 else "/drone").rstrip("/")
     stereo = (sys.argv[2] if len(sys.argv) > 2 else "/stereo").rstrip("/")
+    vo = (sys.argv[3] if len(sys.argv) > 3 else "/vo").rstrip("/")
 
     rclpy.init(args=None)
     node = Node("drone_gui_agent")
@@ -92,18 +93,38 @@ def main():
     sub(FluidPressure, drone + "/pressure",
         lambda m: put("pressure", m.fluid_pressure / 100.0), qos_profile_sensor_data)
     sub(String, stereo + "/status", lambda m: put("stereo_status", json_or_none(m.data)), 10)
+    sub(String, vo + "/status", lambda m: put("vo_status", json_or_none(m.data)), 10)
+
+    # Whatever eventually estimates position publishes it here; rb3_control already consumes
+    # the same topic for its cmd_vel feedback. Nothing publishes it yet - see the README.
+    try:
+        from nav_msgs.msg import Odometry
+
+        def on_odom(msg):
+            p, t = msg.pose.pose.position, msg.twist.twist
+            put("odom", {"position": [p.x, p.y, p.z],
+                         "velocity": [t.linear.x, t.linear.y, t.linear.z],
+                         "yaw_rate": t.angular.z,
+                         "frame": msg.header.frame_id})
+
+        sub(Odometry, drone + "/odom", on_odom, 10)
+    except ImportError:
+        pass
 
     def on_frame(msg):
         frame["jpeg"] = bytes(msg.data)
         frame["stamp"] = time.monotonic()
 
+    # Only one of these can be running at a time (they open the same cameras), so whichever
+    # publishes is the one shown - the VO preview carries the tracking overlay.
     sub(CompressedImage, stereo + "/preview/compressed", on_frame, qos_profile_sensor_data)
+    sub(CompressedImage, vo + "/preview/compressed", on_frame, qos_profile_sensor_data)
 
     emit({"type": "hello", "domain": __import__("os").environ.get("ROS_DOMAIN_ID"),
-          "topics": [drone, stereo]})
+          "topics": [drone, stereo, vo]})
 
     names = ("status", "armed", "attitude", "altitude", "baro_altitude", "battery",
-             "imu", "mag", "pressure", "stereo_status")
+             "imu", "mag", "pressure", "stereo_status", "vo_status", "odom")
     telemetry_period, frame_period = 1.0 / TELEMETRY_HZ, 1.0 / FRAME_HZ
     next_telemetry = time.monotonic()
     try:

@@ -3,7 +3,7 @@
 # repo on a workstation:  ./install_board_units.sh ubuntu@192.168.1.243
 set -e
 cd "$(dirname "$0")"
-UNITS="drone-control.service drone-stereo.service"
+UNITS="drone-control.service drone-stereo.service drone-vo.service"
 
 if [ -n "$1" ]; then
   echo "installing on $1"

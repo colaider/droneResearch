@@ -61,12 +61,35 @@ Environment variables work too (`DRONE_HOST`, `DRONE_GUI_PORT`, `DRONE_GUI_BIND`
 | Panel | |
 | --- | --- |
 | Flight controller | who has control (radio or RB3), armed state, arming flags, roll/pitch/yaw, both altitudes, battery, and the sticks the RB3 sent next to the ones the FC used |
-| RB3 sensors | the board's own IMU, barometer and magnetometer (sensor core, independent of the flight controller): gyro, accel, mag with field magnitude, pressure and baro altitude, each with its stream rate, sample count and restart count |
+| RB3 sensors | the board's own IMU, barometer and magnetometer: gyro, accel, mag with field magnitude, pressure and baro altitude, each with its stream rate, sample count and restart count. The sensors are on the sensor core, but `rb3_control` publishes them, so they read "not streaming" while `drone-control` is down |
+| Position | x/y/z and velocity, each labelled with where it came from. The flight controller supplies height only - Betaflight has no X/Y without GPS and none is fitted - so x/y has to come from the stereo estimator |
 | Stereo preview | the `/stereo/preview/compressed` JPEG stream as MJPEG |
 | History | 2 minutes of altitude, attitude and battery |
 | Processes | every unit's state, with start / stop / restart and a journal viewer |
 | Board | uptime, load, temperature, memory, disk, whether `/dev/ttyACM0` exists and **which PID holds it**, and how many of the 4 sensor-core streams are alive |
 | Event log | arm/disarm, node restarts, board reboots, unit state changes, every action taken from the panel — appended to `~/.local/share/drone_gui/events.jsonl`, so it survives restarts of the panel itself |
+
+## Position, and what is missing for it
+
+There is no X/Y from the flight controller: Betaflight only knows position with GPS, and none
+is fitted (no UART carries the GPS function). What exists today:
+
+| | source | |
+| --- | --- | --- |
+| height | flight controller | fused baro+IMU, published as `altitude`; the RB3's own barometer is a second, independent estimate |
+| velocity x/y | stereo estimator | `/vo/status` carries `vx`, `vy` and `yaw_rate` from `VisulaAcEst` |
+| position x/y | **nothing** | the estimator reports velocity, not position |
+
+So the panel shows height and velocity, and says plainly that x/y has no source. Getting a
+position out needs the velocity integrated - `swarm/filters/FKF.py` is the filter meant for
+it - and published as `nav_msgs/Odometry` on `/drone/odom`. The panel already subscribes to
+that topic and `rb3_control` already consumes it for the `cmd_vel` path, so the day something
+publishes it, both light up with no further changes.
+
+`drone-vo` and `drone-stereo` cannot run together: both open the cameras directly through
+`rb3_stereo.stereo.StereoCamera`, so the units declare `Conflicts=` and systemd stops one when
+you start the other. The camera panel shows whichever is publishing - the VO preview is the
+one with the tracking overlay.
 
 ## Why the telemetry goes over SSH
 
