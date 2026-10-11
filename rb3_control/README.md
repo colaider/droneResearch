@@ -6,8 +6,9 @@ Betaflight bridge for the Qualcomm RB3 Gen 2: MSP over the flight controller's *
 
 ```
 ROS 2 topics  <->  flight_controller node  <->  MSP over USB  <->  Betaflight  <->  motors
-                                                      ^
-                                           radio (arm/disarm + takeover)
+                            ^                         ^
+         RB3 IMU/baro/mag --+              radio (arm/disarm + takeover)
+         (sensor core, see.py)
 ```
 
 ## Safety model
@@ -37,7 +38,16 @@ Namespace `/drone` when started from the launch file.
 | `altitude` | `std_msgs/Float32` | baro+IMU altitude [m] |
 | `battery` | `sensor_msgs/BatteryState` | voltage, current, mAh |
 | `armed` | `std_msgs/Bool` | armed state |
-| `status` | `std_msgs/String` | JSON: mode, switches, arming flags, sticks sent vs used |
+| `status` | `std_msgs/String` | JSON: mode, switches, arming flags, sticks sent vs used, sensor stream health |
+| `imu` | `sensor_msgs/Imu` | **RB3's own** IMU: gyro [rad/s] + accel [m/s²] |
+| `mag` | `sensor_msgs/MagneticField` | RB3's own magnetometer [T] |
+| `pressure` | `sensor_msgs/FluidPressure` | RB3's own barometer [Pa] |
+| `baro_altitude` | `std_msgs/Float32` | altitude [m] above the start-up pressure level |
+
+The last four come from the RB3's **own** sensors (ICM-42688-P, ICP-10111, AKM) through
+Qualcomm's sensor core, not from the flight controller, so they keep publishing while the radio
+has control. They are independent of MSP - see `docs/SENSORS.md`, and note the warning there
+about *not* trying to reach them through the device tree.
 
 `cmd_attitude` is the direct path. `cmd_vel` runs the ported velocity PID from
 `swarm/droneClasses/dronePositionCTRL.py` (`control.VelocityController`) and only takes
@@ -61,10 +71,17 @@ If no `/dev/ttyACM*` appears at all, the Renesas USB host controller is missing 
 Copy `renesas_usb_fw.mem` (Renesas uPD720201 firmware package) to `/lib/firmware/` and reboot;
 see `docs/USB_SETUP.md`.
 
+For the RB3's own sensors:
+
+```bash
+sudo apt install qcom-sensors-test-apps     # see_workhorse; see docs/SENSORS.md
+```
+
 ## Use
 
 ```bash
 ros2 run rb3_control fc_check -- --watch        # read-only preflight + live view
+ros2 run rb3_control sensors                   # RB3 IMU/baro/mag only, no FC needed
 ros2 launch rb3_control control.launch.py       # the bridge
 ros2 run rb3_control teleop --ros-args -r __ns:=/drone   # keyboard sticks, props off
 ros2 topic echo /drone/status
@@ -89,4 +106,5 @@ ros2 topic pub -r 20 /drone/cmd_attitude geometry_msgs/Twist \
 
 See `config/control.yaml`. The ones that matter most: `max_tilt_deg` (how much tilt full stick
 means), `hover_throttle` (measure it in a manual hover before using `cmd_vel`), and
-`command_timeout` (how quickly a silent publisher hands control back to the radio).
+`command_timeout` (how quickly a silent publisher hands control back to the radio). The
+`see_*` parameters set the RB3 sensor rates; `see_enable: false` turns those streams off.

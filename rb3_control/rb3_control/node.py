@@ -8,11 +8,18 @@ Topics (relative to the node namespace, /drone with the launch file):
                                          needs odom for feedback, ignored otherwise
     odom           nav_msgs/Odometry     velocity feedback for cmd_vel (from the visual estimator)
   PUBLISH
-    attitude       geometry_msgs/Vector3Stamped   roll/pitch/yaw [rad]
-    altitude       std_msgs/Float32               baro+IMU altitude [m]
+    attitude       geometry_msgs/Vector3Stamped   roll/pitch/yaw [rad], from the FC
+    altitude       std_msgs/Float32               baro+IMU altitude [m], from the FC
     battery        sensor_msgs/BatteryState       voltage, current, mAh
     armed          std_msgs/Bool                  Betaflight armed state
     status         std_msgs/String (JSON)         full state: mode, switches, arming flags, rates
+    imu            sensor_msgs/Imu                RB3 on-board IMU: gyro [rad/s] + accel [m/s^2]
+    mag            sensor_msgs/MagneticField      RB3 on-board magnetometer [T]
+    pressure       sensor_msgs/FluidPressure      RB3 on-board barometer [Pa]
+    baro_altitude  std_msgs/Float32               altitude [m] from the RB3 barometer
+
+The RB3's own sensors come from the sensor core, not from the flight controller - see see.py.
+They are independent of the MSP link, so they keep publishing while the radio has control.
 
 SAFETY MODEL (same as the bench-tested setup on the other airframe)
   - The radio arms and disarms. This node never arms.
@@ -34,10 +41,12 @@ from nav_msgs.msg import Odometry
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
-from sensor_msgs.msg import BatteryState
+from rclpy.time import Time
+from sensor_msgs.msg import BatteryState, FluidPressure, Imu, MagneticField
 from std_msgs.msg import Bool, Float32, String
 
 from . import msp as msp_proto
+from . import see
 from .control import VelocityController, sticks_from_command
 
 
@@ -58,6 +67,18 @@ class FlightControllerNode(Node):
             ("throttle_max", 2000),
             ("hover_throttle", 0.55),         # used by the cmd_vel controller
             ("odom_timeout", 0.5),
+            # RB3 on-board sensors through the sensor core (see.py). 0 disables a stream;
+            # rates are snapped down to one the sensor supports.
+            ("see_enable", True),
+            ("see_sudo", True),               # see_workhorse needs root to reach the sensor PD
+            ("see_gyro_rate_hz", 200.0),      # drives the imu topic (max 500)
+            ("see_accel_rate_hz", 200.0),     # merged into the imu topic (max 500)
+            ("see_pressure_rate_hz", 25.0),   # max 25 on the ICP-10111
+            ("see_mag_rate_hz", 50.0),        # max 100
+            ("see_publish_rate_hz", 50.0),    # how often queued samples are drained
+            ("imu_frame", "imu_link"),
+            ("baro_reference_hpa", 0.0),      # 0: zero the barometer at start-up (relative
+                                              # altitude); otherwise treat it as sea level
         ])
         self.cfg = {entry.name: entry.value for entry in p}
         self.max_tilt = math.radians(self.cfg["max_tilt_deg"])
@@ -113,7 +134,13 @@ class FlightControllerNode(Node):
         self.pub_armed = self.create_publisher(Bool, "armed", 10)
         self.pub_status = self.create_publisher(String, "status", 10)
 
+        self.pub_imu = self.create_publisher(Imu, "imu", qos_profile_sensor_data)
+        self.pub_mag = self.create_publisher(MagneticField, "mag", qos_profile_sensor_data)
+        self.pub_pressure = self.create_publisher(FluidPressure, "pressure", qos_profile_sensor_data)
+        self.pub_baro = self.create_publisher(Float32, "baro_altitude", 10)
+
         self.timer = self.create_timer(1.0 / self.cfg["telemetry_rate_hz"], self.loop)
+        self.sensors = self.start_sensors()
 
     # --- subscriptions ----------------------------------------------------
     def on_cmd_attitude(self, msg: Twist):
@@ -238,10 +265,118 @@ class FlightControllerNode(Node):
             "sticks_sent": self.rc.snapshot()[:4],
             "sticks_fc": rc_values[:4],
             "frames_sent": self.rc.sent,
+            "rb3_sensors": self.sensors.info() if self.sensors else None,
         })))
+
+    # --- RB3 on-board sensors (sensor core) -------------------------------
+    def start_sensors(self):
+        """Start the SEE streams. Missing sensors are a warning, never fatal: the drone is
+        still flyable on the radio and the flight controller's own telemetry."""
+        if not self.cfg["see_enable"]:
+            return None
+        if not see.available():
+            self.get_logger().warn(
+                "see_workhorse not found - RB3 sensor topics disabled "
+                "(sudo apt install qcom-sensors-test-apps)")
+            return None
+
+        # Host monotonic (what the streams timestamp with) -> ROS clock.
+        self.time_offset_ns = self.get_clock().now().nanoseconds - int(time.monotonic() * 1e9)
+        self.ssc_offset = None
+        self.baro_reference = self.cfg["baro_reference_hpa"] or None
+        self.baro_samples = []
+
+        sensors = see.SensorSet({
+            "gyro": self.cfg["see_gyro_rate_hz"],
+            "accel": self.cfg["see_accel_rate_hz"],
+            "pressure": self.cfg["see_pressure_rate_hz"],
+            "mag": self.cfg["see_mag_rate_hz"],
+        }, sudo=self.cfg["see_sudo"], logger=self.get_logger())
+        sensors.start()
+        self.create_timer(1.0 / self.cfg["see_publish_rate_hz"], self.pump_sensors)
+        return sensors
+
+    def stamp_for(self, host_time, ssc_time):
+        """Timestamp a sample, preferring the sensor core's own clock.
+
+        `host_time` is when the reader thread got the line, so it carries scheduling jitter;
+        the SSC timestamp is taken in hardware. Both clocks run off the same SoC, so a single
+        offset measured at the first sample keeps the two aligned.
+        """
+        if ssc_time is not None:
+            if self.ssc_offset is None:
+                self.ssc_offset = host_time - ssc_time
+            host_time = ssc_time + self.ssc_offset
+        return Time(nanoseconds=int(host_time * 1e9) + self.time_offset_ns).to_msg()
+
+    def pump_sensors(self):
+        """Publish everything the sensor core produced since the last call."""
+        gyro = self.sensors.get("gyro")
+        accel = self.sensors.get("accel")
+
+        # The IMU topic is driven by the gyro, with the newest accel sample merged in - the
+        # two streams are separate processes and never land on the same timestamp.
+        if gyro is not None:
+            latest_accel = accel.peek() if accel is not None else None
+            if accel is not None:
+                accel.drain()                  # keep the queue from going stale
+            for host, ssc, values in gyro.drain():
+                if len(values) < 3:
+                    continue
+                msg = Imu()
+                msg.header.stamp = self.stamp_for(host, ssc)
+                msg.header.frame_id = self.cfg["imu_frame"]
+                msg.angular_velocity.x, msg.angular_velocity.y, msg.angular_velocity.z = values[:3]
+                if latest_accel is not None and len(latest_accel[2]) >= 3:
+                    a = latest_accel[2]
+                    msg.linear_acceleration.x = a[0]
+                    msg.linear_acceleration.y = a[1]
+                    msg.linear_acceleration.z = a[2]
+                else:
+                    msg.linear_acceleration_covariance[0] = -1.0
+                msg.orientation.w = 1.0            # no orientation estimate here
+                msg.orientation_covariance[0] = -1.0
+                self.pub_imu.publish(msg)
+        elif accel is not None:
+            accel.drain()
+
+        mag = self.sensors.get("mag")
+        if mag is not None:
+            for host, ssc, values in mag.drain():
+                if len(values) < 3:
+                    continue
+                msg = MagneticField()
+                msg.header.stamp = self.stamp_for(host, ssc)
+                msg.header.frame_id = self.cfg["imu_frame"]
+                # SEE reports microtesla, ROS wants tesla.
+                msg.magnetic_field.x = values[0] * 1e-6
+                msg.magnetic_field.y = values[1] * 1e-6
+                msg.magnetic_field.z = values[2] * 1e-6
+                self.pub_mag.publish(msg)
+
+        pressure = self.sensors.get("pressure")
+        if pressure is not None:
+            for host, ssc, values in pressure.drain():
+                hpa = values[0]
+                msg = FluidPressure()
+                msg.header.stamp = self.stamp_for(host, ssc)
+                msg.header.frame_id = self.cfg["imu_frame"]
+                msg.fluid_pressure = hpa * 100.0        # hPa -> Pa
+                self.pub_pressure.publish(msg)
+                if self.baro_reference is None:
+                    # Average the first samples on the ground so baro_altitude starts at 0.
+                    self.baro_samples.append(hpa)
+                    if len(self.baro_samples) >= 20:
+                        self.baro_reference = sum(self.baro_samples) / len(self.baro_samples)
+                        self.get_logger().info("barometer zeroed at %.2f hPa" % self.baro_reference)
+                    continue
+                self.pub_baro.publish(Float32(
+                    data=float(see.altitude_from_pressure(hpa, self.baro_reference))))
 
     def destroy_node(self):
         self.release("node shutting down")
+        if self.sensors is not None:
+            self.sensors.stop()
         self.rc.stop()
         self.msp.close()
         super().destroy_node()

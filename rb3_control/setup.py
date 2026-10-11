@@ -26,6 +26,7 @@ setup(
             "flight_controller = rb3_control.node:main",
             "fc_check = rb3_control.check:main",
             "teleop = rb3_control.teleop:main",
+            "sensors = rb3_control.see:main",
         ],
     },
 )

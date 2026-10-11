@@ -18,3 +18,16 @@
     throttle_min: 1000
     throttle_max: 2000
     hover_throttle: 0.55        # cmd_vel controller baseline; measure it in a manual hover
+
+    # --- RB3 on-board sensors (ICM-42688-P / ICP-10111 / AKM) through the sensor core.
+    # Needs qcom-sensors-test-apps installed and passwordless sudo; rates are snapped down
+    # to one the sensor supports (IMU 12.5/25/50/100/200/500, baro <=25, mag <=100).
+    see_enable: true
+    see_sudo: true
+    see_gyro_rate_hz: 200.0     # drives the imu topic
+    see_accel_rate_hz: 200.0    # merged into the imu topic
+    see_pressure_rate_hz: 25.0
+    see_mag_rate_hz: 50.0
+    see_publish_rate_hz: 50.0   # how often queued samples are drained and published
+    imu_frame: imu_link
+    baro_reference_hpa: 0.0     # 0 = zero on the ground at start-up (relative altitude)

@@ -13,6 +13,7 @@ import sys
 import time
 
 from . import msp as m
+from . import see
 
 USB_VCP = 20            # Betaflight serial port identifier of the USB virtual COM port
 
@@ -99,6 +100,8 @@ def check(link, verbose=True):
     if battery:
         print("Battery  : %.2f V   %.2f A   %d mAh" % battery[:3])
 
+    results += check_sensors()
+
     print()
     for ok, text in results:
         print("  [%s] %s" % ("OK" if ok else "!!", text))
@@ -108,6 +111,36 @@ def check(link, verbose=True):
             print("   " + line)
     print()
     return all(ok for ok, _ in results)
+
+
+def check_sensors(timeout=4.0):
+    """Are the RB3's own sensors reachable through the sensor core? (see see.py)"""
+    print()
+    if not see.available():
+        print("RB3 sensors: see_workhorse not installed")
+        return [(False, "RB3 sensor core: sudo apt install qcom-sensors-test-apps")]
+
+    sensors = see.SensorSet({"accel": 200.0, "gyro": 200.0, "pressure": 25.0, "mag": 50.0})
+    sensors.start()
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline and not all(s.alive() for s in sensors.streams.values()):
+        time.sleep(0.2)
+
+    results = []
+    for name, stream in sorted(sensors.streams.items()):
+        sample = stream.peek()
+        if sample is None:
+            print("RB3 %-8s: no samples" % name)
+            results.append((False, "RB3 %s: no samples - is sscrpcd running and sudo passwordless?"
+                            % name))
+            continue
+        values = sample[2]
+        unit = {"accel": "m/s^2", "gyro": "rad/s", "pressure": "hPa", "mag": "uT"}[name]
+        print("RB3 %-8s: %s %s  @ %g Hz"
+              % (name, " ".join("%+9.3f" % v for v in values[:3]), unit, stream.rate))
+        results.append((True, "RB3 %s streaming at %g Hz" % (name, stream.rate)))
+    sensors.stop()
+    return results
 
 
 def watch(link):
