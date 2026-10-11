@@ -44,7 +44,7 @@ class VisulaAcEst:
         self.tracked_points = self.tracked_points_by_layer[0]  # legacy camera-0/full-resolution view
         self.layer_tracks = {}  # layer -> LayerTracks in full-resolution pixels
         self._layer_frame_idx = {}
-        self.max_feature_points = 500  # total, shared among all pyramid layers
+        self.max_feature_points = 1500  # total, shared among all pyramid layers
         self.feature_min_distance = 30.0  # base spacing in full-resolution pixels
         self.cross_layer_min_distance = 5.0  # full-resolution pixels, velocity fit only
         self.all_points = [np.empty((0, 2), np.float32) for _ in range(self.frame_processor.pyramid_levels)]

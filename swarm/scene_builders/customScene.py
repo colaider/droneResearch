@@ -43,6 +43,10 @@ class CustomScene:
             self.add_mountain(name=f"block_{index}", position=(x, y, 0.0),
                               size=size, height=height)
 
+        self.add_mountain(name="small_cube_on_block_9",
+                          position=(1.65, 1.65, 1.20),
+                          size=0.30, height=0.30)
+
     
     def add_ground_plane(self, size: float = 50.0):
         """Add a ground plane to the scene."""
@@ -51,11 +55,15 @@ class CustomScene:
             plane_size=(size, size),
             tile_size=(5.0, 5.0),
         ),
+        # surface=gs.surfaces.Rough(
+        #     diffuse_texture=gs.textures.ImageTexture(
+        #         image_path=str(Path(__file__).resolve().parents[1] / "objects" / "grass.jpg")
+        #     )
+        # )
         surface=gs.surfaces.Rough(
-            diffuse_texture=gs.textures.ImageTexture(
-                image_path=str(Path(__file__).resolve().parents[1] / "objects" / "grass.jpg")
-            )
-        ))
+            color=(1.0, 1.0, 1.0),
+        )
+        )
         self.entities['ground_plane'] = plane
         self.static_objects.append(plane)
         return plane
