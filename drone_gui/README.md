@@ -126,6 +126,6 @@ switch to go off and on again before it sends anything.
 | `telemetry no data`, board online | `drone-control` is not running — start it from the Processes table |
 | `telemetry no data`, board unreachable | the board is off, rebooting, or on another address |
 | link flaps | check the SSH key is mode 600 (a key on `/mnt/c` is 0777 and ssh refuses it) |
-| `no frames` in the camera panel | `drone-stereo` is not running, or camss has no media device (see `rb3_stereo`) |
+| `no frames` in the camera panel | `drone-stereo` is not running (start it from Processes), or camss registered no media device - check `ls /dev/media*` for one whose driver is `qcom-camss`, see `drivers/devicetree/camss-disable-imx577.dtso` |
 | port `8080` in use | an older panel is still running; the error message says how to find it |
 | `ros2 topic list` empty in WSL | unrelated to this panel: the ros2 CLI daemon is broken there, use `--no-daemon` |
