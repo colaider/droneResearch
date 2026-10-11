@@ -167,3 +167,18 @@ canvas { width: 100%; background: var(--panel-2); border: 1px solid var(--line);
   border-radius: 8px; padding: 10px; white-space: pre-wrap;
 }
 .stale { opacity: .45; }
+
+/* --- RB3 sensors ----------------------------------------------------------- */
+.sensor-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 10px; }
+.sensor { background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 9px 11px; }
+.sensor label {
+  display: block; font-size: 11px; color: var(--muted);
+  text-transform: uppercase; letter-spacing: .5px; margin-bottom: 6px;
+}
+.sensor label i { font-style: normal; text-transform: none; letter-spacing: 0; opacity: .7; }
+.axes { display: flex; gap: 10px; }
+.axes span { flex: 1 1 0; min-width: 0; }
+.axes b { display: block; font: 500 10px system-ui, sans-serif; color: var(--muted); }
+.axes em { font: 600 15px/1.25 var(--mono); font-style: normal; }
+.stream { margin-top: 7px; font: 500 11px var(--mono); color: var(--muted); }
+.stream.dead { color: var(--bad); }

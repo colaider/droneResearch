@@ -73,6 +73,8 @@ function render(state) {
     $('f' + i).textContent = flight.sticks_fc ? flight.sticks_fc[i] : '-';
   }
 
+  renderSensors(flight);
+
   // --- camera
   const sub = $('camera-sub');
   const stereo = state.camera.stereo;
@@ -113,6 +115,45 @@ function render(state) {
   drawPlots(state.plots, state.window_seconds);
   const label = $('history-window');
   if (label) label.textContent = 'last ' + Math.round((state.window_seconds || 120) / 60 * 10) / 10 + ' minutes';
+}
+
+// The RB3's own IMU, barometer and magnetometer. These come from the sensor core and are
+// independent of the flight controller, so they keep reading even when the FC link is down -
+// which is exactly when you want to know whether the board itself is still healthy.
+function renderSensors(flight) {
+  const axes = (prefix, values, digits) => {
+    ['x', 'y', 'z'].forEach((axis, i) => {
+      const cell = $(prefix + '-' + axis);
+      if (cell) cell.textContent = values ? fmt(values[i], digits) : '--';
+    });
+  };
+  axes('gyro', flight.gyro, 3);
+  axes('accel', flight.accel, 2);
+  axes('mag', flight.mag_ut, 1);
+
+  $('baro-p').textContent = fmt(flight.pressure_hpa, 2);
+  $('baro-h').textContent = fmt(flight.baro_altitude_m, 2);
+  // Field magnitude is the quick sanity check on the magnetometer: Earth's field is
+  // 25-65 uT, and a much larger reading means something nearby is magnetising it.
+  const mag = flight.mag_ut;
+  $('mag-norm').textContent = mag
+    ? fmt(Math.hypot(mag[0], mag[1], mag[2]), 1) : '--';
+
+  const streams = flight.sensors || {};
+  ['gyro', 'accel', 'mag', 'pressure'].forEach((name) => {
+    const cell = $('stream-' + name);
+    if (!cell) return;
+    const info = streams[name];
+    if (!info) {
+      cell.textContent = 'not streaming';
+      cell.classList.add('dead');
+      return;
+    }
+    cell.classList.toggle('dead', !info.alive);
+    cell.textContent = (info.alive ? '' : 'STALLED · ') + info.rate_hz + ' Hz · '
+      + info.samples.toLocaleString() + ' samples'
+      + (info.restarts ? ' · ' + info.restarts + ' restarts' : '');
+  });
 }
 
 function renderUnits(units) {

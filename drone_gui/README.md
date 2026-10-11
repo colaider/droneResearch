@@ -61,6 +61,7 @@ Environment variables work too (`DRONE_HOST`, `DRONE_GUI_PORT`, `DRONE_GUI_BIND`
 | Panel | |
 | --- | --- |
 | Flight controller | who has control (radio or RB3), armed state, arming flags, roll/pitch/yaw, both altitudes, battery, and the sticks the RB3 sent next to the ones the FC used |
+| RB3 sensors | the board's own IMU, barometer and magnetometer (sensor core, independent of the flight controller): gyro, accel, mag with field magnitude, pressure and baro altitude, each with its stream rate, sample count and restart count |
 | Stereo preview | the `/stereo/preview/compressed` JPEG stream as MJPEG |
 | History | 2 minutes of altitude, attitude and battery |
 | Processes | every unit's state, with start / stop / restart and a journal viewer |
