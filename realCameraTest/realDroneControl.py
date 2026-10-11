@@ -156,6 +156,7 @@ class RB3DroneBridge:
         self.gyro = np.zeros(3)
         self.mag = np.zeros(3)
         self.quat = np.array([1.0, 0.0, 0.0, 0.0])  # (w, x, y, z)
+        self.att = np.zeros(3)                       # measured [roll, pitch, yaw] from the FC [rad]
         self.baro_z = 0.0
         self._last_pair = None
 
@@ -280,6 +281,7 @@ class RealDroneNode:
     def _on_att(self, m):
         if self._bridge is None:
             return
+        self._bridge.att = np.array([m.vector.x, m.vector.y, m.vector.z])   # measured roll/pitch/yaw [rad]
         self._bridge.quat = _euler_to_quat(m.vector.x, m.vector.y, m.vector.z)
 
     def _on_baro(self, m):
@@ -346,7 +348,9 @@ class RealDroneNode:
 
                 if step % 50 == 0:
                     fp = self._bridge.frame_processor
-                    vx, vy, vz, yaw = (float(x) for x in fp.camera_velocity)
+                    # camera_velocity = [vx, vy, z_estimated, yaw_rate]  (index 2 is the vision DEPTH
+                    # scale, not a vertical velocity -- the controller replaces vz with IMU vz).
+                    vx, vy, z_est, yaw = (float(x) for x in fp.camera_velocity)
                     cam = getattr(sm.controller, "cam_pos", None)
                     cmd = getattr(sm.controller, "last_cmd", None)
 
@@ -354,6 +358,15 @@ class RealDroneNode:
                     n_pts = int(len(fp.point_layers))                               # features tracked
                     n_vel = int(fp.velocity_point_mask.sum()) if fp.velocity_point_mask.size else 0
                     depth_pct = fp.depth_valid_frac * 100.0                          # % with stereo depth
+
+                    # --- depth source check (the barometer question) ---
+                    # Horizontal velocity scale comes ONLY from per-point stereo depth. When stereo
+                    # drops out the swarm estimator falls back to IMU dead-reckoning for vx/vy -- the
+                    # baro CANNOT scale horizontal flow from here (it only knows altitude). Altitude
+                    # itself is always baro+IMU driven (vision vz is discarded), so z stays covered.
+                    stereo_ok = np.isfinite(fp.depth_median) and fp.depth_valid_frac > 0.0
+                    depth_src = ("stereo" if stereo_ok
+                                 else "LOST -> vx/vy=IMU dead-reckoning (baro still holds altitude)")
 
                     # --- altitude actually used by the controller ---
                     baro_alt = self._bridge.baro_z              # RB3 baro altitude (BIASED: rel. to start-up level)
@@ -367,13 +380,18 @@ class RealDroneNode:
                         bias = (f"cmd roll={r:+.3f} pitch={pt:+.3f} yaw_rate={yr:+.3f} throttle={th:.3f}"
                                 f"  (FC mixes this to the 4 motors)")
 
+                    # measured attitude coming back from the FC AFTER the bias is applied
+                    mroll, mpitch, myaw = self._bridge.att
+                    meas = (f"meas roll={mroll:+.3f} pitch={mpitch:+.3f} yaw={myaw:+.3f} rad")
+
                     print(f"[{step}] stage={sm.stage} armed={self.armed} "
                           f"dt={a.dt:.4f}s({1.0/a.dt:.0f}Hz) fps={a.fps} | "
-                          f"points={n_pts} vel_used={n_vel} depth_valid={depth_pct:.0f}% | "
-                          f"vx={vx:+.2f} vy={vy:+.2f} vz={vz:+.2f} depth={fp.depth_median:.2f} | "
+                          f"points={n_pts} vel_used={n_vel} depth_valid={depth_pct:.0f}% "
+                          f"depth_src={depth_src} | "
+                          f"vx={vx:+.2f} vy={vy:+.2f} z_est={z_est:.2f} depth={fp.depth_median:.2f} | "
                           f"baro_alt={baro_alt:+.2f}m "
                           f"ctrl_alt={'n/a' if ctrl_alt is None else f'{ctrl_alt:+.2f}m'} "
-                          f"setpoint={a.altitude:.2f}m | {bias}", flush=True)
+                          f"setpoint={a.altitude:.2f}m | {bias} | {meas}", flush=True)
 
                 step += 1
                 next_t += a.dt
