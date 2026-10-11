@@ -1,4 +1,5 @@
-"""sensor_msgs/CameraInfo from a ROS camera_calibration YAML, or a nominal pinhole model."""
+"""sensor_msgs/CameraInfo from the stereo calibration, a ROS camera_calibration YAML, or a nominal
+pinhole model."""
 import math
 
 import yaml
@@ -14,6 +15,17 @@ def nominal(width, height, vfov_deg, baseline_m=0.0, right=False):
     info.k = [f, 0.0, cx, 0.0, f, cy, 0.0, 0.0, 1.0]
     info.r = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
     info.p = [f, 0.0, cx, -f * baseline_m if right else 0.0, 0.0, f, cy, 0.0, 0.0, 0.0, 1.0, 0.0]
+    return info
+
+
+def rectified(rectifier, side):
+    """Images rb3_stereo already rectified (calibration.Rectifier): no distortion, identity R."""
+    P = rectifier.P1 if side == "left" else rectifier.P2
+    info = CameraInfo(width=rectifier.size[0], height=rectifier.size[1], distortion_model="plumb_bob")
+    info.d = [0.0] * 5
+    info.k = [float(x) for x in P[:, :3].ravel()]
+    info.r = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
+    info.p = [float(x) for x in P.ravel()]
     return info
 
 
@@ -45,4 +57,11 @@ def vfov_deg(info):
 
 
 def baseline_m(info):
-    return -info.p[3] / info.p[0] if info.p[0] else 0.0
+    """Baseline from the right camera's P (Tx, or Ty for cameras stacked vertically)."""
+    return math.hypot(info.p[3], info.p[7]) / info.p[0] if info.p[0] else 0.0
+
+
+def disparity_direction(info):
+    """Image shift of the right view relative to the left (unit vector) from the right camera's P."""
+    n = math.hypot(info.p[3], info.p[7])
+    return (info.p[3] / n, info.p[7] / n) if n else (-1.0, 0.0)

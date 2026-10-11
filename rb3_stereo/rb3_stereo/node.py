@@ -1,8 +1,11 @@
 """ROS 2 node: synchronized OV9282 stereo pair of the RB3 Gen 2 vision mezzanine.
 
 Publishes (relative to the node namespace, /stereo with the launch file):
-  left/image_raw, right/image_raw      sensor_msgs/Image mono8, identical header.stamp per pair
-  left/camera_info, right/camera_info  sensor_msgs/CameraInfo (calibration YAML or nominal model)
+  left/image_raw, right/image_raw      sensor_msgs/Image mono8, identical header.stamp per pair;
+                                       rectified when a stereo calibration is loaded (parameter
+                                       calibration, scripts/calibrate_rb3.py makes it)
+  left/camera_info, right/camera_info  sensor_msgs/CameraInfo: the rectified model (no distortion)
+                                       when rectifying, else calibration YAML or nominal model
   preview/compressed                   sensor_msgs/CompressedImage, side-by-side JPEG for remote viewing
   status                               std_msgs/String, JSON: fps, sync offset, exposure, gain, ...
 All camera settings are ROS parameters and can be changed while running (ros2 param set / viewer).
@@ -28,7 +31,7 @@ from . import camera_info
 from .stereo import MODES, AutoExposure, StereoCamera
 
 RESOLUTIONS = {"640x400": (640, 400), "1280x800": (1280, 800)}
-RESTART = ("resolution", "left_camera", "flip")      # need a pipeline restart
+RESTART = ("resolution", "left_camera", "flip", "calibration")      # need a pipeline restart
 INFO = ("left_calibration", "right_calibration", "nominal_vfov_deg", "baseline_m")
 
 
@@ -42,6 +45,8 @@ class StereoCameraNode(Node):
             "left_camera": ("cam0a", "which connector is the left camera: cam0a or cam0b"),
             "flip": (False, "rotate both images 180 deg (sensor readout flip)"),
             "genlock": (True, "keep the two cameras' frames aligned (software genlock)"),
+            "calibration": ("auto", "stereo calibration that rectifies every pair: auto = "
+                                    "rb3_stereo/config/stereo_calib.npz if it exists, '' = raw images, or a path"),
             "auto_exposure": (True, "software auto exposure; exposure_us/gain apply when false"),
             "exposure_us": (2000.0, "manual exposure time (us), limited by the frame time"),
             "gain": (1.0, "manual analogue gain 1.0 .. 15.9"),
@@ -80,11 +85,12 @@ class StereoCameraNode(Node):
         w, h = RESOLUTIONS[self.p["resolution"]]
         self.cam = StereoCamera(w, h, int(self.p["fps"]), left=self.p["left_camera"], flip=bool(self.p["flip"]),
                                 genlock=bool(self.p["genlock"]), exposure_us=float(self.p["exposure_us"]),
-                                gain=float(self.p["gain"]), log=self.get_logger().info)
+                                gain=float(self.p["gain"]), calibration=self.p["calibration"],
+                                log=self.get_logger().info)
         self.ae = AutoExposure(float(self.p["ae_target"]), float(self.p["ae_max_exposure_us"]),
                                float(self.p["ae_max_gain"]))
-        self._load_info()
         self.cam.start()
+        self._load_info()
         self.get_logger().info(f"streaming {w}x{h} @ {self.cam.fps} fps, sync offset "
                                f"{(self.cam.offset or 0) * 1e6:+.0f} us")
         self._clock_offset()
@@ -124,7 +130,7 @@ class StereoCameraNode(Node):
             w, h = RESOLUTIONS[self.p["resolution"]]
             log(f"restarting: {w}x{h} @ {self.p['fps']} fps, left={self.p['left_camera']}, flip={self.p['flip']}")
             self.cam.restart(width=w, height=h, fps=int(self.p["fps"]), left=self.p["left_camera"],
-                             flip=bool(self.p["flip"]))
+                             flip=bool(self.p["flip"]), calibration=self.p["calibration"])
             self._load_info()
         elif "fps" in changes:
             self.cam.set_fps(int(self.p["fps"]))
@@ -147,6 +153,10 @@ class StereoCameraNode(Node):
         self.info = {}
         for side in ("left", "right"):
             path = self.p[f"{side}_calibration"]
+            if self.cam.rectifier is not None:
+                self.info[side] = camera_info.rectified(self.cam.rectifier, side)
+                self.info[side].header.frame_id = self.p[f"frame_id_{side}"]
+                continue
             try:
                 self.info[side] = camera_info.load(path, w, h) if path else camera_info.nominal(
                     w, h, float(self.p["nominal_vfov_deg"]), float(self.p["baseline_m"]), right=side == "right")
@@ -238,7 +248,8 @@ class StereoCameraNode(Node):
               "pair_offset_us": round((self.cam.pair_offset() or 0) * 1e6, 1),
               "exposure_us": round(self.cam.exposure_us), "gain": round(self.cam.gain, 2),
               "auto_exposure": self.p["auto_exposure"],
-              "mean": None if self.ae.mean is None else round(self.ae.mean, 1)}
+              "mean": None if self.ae.mean is None else round(self.ae.mean, 1),
+              "rectified": self.cam.rectifier is not None}
         self.pub_status.publish(String(data=json.dumps(st)))
         self.get_logger().info(" ".join(f"{k}={v}" for k, v in st.items()))
 

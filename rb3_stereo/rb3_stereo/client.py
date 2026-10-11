@@ -136,6 +136,12 @@ class StereoSubscriber:
 
     camera_separation = camera_saperation
 
+    @property
+    def disparity_direction(self):
+        """Right-minus-left image shift direction (unit 2-vector), for VisulaAcEst.disparity_direction."""
+        self._wait_info()
+        return np.array(camera_info.disparity_direction(self.info["right"]))
+
     def close(self):
         if self._own and self._spinning:
             self._spinning = False

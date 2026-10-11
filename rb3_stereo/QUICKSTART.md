@@ -90,7 +90,38 @@ ros2 param set /stereo/stereo_camera resolution 1280x800      # restarts the cam
 ros2 topic echo /stereo/status                                # fps, sync offset, exposure, ...
 ```
 
-## 5. Use it in code: same interface as the simulation
+## 5. Calibrate the cameras
+
+Needs a printed checkerboard on a flat, rigid board: 9x7 squares of 29 mm (other boards:
+`--squares` and `--square-mm`). The calibration window runs on the drone and shows on your screen
+through SSH X forwarding. From WSL (WSLg shows the window) or any Linux machine:
+
+```bash
+ssh -Y -C ubuntu@192.168.1.243
+```
+```bash
+python3 ~/droneResearch/scripts/calibrate_rb3.py
+```
+
+On Windows without WSL, use MobaXterm (it has an X server built in). The script asks to stop
+`drone-stereo` / `drone-vo` while it uses the cameras and starts them again at the end.
+
+1. Hold the board so **both** cameras see all of it (the corners light up in both images) and press
+   **SPACE**, or press **A** once to capture automatically whenever the board is held still in a new
+   place. Collect 20-30 pairs: near and far, tilted left/right/up/down, and in every part of the
+   image (the green outlines show what is covered so far). **U** removes the last pair.
+2. **C** calibrates and prints the result. Good: reprojection errors below 0.5 px, and a baseline
+   that matches the spacing of the two lenses.
+3. The view switches to the rectified images with guide lines: the board's corners must sit on the
+   same line in both images ("board row error" well below 1 px). **R** goes back to recording more.
+4. **S** saves `rb3_stereo/config/stereo_calib.npz`. When the script ends, the camera services start
+   again and rectify every frame from then on (status: `"rectified": true`).
+
+Options: `--check` shows the live rectified view with the saved calibration; `--images DIR`
+recalibrates pairs saved earlier (they are kept in `~/rb3_calibration/`), without camera or window.
+Commit the calibration file so the rest of the team gets it.
+
+## 6. Use it in code: same interface as the simulation
 
 ```python
 from rb3_stereo.client import StereoSubscriber
@@ -98,6 +129,7 @@ cams = StereoSubscriber("/stereo")
 left, right = cams.get_two_frames()       # BGR, like DroneStruct.get_two_frames()
 proc = VisulaAcEst(cams.res, cams.fov)    # res=(width, height), fov=vertical degrees
 proc.camera_saperation = cams.camera_saperation
+proc.disparity_direction = cams.disparity_direction   # from the calibration (right-minus-left shift)
 ```
 
 The simulation can publish the same topics, so the vision code runs unchanged on both:
@@ -111,5 +143,6 @@ pub.publish(*drone.get_two_frames())
 Topics: `/stereo/{left,right}/image_raw`, `/stereo/{left,right}/camera_info`,
 `/stereo/preview/compressed` and `/stereo/status`.
 
-Until the cameras are calibrated, `camera_info` uses the simulation's values (85°, 5 cm). See
-README.md → Calibration.
+Until the cameras are calibrated (section 5), the images are raw and `camera_info` uses the
+simulation's values (85°, 5 cm). After that they are rectified and `res`, `fov`,
+`camera_saperation` and `disparity_direction` come from the calibration.

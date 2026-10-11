@@ -8,6 +8,8 @@
     left_camera: "cam0a"            # connector of the left camera (cam0a / cam0b)
     flip: false                     # rotate both images 180 deg
     genlock: true                   # keep both cameras' frames aligned (< 30 us)
+    calibration: "auto"             # rectify every pair with rb3_stereo/config/stereo_calib.npz if it
+                                    # exists (scripts/calibrate_rb3.py), "" = raw images, or a path
 
     # exposure (no ISP: raw sensor, software auto exposure)
     auto_exposure: true
@@ -21,7 +23,8 @@
     stamp: "exposure_center"        # or frame_end
     frame_id_left: "stereo_left_optical_frame"
     frame_id_right: "stereo_right_optical_frame"
-    left_calibration: ""            # camera_calibration YAML; "" = nominal pinhole model below
+    left_calibration: ""            # without a stereo calibration: camera_info from a camera_calibration
+                                    # YAML; "" = nominal pinhole model below
     right_calibration: ""
     nominal_vfov_deg: 85.0          # simulation values until the real cameras are calibrated
     baseline_m: 0.05

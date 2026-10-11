@@ -28,10 +28,10 @@ All topics are in the namespace `/stereo`.
 
 | Topic | Type | Notes |
 |---|---|---|
-| `left/image_raw`, `right/image_raw` | sensor_msgs/Image | `mono8`; both images of a pair have the identical `header.stamp`; sensor-data QoS (best effort) |
-| `left/camera_info`, `right/camera_info` | sensor_msgs/CameraInfo | from the calibration YAML, or a nominal pinhole model; right `P[3] = -fx·baseline` |
+| `left/image_raw`, `right/image_raw` | sensor_msgs/Image | `mono8`; both images of a pair have the identical `header.stamp`; sensor-data QoS (best effort). **Rectified** once the cameras are calibrated (see Calibration) |
+| `left/camera_info`, `right/camera_info` | sensor_msgs/CameraInfo | rectified: the shared pinhole model, no distortion; else a calibration YAML or the nominal model. Right `P[3] = -fx·baseline` |
 | `preview/compressed` | sensor_msgs/CompressedImage | side-by-side JPEG, `preview_fps` (10 Hz), for remote viewing |
-| `status` | std_msgs/String | JSON every 5 s: fps, mode, sync offset, exposure, gain, mean brightness |
+| `status` | std_msgs/String | JSON every 5 s: fps, mode, sync offset, exposure, gain, mean brightness, `rectified` |
 
 Stamps are on the ROS clock. By default the stamp is the **centre of the exposure**:
 frame-end interrupt time − readout time − exposure/2. Use `stamp:=frame_end` for the raw
@@ -52,7 +52,8 @@ All can be set at launch (`name:=value`) or at runtime (`ros2 param set /stereo/
 | `left_camera` | `cam0a` | which connector is the left camera |
 | `flip` | `false` | rotate both images 180° (sensor readout) |
 | `genlock` | `true` | keep both cameras' frames aligned |
-| `left_calibration`, `right_calibration` | `""` | camera_calibration YAML files |
+| `calibration` | `auto` | stereo calibration that rectifies every pair: `auto` = `config/stereo_calib.npz` if it exists, `""` = raw images, or a path; restarts the cameras |
+| `left_calibration`, `right_calibration` | `""` | without a stereo calibration: camera_calibration YAML files for camera_info only |
 | `nominal_vfov_deg`, `baseline_m` | `85`, `0.05` | nominal model used until calibrated (the simulation's values) |
 | `stamp` | `exposure_center` | or `frame_end` |
 | `frame_id_left`, `frame_id_right` | `stereo_{left,right}_optical_frame` | |
@@ -75,21 +76,22 @@ All can be set at launch (`name:=value`) or at runtime (`ros2 param set /stereo/
 
 ## Calibration
 
-The nominal `camera_info` (85° vertical FOV, 5 cm baseline) only matches the simulation. To calibrate
-the real pair, mount the cameras rigidly, then run the standard ROS stereo calibrator. Install
-`ros-jazzy-camera-calibration` on a machine with a screen; on Wi-Fi, run it on the drone over SSH
-with X forwarding or use a wired link. Use a checkerboard with 8x6 inner corners and 25 mm squares:
+Until the pair is calibrated, the images are raw and `camera_info` is the nominal model (85°
+vertical FOV, 5 cm baseline), which only matches the simulation. `scripts/calibrate_rb3.py`
+records a checkerboard (9x7 squares of 29 mm by default) with a live view over SSH X forwarding,
+calibrates, shows the rectified result and saves `config/stereo_calib.npz` (+ `left.yaml` /
+`right.yaml`). See QUICKSTART.md → Calibrate the cameras.
 
-```bash
-ros2 run camera_calibration cameracalibrator --approximate 0.005 --size 8x6 --square 0.025 \
-  --ros-args -r left:=/stereo/left/image_raw -r right:=/stereo/right/image_raw \
-  -r left_camera:=/stereo/left -r right_camera:=/stereo/right
-```
-
-If the calibrator receives no images, start the camera with `qos_reliable:=true` (some tools only
-subscribe reliably). Save the result. Copy the `left.yaml` and `right.yaml` from the calibration tarball to the drone
-and set them with `left_calibration:=/path/left.yaml right_calibration:=/path/right.yaml`.
-Calibrate at 1280x800: the node scales it to 640x400, which is the same field of view binned 2×2.
+From then on `StereoCamera` undistorts and rectifies **every pair** (on the GPU via OpenCL, ~11 %
+of a little core at 30 fps), so the node, `testRB3Cameras.py` and anything else that opens the
+cameras get rectified images. Both images then share one pinhole model; `cam.rectifier` and the
+`camera_info` topics carry its focal length, baseline and disparity direction. One calibration
+covers 640x400 and 1280x800 (the same view, 640x400 is binned 2×2). The file has the format of
+`scripts/calibrate_stereo.py`, so `swarm.compVision.denseStereo.StereoRectifier.from_npz` reads it
+too - but the images are already rectified, so don't rectify them again.
+`calibration:=""` (node) or `--raw` (testRB3Cameras.py) gives raw images.
+The calibration belongs to how the cameras are mounted: recalibrate after moving them, and when
+`left_camera` or `flip` change (it is ignored then, with a warning).
 
 ## Files
 
@@ -98,7 +100,8 @@ rb3_stereo/
   sensor.py          V4L2/media-ctl pipelines, v4l2-ctl capture with kernel timestamps, I2C (CAM0B)
   stereo.py          StereoCamera: modes, pairing, exposure, software genlock; AutoExposure
   node.py            ROS 2 node
-  camera_info.py     calibration YAML / nominal model
+  calibration.py     checkerboard calibration, Rectifier (undistort + rectify), calibration file
+  camera_info.py     camera_info: rectified model / calibration YAML / nominal model
   client.py          StereoSubscriber  (drop-in for the simulation's get_two_frames/res/fov)
   sim_publisher.py   StereoPublisher   (simulation -> same topics)
   viewer.py          remote viewer + settings (single file, also runs without the package)

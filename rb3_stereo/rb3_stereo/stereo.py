@@ -6,6 +6,10 @@
     cam.set_exposure(exposure_us=3000, gain=2.0)
     cam.stop()
 
+Calibration: with a stereo calibration (scripts/calibrate_rb3.py writes rb3_stereo/config/stereo_calib.npz)
+every pair is undistorted and rectified before read_pair returns it, and cam.rectifier holds the
+rectified camera model (focal_px, baseline, disparity_direction). calibration=None gives raw images.
+
 Sync ("software genlock"): both sensors run from the same reference clock, so their frame periods are
 identical and the offset only needs setting once. align() makes CAM0B's frames a few lines longer or
 shorter for a counted number of frames until both end within ~30 us of each other; a background
@@ -15,9 +19,11 @@ import collections
 import threading
 import time
 from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
 
+from . import calibration as calib_io
 from .sensor import (EXPOSURE_REGS, VTS_REG, Capture, Pipelines, SensorA, SensorB, cam0b_i2c_bus,
                      check_setup)
 
@@ -35,7 +41,10 @@ class StereoPair:
 
 class StereoCamera:
     def __init__(self, width=640, height=400, fps=120, left="cam0a", flip=False, genlock=True,
-                 genlock_every=5.0, genlock_tol_us=30, exposure_us=2000, gain=1.0, log=print):
+                 genlock_every=5.0, genlock_tol_us=30, exposure_us=2000, gain=1.0, calibration="auto",
+                 log=print):
+        """calibration: "auto" = rectify with calibration.default_path() if that file exists,
+        None or "" = raw images, or the path of a stereo_calib.npz."""
         if fps not in MODES.get((width, height), ()):
             raise ValueError(f"unsupported mode {width}x{height}@{fps}; modes: "
                              + ", ".join(f"{w}x{h}@{f}" for (w, h), fs in MODES.items() for f in fs))
@@ -44,6 +53,8 @@ class StereoCamera:
         self.w, self.h, self.fps, self.left_cam, self.flip = width, height, fps, left, flip
         self.genlock, self.genlock_every, self.genlock_tol = genlock, genlock_every, genlock_tol_us * 1e-6
         self.exposure_us, self.gain = exposure_us, gain
+        self.calibration = calibration
+        self.rectifier = None                            # set by start() when a calibration applies
         self.log = log
         self.debug = False
         self.offset = None                               # last measured B-A offset (s)
@@ -55,6 +66,7 @@ class StereoCamera:
 
     def start(self):
         check_setup()
+        self._load_calibration()
         p = Pipelines()
         vid_a, vid_b = p.setup(self.w, self.h)
         self.a = SensorA(p.subdev, p.i2c_a)
@@ -103,6 +115,27 @@ class StereoCamera:
             raise ValueError(f"unsupported mode {self.w}x{self.h}@{self.fps}")
         return self.start()
 
+    def _load_calibration(self):
+        self.rectifier = None
+        if not self.calibration:
+            return
+        auto = self.calibration == "auto"
+        path = calib_io.default_path() if auto else Path(self.calibration).expanduser()
+        if not path.exists():
+            if not auto:
+                raise FileNotFoundError(f"stereo calibration {path} not found")
+            self.log(f"no stereo calibration ({path}): raw images")
+            return
+        calib = calib_io.load(path)
+        made = (calib.get("left_camera", self.left_cam), calib.get("flip", self.flip))
+        if made != (self.left_cam, self.flip):
+            self.log(f"{path} was made with left={made[0]} flip={made[1]}, the cameras run with "
+                     f"left={self.left_cam} flip={self.flip}: raw images (calibrate again)")
+            return
+        self.rectifier = calib_io.Rectifier(calib, (self.w, self.h))
+        self.log(f"rectifying with {path} ({self.rectifier.backend}): focal {self.rectifier.focal_px:.1f} px, "
+                 f"baseline {self.rectifier.baseline * 1000:.1f} mm")
+
     def __enter__(self):
         return self.start()
 
@@ -135,9 +168,11 @@ class StereoCamera:
             self._pairs += 1
             self.pair_dt.append(d)
             (fa, fb), (ta, tb) = (got[0][1], got[1][1]), ts
-            if self.left_cam == "cam0a":
-                return StereoPair(fa, fb, ta, tb, self._pairs)
-            return StereoPair(fb, fa, tb, ta, self._pairs)
+            if self.left_cam != "cam0a":
+                fa, fb, ta, tb = fb, fa, tb, ta
+            if self.rectifier is not None:
+                fa, fb = self.rectifier.rectify(fa, fb)
+            return StereoPair(fa, fb, ta, tb, self._pairs)
         return None
 
     def pair_offset(self):

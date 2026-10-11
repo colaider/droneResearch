@@ -12,7 +12,7 @@ setup(
         ("share/ament_index/resource_index/packages", ["resource/" + package_name]),
         ("share/" + package_name, ["package.xml", "README.md", "QUICKSTART.md"]),
         ("share/" + package_name + "/launch", glob("launch/*.py")),
-        ("share/" + package_name + "/config", glob("config/*.yaml") + glob("config/*.xml")),
+        ("share/" + package_name + "/config", glob("config/*.yaml") + glob("config/*.xml") + glob("config/*.npz")),
         ("share/" + package_name + "/docs", glob("docs/*.md")),
     ],
     install_requires=["setuptools"],
