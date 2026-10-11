@@ -325,8 +325,11 @@ class RealDroneNode:
             throttle_cap=a.throttle_cap, yaw_rate_cap=a.yaw_rate_cap)
 
         mode = "DRY RUN (publishing nothing)" if a.dry_run else "FLYING (publishing cmd_attitude)"
+        cam_period = max(1, int(round((1.0 / a.fps) / a.dt)))   # control steps per camera frame
         print(f"=== {mode} === hover={a.altitude} m  hover_throttle={sm.controller.hover_throttle:.3f}  "
               f"tilt<= {a.max_tilt_deg} deg  throttle<= {a.throttle_cap}", flush=True)
+        print(f"    control dt={a.dt:.4f}s ({1.0/a.dt:.0f} Hz)  camera fps={a.fps} "
+              f"(camera_step every {cam_period} control steps)", flush=True)
 
         step, t0, next_t = 0, time.monotonic(), time.monotonic()
         try:
@@ -346,9 +349,31 @@ class RealDroneNode:
                     vx, vy, vz, yaw = (float(x) for x in fp.camera_velocity)
                     cam = getattr(sm.controller, "cam_pos", None)
                     cmd = getattr(sm.controller, "last_cmd", None)
+
+                    # --- camera: are any points actually detected / used this frame? ---
+                    n_pts = int(len(fp.point_layers))                               # features tracked
+                    n_vel = int(fp.velocity_point_mask.sum()) if fp.velocity_point_mask.size else 0
+                    depth_pct = fp.depth_valid_frac * 100.0                          # % with stereo depth
+
+                    # --- altitude actually used by the controller ---
+                    baro_alt = self._bridge.baro_z              # RB3 baro altitude (BIASED: rel. to start-up level)
+                    ctrl_alt = None if cam is None else float(cam[2])   # fused z the loop closes on
+
+                    # --- motor bias: we publish cmd_attitude; Betaflight does the mixing ---
+                    if cmd is None:
+                        bias = "cmd=None (no attitude output yet -> nothing biasing motors)"
+                    else:
+                        r, pt, yr, th = cmd
+                        bias = (f"cmd roll={r:+.3f} pitch={pt:+.3f} yaw_rate={yr:+.3f} throttle={th:.3f}"
+                                f"  (FC mixes this to the 4 motors)")
+
                     print(f"[{step}] stage={sm.stage} armed={self.armed} "
-                          f"vx={vx:+.2f} vy={vy:+.2f} depth={fp.depth_median:.2f} "
-                          f"cam_pos={None if cam is None else np.round(cam,2)} cmd={cmd}", flush=True)
+                          f"dt={a.dt:.4f}s({1.0/a.dt:.0f}Hz) fps={a.fps} | "
+                          f"points={n_pts} vel_used={n_vel} depth_valid={depth_pct:.0f}% | "
+                          f"vx={vx:+.2f} vy={vy:+.2f} vz={vz:+.2f} depth={fp.depth_median:.2f} | "
+                          f"baro_alt={baro_alt:+.2f}m "
+                          f"ctrl_alt={'n/a' if ctrl_alt is None else f'{ctrl_alt:+.2f}m'} "
+                          f"setpoint={a.altitude:.2f}m | {bias}", flush=True)
 
                 step += 1
                 next_t += a.dt
