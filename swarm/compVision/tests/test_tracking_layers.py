@@ -17,6 +17,8 @@ class TrackingLayerTests(unittest.TestCase):
         self.image = cv2.cvtColor(cv2.resize(texture, (self.width, self.height),
                                            interpolation=cv2.INTER_NEAREST), cv2.COLOR_GRAY2BGR)
         self.est = VisulaAcEst((self.width, self.height), 60)
+        self.est.frame_processor.pyramid_levels = 3  # fixed fixture; production may use more layers
+        self.est.disparity_direction = np.array([0., 1.])  # synthetic right image shifts down
         self.est.image_filters = ()
         self.est.drone_pos[2] = 10
 
@@ -92,8 +94,9 @@ class TrackingLayerTests(unittest.TestCase):
                 np.testing.assert_array_equal(level, gray)
                 gray = cv2.pyrDown(gray)
             display = self.est.current_frame.frames[camera][90:]
-            for color in LAYER_COLORS[:3]:
-                self.assertTrue(np.any(np.all(display == color, axis=2)))
+            for layer, color in enumerate(LAYER_COLORS[:3]):
+                if camera == 0 or self.est.depth_by_layer[layer].valid.any():
+                    self.assertTrue(np.any(np.all(display == color, axis=2)))
         # Explicitly check edge pixels, independent of legends/point markers.
         for color in LAYER_COLORS[:3]:
             canvas = np.zeros((40, 40, 3), np.uint8)
@@ -199,17 +202,18 @@ class TrackingLayerTests(unittest.TestCase):
         drone.frame_processor = self.est
         drone._camera_display = None
         drone._layer_windows = set()
+        drone._depth_window_ready = False
         self.run_layers()
         with patch.object(cv2, 'namedWindow') as create, patch.object(cv2, 'resizeWindow'), \
              patch.object(cv2, 'imshow') as show, patch.object(cv2, 'waitKey') as pump, \
              patch.object(cv2, 'destroyWindow') as close:
             drone.camera_show()
             self.assertEqual([c.args[0] for c in create.call_args_list],
-                             ['Tracking layer 0', 'Tracking layer 1', 'Tracking layer 2'])
-            for layer, call in enumerate(show.call_args_list):
+                             ['Tracking layer 0', 'Tracking layer 1', 'Tracking layer 2', 'Stereo depth'])
+            for layer, call in enumerate(show.call_args_list[:3]):
                 self.assertIs(call.args[1], self.est.layer_views[layer])
             drone.camera_show()
-            self.assertEqual(create.call_count, 3)
+            self.assertEqual(create.call_count, 4)
             self.assertEqual(pump.call_count, 2)
             self.est.layer_views = self.est.layer_views[:2]
             drone.camera_show()

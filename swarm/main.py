@@ -41,14 +41,13 @@ def main():
     )
     depth_plotter = LivePlotter(
         plots={
-            'Depth (m)':     ['stereo', 'true'],
-            'Error (m)':     ['stereo - true'],
+            'Depth (m)':     ['stereo median'],
             'Valid matches': ['fraction'],
         },
         buffer_size=1000,
         title='Stereo Depth',
     )
-    map_viewer = MapViewer(title='Terrain Map')
+    map_viewer = MapViewer(title='Stereo point map — simulation pose')
 
     sm = StateMachine(drone_entity=drone, dt=dt, camera_fps=30)
     scene.build()
@@ -57,6 +56,7 @@ def main():
         sim_time = step * dt
 
         sm.steping(step, sim_time)
+        map_viewer.update(drone.point_map, drone.map_pose_position)
 
         if sm.stage >= 1:
             ctrl = sm.controller
@@ -71,15 +71,15 @@ def main():
             plotter.update()
 
             fp = ctrl.drone.frame_processor
-            true_z = float(ctrl.get_position()[2])
-            depth_plotter.push('Depth (m)',     [fp.depth_median, true_z])
-            depth_plotter.push('Error (m)',     fp.depth_median - true_z)
+            # Optical-axis depth varies across roofs/ground; it is not drone altitude.
+            depth_plotter.push('Depth (m)',     fp.depth_median)
             depth_plotter.push('Valid matches', fp.depth_valid_frac)
             depth_plotter.update()
 
         scene.step()
 
     print("\n✅ Simulation complete!")
+    map_viewer.close()
     scene.close()
 
 

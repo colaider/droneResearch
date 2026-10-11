@@ -3,11 +3,11 @@ import numpy as np
 from collections import deque
 import time
 import swarm.config.cameraConfig as camConfig
-from swarm.compVision.visualDepthEst import triangulate_altitude
+from swarm.compVision.visualDepthEst import triangulate_altitude, SparseStereoDepth, StereoDepth
 from swarm.compVision.smallFeatures import (
     replenish, build_triangles, filter_by_neighbors, LayerTracks, LAYER_COLORS, unique_point_mask,
 )
-from swarm.compVision.frame import Frame, FrameProcessor, compose_layer_display
+from swarm.compVision.frame import Frame, FrameProcessor, compose_layer_display, compose_depth_display
 
 # Preserve the original public frame name.
 EnumFrame = Frame
@@ -20,7 +20,7 @@ class VisulaAcEst:
         self.dt = 0.01
         self.camera_saperation = camConfig.STEREO_CAM.baseline
 
-        self.frame_processor = FrameProcessor(pyramid_levels=3, image_filters=("clahe",), filter_kernel_size=3)
+        self.frame_processor = FrameProcessor(pyramid_levels=2, image_filters=("clahe",), filter_kernel_size=3)
         self.resolution = tuple(res)  # calibrated output (width, height)
         self.use_stereo_depth = True
         self.current_frame = EnumFrame()
@@ -58,6 +58,11 @@ class VisulaAcEst:
         self.depth_median = np.nan       # median stereo depth of valid matches
         self.depth_valid_frac = 0.0      # share of points with a valid stereo match
         self.depth_points = np.empty((0, 3))   # (u, v, depth) of valid matches, left image
+        self.stereo = SparseStereoDepth()
+        self.depth_by_layer = []
+        self.depth_colors = np.empty((0, 3), np.uint8)
+        self.depth_sigma = np.empty(0)
+        self.depth_view = None
         self.depth_frame_idx = -1              # camera frame the depth_points belong to
 
     # ---------------- frames ----------------
@@ -104,6 +109,7 @@ class VisulaAcEst:
     def processing(self, frame, idx):
         self.update_frame(frame, idx)
         self.aply_flow()
+        self.estimate_depth()
         self.layer_views = [
             compose_layer_display(gray, self.all_points[layer] / (2 ** layer),
                                   self.layer_tracks[layer].links, layer,
@@ -112,6 +118,56 @@ class VisulaAcEst:
         ]
         return self.current_frame
 
+
+    def estimate_depth(self):
+        """Match each layer against the CURRENT right image; never use predicted right points.
+
+        depth_by_layer[layer] stays aligned with all_points[layer], including NaNs.
+        depth_points contains only valid, de-duplicated (u, v, Z) for mapping.
+        This separate stage does not alter temporal tracks or the velocity solver.
+        """
+        self.depth_frame_idx = self.current_frame.idx
+        self.depth_by_layer = []
+        self.depth_points = np.empty((0, 3))
+        self.depth_colors = np.empty((0, 3), np.uint8)
+        self.depth_sigma = np.empty(0)
+        self.depth_median, self.depth_valid_frac = np.nan, 0.0
+        points, colors, sigma = [], [], []
+        direction = getattr(self, 'disparity_direction', camConfig.STEREO_CAM.disparity_direction())
+        valid_count = 0
+        for layer, uv in enumerate(self.all_points):
+            if self.use_stereo_depth:
+                result = self.stereo.estimate(
+                    self.current_frame.pyramids[0][layer], self.current_frame.pyramids[1][layer], uv,
+                    focal_px=self.foc_l, baseline=self.camera_saperation,
+                    direction=direction, pixel_scale=2 ** layer)
+            else:
+                n = len(uv)
+                result = StereoDepth(np.full((n, 2), np.nan, np.float32), np.full(n, np.nan),
+                                     np.zeros(n, bool), np.full(n, np.nan), np.full(n, np.nan))
+            self.depth_by_layer.append(result)
+            valid = result.valid
+            valid_count += int(valid.sum())
+            points.append(np.column_stack((uv[valid], result.depths[valid])))
+            colors.append(self.point_colors[layer][valid])
+            sigma.append(result.sigma_depth[valid])
+            right = self.current_frame.frames[1]
+            links = self.layer_tracks[layer].links
+            for a, b in links:
+                if valid[a] and valid[b]:
+                    cv2.line(right, tuple(result.right_points[a].astype(int)),
+                             tuple(result.right_points[b].astype(int)), LAYER_COLORS[layer % len(LAYER_COLORS)], 1)
+            for x, y in result.right_points[valid].astype(int):
+                cv2.circle(right, (x, y), 2, LAYER_COLORS[layer % len(LAYER_COLORS)], -1)
+        total = sum(map(len, self.all_points))
+        self.depth_valid_frac = valid_count / total if total else 0.0
+        if valid_count:
+            points, colors, sigma = np.vstack(points), np.vstack(colors), np.concatenate(sigma)
+            # Fine layers have priority at duplicate image locations.
+            keep = unique_point_mask(points[:, :2], self.cross_layer_min_distance)
+            self.depth_points, self.depth_colors, self.depth_sigma = points[keep], colors[keep], sigma[keep]
+            self.depth_median = float(np.median(self.depth_points[:, 2]))
+        self.depth_view = compose_depth_display(self.current_frame.gray_frames[0], self.depth_points, total)
 
     # ---------------- sensors ----------------
 
@@ -185,9 +241,6 @@ class VisulaAcEst:
             for frame in annotated:
                 cv2.putText(frame, text, (8, 20 + 20 * layer), cv2.FONT_HERSHEY_SIMPLEX,
                             .5, colour, 1, cv2.LINE_AA)
-        cv2.putText(annotated[1], 'Right overlay predicted from flow',
-                    (8, 20 + 20 * num_layers), cv2.FONT_HERSHEY_SIMPLEX,
-                    .45, (220, 220, 220), 1, cv2.LINE_AA)
         self.current_frame.frames = annotated
         if not flows:
             self.camera_velocity = self._fallback_velocity()
@@ -238,8 +291,6 @@ class VisulaAcEst:
 
         lk = dict(winSize=(21, 21), maxLevel=1,
                   criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 30, 0.01))
-        lk_stereo = dict(winSize=(100, 100), maxLevel=4,
-                         criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 30, 0.01))
         pts = self._replenish(gray1, cache.get(0, empty), 0, max_points=max_points, pixel_scale=pixel_scale)
         if len(pts) < 3:
             return bad_return()
@@ -275,25 +326,16 @@ class VisulaAcEst:
             good_old, good_new = self.filter_by_neighbors(good_old, good_new, links)
         if len(good_old) < 3:
             return bad_return()
-        p = (good_old / pixel_scale).reshape(-1, 1, 2).astype(np.float32)
-        old_r, st_r, _ = cv2.calcOpticalFlowPyrLK(gray1, gray_r, p, None, **lk_stereo)
-        if old_r is None or st_r is None:
-            return bad_return()
-        old_r = old_r.reshape(-1, 2) * pixel_scale
-        valid = ((st_r.ravel() == 1) & np.isfinite(old_r).all(axis=1) &
-                 (old_r[:, 0] >= 0) & (old_r[:, 0] < w) &
-                 (old_r[:, 1] >= 0) & (old_r[:, 1] < h))
-        good_old, good_new, old_r = good_old[valid], good_new[valid], old_r[valid]
-        if len(good_new) < 3:
-            return bad_return()
+        # Temporal tracking is independent of stereo visibility/confidence.
+        old_r = np.full_like(good_old, np.nan)
         triangles, _, links, _ = self._build_triangles(good_new, **mesh_args)
         cache[0] = (good_new / pixel_scale).astype(np.float32)
         self._layer_frame_idx[layer] = self.current_frame.idx
         flow, _, _ = self.compensate_vertical(good_old, good_new, triangles)
-        new_r = old_r + flow  # retained legacy overlay, not a stereo depth measurement
+        new_r = np.full_like(good_new, np.nan)  # filled by same-frame stereo stage
         self.layer_tracks[layer] = LayerTracks(
-            layer, self.current_frame.idx, good_old.copy(), good_new.copy(), old_r.copy(),
-            new_r.copy(), flow.copy(), triangles.copy(), links.copy(),
+            layer, self.current_frame.idx, good_old.copy(), good_new.copy(),
+            flow.copy(), triangles.copy(), links.copy(),
         )
         z = self._current_height()
         olds = [np.column_stack((points, np.full(len(points), z))) for points in (good_old, old_r)]
@@ -413,9 +455,11 @@ class VisulaAcEst:
             cv2.circle(annotated_frame, (x, y), 2, color, -1)
         
 
+        valid_right = np.isfinite(new_r).all(axis=1)
         for a, b in links:
-            cv2.line(annotated_r, tuple(new_r[a].astype(int)), tuple(new_r[b].astype(int)), color, 2)
-        for x, y in new_r.astype(int):
+            if valid_right[a] and valid_right[b]:
+                cv2.line(annotated_r, tuple(new_r[a].astype(int)), tuple(new_r[b].astype(int)), color, 2)
+        for x, y in new_r[valid_right].astype(int):
             cv2.circle(annotated_r, (x, y), 2, color, -1)
         
         return annotated_frame, annotated_r

@@ -22,23 +22,20 @@ class LayerTracks:
     """One layer's current tracks, all expressed in full-resolution pixels.
 
     The mesh is image-space topology, not a reconstructed physical surface.
-    predicted_right_points retains the legacy flow-based right overlay; it is
-    not a measured current-frame stereo correspondence and must not give depth.
+    Stereo correspondences/depth are stored separately from temporal tracking.
     Native layer coordinates used to seed LK are kept separately by the estimator.
     """
     layer: int
     frame_idx: int
     old_points: np.ndarray
     new_points: np.ndarray
-    old_right_points: np.ndarray
-    predicted_right_points: np.ndarray
     flow: np.ndarray
     triangles: np.ndarray
     links: np.ndarray
 
     @classmethod
     def empty(cls, layer, frame_idx):
-        return cls(layer, frame_idx, *(np.empty((0, 2), np.float32) for _ in range(5)),
+        return cls(layer, frame_idx, *(np.empty((0, 2), np.float32) for _ in range(3)),
                    np.empty((0, 3), int), np.empty((0, 2), int))
 
 
