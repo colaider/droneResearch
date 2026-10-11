@@ -110,7 +110,9 @@ function render(state) {
 
   renderUnits(state.units);
   renderEvents(state.events);
-  drawPlots(state.plots);
+  drawPlots(state.plots, state.window_seconds);
+  const label = $('history-window');
+  if (label) label.textContent = 'last ' + Math.round((state.window_seconds || 120) / 60 * 10) / 10 + ' minutes';
 }
 
 function renderUnits(units) {
@@ -201,18 +203,19 @@ async function showJournal(unit) {
 }
 
 // --- plots: small enough that a charting library would be more code than this
-function drawPlots(plots) {
+function drawPlots(plots, windowSeconds) {
   // minSpan keeps autoscaling from magnifying quantisation into a square wave: Betaflight
   // reports attitude in 0.1 deg steps and the battery in 0.01 V, so a resting signal that
   // flips between two adjacent codes would otherwise fill the whole chart.
-  draw($('plot-alt'), [[plots.altitude, '#4da3ff'], [plots.baro_altitude, '#3ecf8e']], 1.0);
-  draw($('plot-att'), [[plots.roll, '#4da3ff'], [plots.pitch, '#3ecf8e']], 4.0);
-  draw($('plot-batt'), [[plots.battery, '#f0a93b']], 1.0);
+  const span = windowSeconds || 120;
+  draw($('plot-alt'), [[plots.altitude, '#4da3ff'], [plots.baro_altitude, '#3ecf8e']], 1.0, span);
+  draw($('plot-att'), [[plots.roll, '#4da3ff'], [plots.pitch, '#3ecf8e']], 4.0, span);
+  draw($('plot-batt'), [[plots.battery, '#f0a93b']], 1.0, span);
 }
 
 // Each series brings its own x (seconds ago, newest at 0): they are sampled at very
 // different rates, so they cannot share one index axis.
-function draw(canvas, series, minSpan) {
+function draw(canvas, series, minSpan, windowSeconds) {
   const ratio = window.devicePixelRatio || 1;
   const width = canvas.clientWidth, height = canvas.clientHeight;
   if (canvas.width !== width * ratio || canvas.height !== height * ratio) {
@@ -231,13 +234,16 @@ function draw(canvas, series, minSpan) {
     return;
   }
 
-  let min = Infinity, max = -Infinity, xMin = 0;
+  // x is always the full window (seconds ago, newest at 0). Scaling to the oldest sample
+  // present instead would make a half-full buffer fill the width and then compress as it
+  // filled, rather than the trace sliding leftwards at a constant speed.
+  const xMin = -Math.abs(windowSeconds || 120);
+  let min = Infinity, max = -Infinity;
   present.forEach(([s]) => {
     s.y.forEach((value) => {
       if (value < min) min = value;
       if (value > max) max = value;
     });
-    if (s.x.length && s.x[0] < xMin) xMin = s.x[0];
   });
   if (!isFinite(min)) { min = 0; max = 1; }
   const span = minSpan || 0;
@@ -252,6 +258,7 @@ function draw(canvas, series, minSpan) {
   const left = 40, right = 6, top = 8, bottom = 14;
   const plotW = width - left - right, plotH = height - top - bottom;
   const sx = (value) => left + (plotW * (value - xMin)) / Math.max(-xMin, 1e-6);
+  const clampX = (value) => Math.max(value, xMin);
   const sy = (value) => top + plotH - (plotH * (value - min)) / (max - min);
 
   context.strokeStyle = '#2a2f3a';
@@ -273,7 +280,7 @@ function draw(canvas, series, minSpan) {
     context.lineWidth = 1.6;
     context.beginPath();
     s.y.forEach((value, index) => {
-      const px = sx(s.x[index]), py = sy(value);
+      const px = sx(clampX(s.x[index])), py = sy(value);
       if (index === 0) context.moveTo(px, py); else context.lineTo(px, py);
     });
     context.stroke();
@@ -302,4 +309,6 @@ function connect() {
   };
 }
 connect();
-window.addEventListener('resize', () => { if (lastState) drawPlots(lastState.plots); });
+window.addEventListener('resize', () => {
+  if (lastState) drawPlots(lastState.plots, lastState.window_seconds);
+});

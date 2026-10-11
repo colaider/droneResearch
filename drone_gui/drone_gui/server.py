@@ -157,6 +157,9 @@ class State:
                 for name, description, controllable in self.cfg.units
             ],
             "plots": plots,
+            # The page scales the x axis to this, not to the oldest sample it happens to
+            # have, so the traces slide instead of compressing while the buffer fills.
+            "window_seconds": self.cfg.history_seconds,
             "events": self.events.items()[:60],
         }
 
