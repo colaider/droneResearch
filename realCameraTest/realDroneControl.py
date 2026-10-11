@@ -305,8 +305,14 @@ class RealDroneNode:
     def run(self):
         a = self.args
         # Wait for the camera_info so we start the estimator with the real res / fov / baseline.
-        print("waiting for stereo camera_info ...", flush=True)
-        res, fov, baseline = self.stereo.res, self.stereo.fov, self.stereo.camera_saperation
+        print(f"waiting for stereo camera_info on {a.stereo_ns}/ ... (up to {a.stereo_wait:.0f}s)", flush=True)
+        try:
+            self.stereo._wait_info(timeout=a.stereo_wait)
+            res, fov, baseline = self.stereo.res, self.stereo.fov, self.stereo.camera_saperation
+        except TimeoutError:
+            self._report_no_stereo()
+            self.close()
+            return 1
         print(f"stereo: res={res} vfov={fov:.1f} deg baseline={baseline:.3f} m", flush=True)
 
         self._bridge = RB3DroneBridge(self.stereo, res, fov, baseline)
@@ -352,15 +358,51 @@ class RealDroneNode:
         finally:
             self.close()
 
+    def _report_no_stereo(self):
+        """No camera_info arrived: say why and what to check (instead of crashing)."""
+        import os
+        a = self.args
+        try:
+            topics = [n for n, _ in self.node.get_topic_names_and_types() if "stereo" in n]
+        except Exception:
+            topics = []
+        print("\nERROR: no stereo camera_info received.", flush=True)
+        print(f"  ROS_DOMAIN_ID here = {os.environ.get('ROS_DOMAIN_ID', '(unset -> 0)')}", flush=True)
+        if topics:
+            print("  stereo topics visible:", flush=True)
+            for t in topics:
+                print(f"    {t}", flush=True)
+            print(f"  -> camera_info not seen under {a.stereo_ns}/. Check --stereo-ns matches the node.", flush=True)
+        else:
+            print("  No /stereo topics visible at all. Likely causes:", flush=True)
+            print("   1. the camera node is not running   -> on the drone:  bash scripts/run_stereo.sh", flush=True)
+            print("      (or:  ros2 run rb3_stereo stereo_camera)", flush=True)
+            print("   2. ROS_DOMAIN_ID differs from the camera node (run_stereo.sh may set 42).", flush=True)
+            print("      Match it, e.g.:  export ROS_DOMAIN_ID=42   then rerun this.", flush=True)
+            print("   3. check with:  ros2 topic list | grep stereo", flush=True)
+
     def close(self):
+        import rclpy
         self._spinning = False
-        self._spin_thread.join(timeout=1.0)
+        if self._spin_thread.is_alive():
+            self._spin_thread.join(timeout=1.0)
         try:
             self.stereo.close()
         except Exception:
             pass
-        self._executor.shutdown()
-        self.node.destroy_node()
+        try:
+            self._executor.shutdown()
+        except Exception:
+            pass
+        try:
+            self.node.destroy_node()
+        except Exception:
+            pass
+        try:
+            if rclpy.ok():
+                rclpy.shutdown()      # clean teardown -> avoids "Aborted (core dumped)" on exit
+        except Exception:
+            pass
 
 
 def _euler_to_quat(roll, pitch, yaw):
@@ -389,6 +431,7 @@ def parse_args(argv=None):
     p.add_argument('--fps', type=int, default=30, help='camera fps (for the camera step period)')
     p.add_argument('--stereo-ns', default='/stereo', help='rb3_stereo namespace')
     p.add_argument('--drone-ns', default='/drone', help='rb3_control namespace')
+    p.add_argument('--stereo-wait', type=float, default=10.0, help='seconds to wait for camera_info before giving up')
     p.add_argument('--no-require-armed', dest='require_armed', action='store_false',
                    help='publish even when /drone/armed is false (rb3_control still gates)')
     p.set_defaults(dry_run=True, require_armed=True)
@@ -398,8 +441,7 @@ def parse_args(argv=None):
 def main(argv=None):
     args = parse_args(argv)
     node = RealDroneNode(args)
-    node.run()
-    return 0
+    return node.run() or 0
 
 
 if __name__ == '__main__':
