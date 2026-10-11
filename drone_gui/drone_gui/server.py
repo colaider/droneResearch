@@ -252,6 +252,12 @@ class Handler(BaseHTTPRequestHandler):
                                             % unit}, 403)
             self.state.events.add("%s %s requested from the panel" % (action, unit))
             result = self.state.board.unit_action(unit, action)
+            if not result.ok and "cancel" in (result.err or "").lower():
+                # systemd cancels a queued job when a conflicting one is started. Saying so
+                # beats showing the raw "Job for X canceled."
+                result.err += (" - a conflicting unit was started, or the job was still "
+                               "waiting on a dependency. drone-stereo and drone-vo share the "
+                               "cameras and cannot both run.")
             if not result.ok:
                 self.state.events.add("%s %s failed: %s" % (action, unit,
                                                             result.err or "see journal"), "error")
