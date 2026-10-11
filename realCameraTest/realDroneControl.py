@@ -47,6 +47,7 @@ import argparse
 import sys
 import threading
 import time
+import types
 from pathlib import Path
 
 import numpy as np
@@ -54,6 +55,32 @@ import numpy as np
 _REPO_ROOT = str(Path(__file__).resolve().parents[1])
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
+
+
+def _ensure_genesis_stub():
+    """swarm/droneClasses/droneStruct.py does `from genesis.utils.misc import tensor_to_array`
+    at import time. That is a simulation-only helper (converts Genesis GPU tensors to numpy) and is
+    never called on the real drone -- but importing the controller still loads droneStruct, so the
+    `genesis` package must be importable. On the drone Genesis is not installed, so provide a tiny
+    stub that satisfies the import without touching swarm. If Genesis *is* installed, use the real one.
+    """
+    try:
+        import genesis  # noqa: F401
+        return
+    except ModuleNotFoundError:
+        pass
+    g = types.ModuleType("genesis")
+    utils = types.ModuleType("genesis.utils")
+    misc = types.ModuleType("genesis.utils.misc")
+    misc.tensor_to_array = lambda x: np.asarray(x)   # only needed by sim's get_two_frames (unused here)
+    utils.misc = misc
+    g.utils = utils
+    sys.modules["genesis"] = g
+    sys.modules["genesis.utils"] = utils
+    sys.modules["genesis.utils.misc"] = misc
+
+
+_ensure_genesis_stub()
 
 from swarm.compVision.visualAccEst import VisulaAcEst
 from swarm.droneClasses.droneVisulaControler import DroneVisulaCTRL
