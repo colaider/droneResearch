@@ -4,24 +4,16 @@ from collections import deque
 import time
 import swarm.config.cameraConfig as camConfig
 from swarm.compVision.visualDepthEst import triangulate_altitude
-from swarm.compVision.smallFeatures import replenish, build_triangles, filter_by_neighbors
-from swarm.compVision.frame import Frame, FrameProcessor
+from swarm.compVision.smallFeatures import (
+    replenish, build_triangles, filter_by_neighbors, LayerTracks, LAYER_COLORS, unique_point_mask,
+)
+from swarm.compVision.frame import Frame, FrameProcessor, compose_layer_display
 
 # Preserve the original public frame name.
 EnumFrame = Frame
 
 
 class VisulaAcEst:
-    # BGR drawing color per pyramid layer (0 = full resolution).
-    LAYER_COLORS = (
-        (255, 0, 0),     # blue
-        (0, 255, 0),     # green
-        (0, 0, 255),     # red
-        (0, 255, 255),   # yellow
-        (255, 0, 255),   # magenta
-        (255, 255, 0),   # cyan
-    )
-
     def __init__(self, res, fov):
         self.fov = fov
         self.foc_l = (res[1] / 2) / np.tan(np.deg2rad(fov) / 2)
@@ -48,8 +40,18 @@ class VisulaAcEst:
         self.avg_att = np.zeros(3)
         self.avg_pos = np.zeros(3)
 
-        self.tracked_points = {}
-        self._tracking_layers = (0, 1, 2)
+        self.tracked_points_by_layer = {0: {}}  # separate native-pixel seeds for each layer
+        self.tracked_points = self.tracked_points_by_layer[0]  # legacy camera-0/full-resolution view
+        self.layer_tracks = {}  # layer -> LayerTracks in full-resolution pixels
+        self._layer_frame_idx = {}
+        self.max_feature_points = 1500  # total, shared among all pyramid layers
+        self.feature_min_distance = 30.0  # base spacing in full-resolution pixels
+        self.cross_layer_min_distance = 5.0  # full-resolution pixels, velocity fit only
+        self.all_points = [np.empty((0, 2), np.float32) for _ in range(self.frame_processor.pyramid_levels)]
+        self.point_colors = [np.empty((0, 3), np.uint8) for _ in self.all_points]
+        self.point_layers = np.empty(0, int)  # flattened layer IDs aligned with velocity_point_mask
+        self.velocity_point_mask = np.empty(0, bool)
+        self.layer_views = []  # one annotated left-image view per pyramid layer
         self.vkfs = {}
 
         self.camera_velocity = np.zeros(4)   # [vx, vy, vz, yaw_rate], body frame
@@ -86,33 +88,6 @@ class VisulaAcEst:
     def clahe(self, value):
         self.frame_processor.clahe = value
 
-    @property
-    def tracking_layers(self):
-        """Grayscale-pyramid levels tracked independently by Lucas-Kanade."""
-        return self._tracking_layers
-
-    @tracking_layers.setter
-    def tracking_layers(self, value):
-        value = tuple(value)
-        if not value or any(
-            isinstance(v, (bool, np.bool_)) or not isinstance(v, (int, np.integer)) or v < 0
-            for v in value
-        ):
-            raise ValueError("tracking_layers must be nonempty nonnegative integers")
-        value = tuple(sorted({int(v) for v in value}))
-        if value != self._tracking_layers:
-            self._tracking_layers = value
-            self.tracked_points.clear()
-
-    @property
-    def tracking_layer(self):
-        """Single-layer alias: the finest tracked pyramid level."""
-        return self._tracking_layers[0]
-
-    @tracking_layer.setter
-    def tracking_layer(self, value):
-        self.tracking_layers = (value,)
-
     def preprocess_frame(self, frame):
         """Compatibility adapter for filtering an already-normalized BGR image."""
         return self.frame_processor.preprocess(frame)
@@ -129,6 +104,12 @@ class VisulaAcEst:
     def processing(self, frame, idx):
         self.update_frame(frame, idx)
         self.aply_flow()
+        self.layer_views = [
+            compose_layer_display(gray, self.all_points[layer] / (2 ** layer),
+                                  self.layer_tracks[layer].links, layer,
+                                  LAYER_COLORS[layer % len(LAYER_COLORS)])
+            for layer, gray in enumerate(self.current_frame.pyramids[0])
+        ]
         return self.current_frame
 
 
@@ -159,139 +140,175 @@ class VisulaAcEst:
 
     def aply_flow(self):
         self._take_sensor_window()
+        num_layers = len(self.current_frame.pyramids[0]) if self.current_frame.pyramids else 0
+        self.layer_tracks = {layer: LayerTracks.empty(layer, self.current_frame.idx)
+                             for layer in range(num_layers)}
+        # Stable layer indices, including empty arrays for layers without valid tracks.
+        # Every Nx2 point array uses full-resolution left-image coordinates.
+        self.all_points = [np.empty((0, 2), np.float32) for _ in range(num_layers)]
+        self.point_colors = [np.empty((0, 3), np.uint8) for _ in range(num_layers)]
+        self.point_layers = np.empty(0, int)
+        self.velocity_point_mask = np.empty(0, bool)
         if len(self.buffer) < 2:
             return
-
         prev_data, curr_data = self.buffer[-2], self.buffer[-1]
         prev, curr = prev_data.frames, curr_data.frames
         if min(len(prev), len(curr)) < 2:
             self.camera_velocity = self._fallback_velocity()
             return
-        n_levels = min(len(prev_data.pyramids[0]), len(curr_data.pyramids[0]), len(prev_data.pyramids[1]))
-        if self.tracking_layers[-1] >= n_levels:
-            raise ValueError(
-                f"tracking_layers {self.tracking_layers} unavailable in the "
-                f"stored image pyramids ({n_levels} levels)"
-            )
+        num_layers = len(curr_data.pyramids[0])
+        if not num_layers or any(len(pyramid) != num_layers for pyramid in
+                                 (prev_data.pyramids[0], prev_data.pyramids[1])):
+            raise ValueError('Previous and current image pyramids must have the same layers')
 
-        # Track every pyramid layer separately; each layer draws its mesh on
-        # top of the previous one, so pass the annotated frames along.
-        processed = [curr[0].copy(), curr[1].copy()]
-        flows, olds_l, olds_r, news_l, news_r, tris, links = [], [], [], [], [], [], []
-        offset = 0
-        for layer in self.tracking_layers:
-            out, l_flow, l_olds, l_news, l_tris, l_links = self.lucas_kanade_flow(
-                prev[0], processed[0], prev[1], processed[1],
-                tracking_gray=(
-                    prev_data.pyramids[0][layer],
-                    curr_data.pyramids[0][layer],
-                    prev_data.pyramids[1][layer],
-                ),
-                layer=layer,
+        annotated = [curr[0].copy(), curr[1].copy()]
+        flows, previous_points, current_points, layer_ids = [], [], [], []
+        budget, remainder = divmod(self.max_feature_points, num_layers)
+        for layer, (gray_prev, gray_curr, gray_right) in enumerate(zip(
+                prev_data.pyramids[0], curr_data.pyramids[0], prev_data.pyramids[1])):
+            annotated, flow, olds, news, _, _ = self.lucas_kanade_flow(
+                prev[0], annotated[0], prev[1], annotated[1],
+                tracking_gray=(gray_prev, gray_curr, gray_right),
+                layer=layer, max_points=budget + (layer < remainder),
             )
-            processed = out
-            if l_flow is None:
-                continue
-            flows.append(l_flow)
-            olds_l.append(l_olds[0]); olds_r.append(l_olds[1])
-            news_l.append(l_news[0]); news_r.append(l_news[1])
-            tris.append(l_tris + offset)
-            links.append(l_links + offset)
-            offset += len(l_flow)
-
-        self.current_frame.frames = processed
+            if flow is not None:
+                self.all_points[layer] = news[0][:, :2].astype(np.float32, copy=True)
+                self.point_colors[layer] = np.tile(
+                    np.asarray(LAYER_COLORS[layer % len(LAYER_COLORS)], np.uint8), (len(flow), 1))
+                flows.append(flow)
+                previous_points.append(olds[0])
+                current_points.append(news[0])
+                layer_ids.append(np.full(len(flow), layer, int))
+        for layer, tracks in self.layer_tracks.items():
+            colour = LAYER_COLORS[layer % len(LAYER_COLORS)]
+            text = f'L{layer} 1/{2 ** layer} | {len(tracks.new_points)} points'
+            for frame in annotated:
+                cv2.putText(frame, text, (8, 20 + 20 * layer), cv2.FONT_HERSHEY_SIMPLEX,
+                            .5, colour, 1, cv2.LINE_AA)
+        cv2.putText(annotated[1], 'Right overlay predicted from flow',
+                    (8, 20 + 20 * num_layers), cv2.FONT_HERSHEY_SIMPLEX,
+                    .45, (220, 220, 220), 1, cv2.LINE_AA)
+        self.current_frame.frames = annotated
         if not flows:
             self.camera_velocity = self._fallback_velocity()
             return
-
-        flow = np.vstack(flows)
-        olds = [np.vstack(olds_l), np.vstack(olds_r)]
-        news = [np.vstack(news_l), np.vstack(news_r)]
-        tris, links = np.vstack(tris), np.vstack(links)
-
-        # news = self.trinagulate_altitude(news, flow, olds, tris, links)
-
-        keep = self.point_prediction_filtering(olds[0], news[0])
-        flow, news = flow[keep], [news[0][keep], news[1][keep]]
-        self.estimate_velocities(flow, news[0])
+        flow, old, new = np.vstack(flows), np.vstack(previous_points), np.vstack(current_points)
+        # Velocity fitting flattens successful tracks; public point arrays stay grouped by layer.
+        self.point_layers = np.concatenate(layer_ids)
+        keep = (np.isfinite(flow).all(axis=1) & np.isfinite(old).all(axis=1) &
+                np.isfinite(new).all(axis=1) & (old[:, 2] > 0) & (new[:, 2] > 0))
+        ids = np.flatnonzero(keep)
+        if len(ids):
+            keep[ids] = self.point_prediction_filtering(old[ids], new[ids])
+        # Duplicate observations may remain visible in their own layer, but may
+        # not count twice toward the combined motion estimate.
+        ids = np.flatnonzero(keep)
+        keep[ids] = unique_point_mask(new[ids, :2], self.cross_layer_min_distance)
+        self.velocity_point_mask = keep
+        self.estimate_velocities(flow[keep], new[keep])
 
 # ---------------- tracking ----------------
 
-    def lucas_kanade_flow(self, frame1, frame2, frame_r, frame_r_curr, tracking_gray=None, layer=0):
-        gray1, gray2, gray_r = tracking_gray
-        annotated_frame = frame2.copy()
-        annotated_r = frame_r_curr.copy()
-
+    def lucas_kanade_flow(self, frame1, frame2, frame_r, frame_r_curr, tracking_gray=None,
+                         *, layer, max_points):
+        """Process one iteration of the pyramid loop, returning full-resolution pixels."""
+        if tracking_gray is None or len(tracking_gray) < 3:
+            raise ValueError('Supply previous-left, current-left and previous-right grayscale layers')
+        gray1, gray2, gray_r = tracking_gray[:3]
+        # pyrDown keeps even pixel centres: factor 2**layer, also for odd sizes.
+        pixel_scale = float(2 ** layer)
+        h, w = frame1.shape[:2]
+        expected = ((h + int(pixel_scale) - 1) // int(pixel_scale),
+                    (w + int(pixel_scale) - 1) // int(pixel_scale))
+        if any(gray.shape != expected for gray in (gray1, gray2, gray_r)):
+            raise ValueError('Tracking images do not match the pyramid layer')
+        annotated_frame, annotated_r = frame2.copy(), frame_r_curr.copy()
         lost = ([annotated_frame, annotated_r], None, None, None, None, None)
         empty = np.empty((0, 2), np.float32)
-        pixel_scale = np.array(
-            [frame1.shape[1] / gray1.shape[1], frame1.shape[0] / gray1.shape[0]],
-            dtype=np.float32,
-        )
-
-        lk = dict(winSize=(21, 21), maxLevel=1, criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 30, 0.01))
-        lk_stereo = dict(winSize=(100, 100), maxLevel=4, criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 30, 0.01))
+        cache = self.tracked_points_by_layer.setdefault(layer, {})
+        previous_idx = self.buffer[-2].idx if len(self.buffer) >= 2 else self.current_frame.idx - 1
+        if layer in self._layer_frame_idx and self._layer_frame_idx[layer] != previous_idx:
+            cache.clear()
 
         def bad_return():
-            self.tracked_points[layer] = empty
+            cache[0] = empty.copy()
+            self._layer_frame_idx[layer] = self.current_frame.idx
+            self.layer_tracks[layer] = LayerTracks.empty(layer, self.current_frame.idx)
             return lost
 
-        # Keep the same full-resolution corner spacing on every layer.
-        pts = self._replenish(gray1, self.tracked_points.get(layer, empty), 0,
-                              min_distance=max(1, int(100 / pixel_scale[0])))
-    
-        if len(pts) < 3: return bad_return()
+        lk = dict(winSize=(21, 21), maxLevel=1,
+                  criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 30, 0.01))
+        lk_stereo = dict(winSize=(100, 100), maxLevel=4,
+                         criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 30, 0.01))
+        pts = self._replenish(gray1, cache.get(0, empty), 0, max_points=max_points, pixel_scale=pixel_scale)
+        if len(pts) < 3:
+            return bad_return()
         old = pts.reshape(-1, 1, 2).astype(np.float32)
         new, st_f, _ = cv2.calcOpticalFlowPyrLK(gray1, gray2, old, None, **lk)
-
-        if new is None: return bad_return()
-        back, st_b, _ = cv2.calcOpticalFlowPyrLK(gray2, gray1, new, None, **lk)  # ✓ new still (N, 1, 2)
+        if new is None or st_f is None:
+            return bad_return()
+        valid = (st_f.ravel() == 1) & np.isfinite(new.reshape(-1, 2)).all(axis=1)
+        if not valid.any():
+            return bad_return()
+        old, new = old[valid], new[valid]
+        back, st_b, _ = cv2.calcOpticalFlowPyrLK(gray2, gray1, new, None, **lk)
+        if back is None or st_b is None:
+            return bad_return()
         old, new, back = old.reshape(-1, 2), new.reshape(-1, 2), back.reshape(-1, 2)
-        good = (
-            (st_f.ravel() == 1) & (st_b.ravel() == 1)
-            & (np.abs((old - back) * pixel_scale).max(axis=1) < 1.0)
-        )
+        good = ((st_b.ravel() == 1) & np.isfinite(back).all(axis=1) &
+                (np.abs((old - back) * pixel_scale).max(axis=1) < 1.0) &
+                (new[:, 0] >= 0) & (new[:, 0] * pixel_scale < w) &
+                (new[:, 1] >= 0) & (new[:, 1] * pixel_scale < h))
         good_old, good_new = old[good] * pixel_scale, new[good] * pixel_scale
-       
         if len(good_old) >= 6:
-            _, inliers = cv2.estimateAffinePartial2D(good_old, good_new, method=cv2.RANSAC, ransacReprojThreshold=2.0, maxIters=2000, confidence=0.99)
-            inliers = inliers.ravel().astype(bool)
-            good_old, good_new = good_old[inliers], good_new[inliers]
-
+            _, inliers = cv2.estimateAffinePartial2D(
+                good_old, good_new, method=cv2.RANSAC, ransacReprojThreshold=2.0,
+                maxIters=2000, confidence=0.99)
+            if inliers is not None:
+                mask = inliers.ravel().astype(bool)
+                good_old, good_new = good_old[mask], good_new[mask]
+        mesh_args = dict(max_edge=200.0 * pixel_scale, min_area=20.0 * pixel_scale ** 2)
         for _ in range(2):
-            if len(good_new) < 3: break
-            _, _, links, _ = self._build_triangles(good_new)
+            if len(good_new) < 3:
+                break
+            _, _, links, _ = self._build_triangles(good_new, **mesh_args)
             good_old, good_new = self.filter_by_neighbors(good_old, good_new, links)
-
-        old_r = empty
-        if len(good_old) >= 3:
-            p = (good_old / pixel_scale).reshape(-1, 1, 2).astype(np.float32)
-            old_r, st_r, _ = cv2.calcOpticalFlowPyrLK(gray1, gray_r, p, None, **lk_stereo)
-            if old_r is None: return bad_return()
-                
-            old_r = old_r.reshape(-1, 2) * pixel_scale
-            good_old, good_new, old_r = good_old[st_r.ravel() == 1], good_new[st_r.ravel() == 1], old_r[st_r.ravel() == 1]
-
-        if len(good_new) < 3: return bad_return()
-
-        triangles, _, links, _ = self._build_triangles(good_new)
-        self.tracked_points[layer] = good_new / pixel_scale
-        flow, scale, div = self.compensate_vertical(good_old, good_new, triangles)
-       
-        new_r = old_r + flow
-
+        if len(good_old) < 3:
+            return bad_return()
+        p = (good_old / pixel_scale).reshape(-1, 1, 2).astype(np.float32)
+        old_r, st_r, _ = cv2.calcOpticalFlowPyrLK(gray1, gray_r, p, None, **lk_stereo)
+        if old_r is None or st_r is None:
+            return bad_return()
+        old_r = old_r.reshape(-1, 2) * pixel_scale
+        valid = ((st_r.ravel() == 1) & np.isfinite(old_r).all(axis=1) &
+                 (old_r[:, 0] >= 0) & (old_r[:, 0] < w) &
+                 (old_r[:, 1] >= 0) & (old_r[:, 1] < h))
+        good_old, good_new, old_r = good_old[valid], good_new[valid], old_r[valid]
+        if len(good_new) < 3:
+            return bad_return()
+        triangles, _, links, _ = self._build_triangles(good_new, **mesh_args)
+        cache[0] = (good_new / pixel_scale).astype(np.float32)
+        self._layer_frame_idx[layer] = self.current_frame.idx
+        flow, _, _ = self.compensate_vertical(good_old, good_new, triangles)
+        new_r = old_r + flow  # retained legacy overlay, not a stereo depth measurement
+        self.layer_tracks[layer] = LayerTracks(
+            layer, self.current_frame.idx, good_old.copy(), good_new.copy(), old_r.copy(),
+            new_r.copy(), flow.copy(), triangles.copy(), links.copy(),
+        )
         z = self._current_height()
-        olds = [np.hstack((good_old, np.full((len(good_old), 1), z))), np.hstack((old_r, np.full((len(old_r), 1), z)))]
-        news = [np.hstack((good_new, np.full((len(good_new), 1), z))), np.hstack((new_r, np.full((len(new_r), 1), z)))]
-        
-        color = self.LAYER_COLORS[layer % len(self.LAYER_COLORS)]
-        annotated_frame, annotated_r = self.drawing(annotated_frame, annotated_r, good_new, new_r, links, color)
-        return [annotated_frame, annotated_r], flow, olds, news, triangles, links 
+        olds = [np.column_stack((points, np.full(len(points), z))) for points in (good_old, old_r)]
+        news = [np.column_stack((points, np.full(len(points), z))) for points in (good_new, new_r)]
+        annotated_frame, annotated_r = self.drawing(
+            annotated_frame, annotated_r, good_new, new_r, links,
+            color=LAYER_COLORS[layer % len(LAYER_COLORS)],
+        )
+        return [annotated_frame, annotated_r], flow, olds, news, triangles, links
 
 
-    def _replenish(self, gray, pts, cam, max_points=300, min_distance=100):
-        """Compatibility adapter for smallFeratures.replenish."""
-        return replenish(gray, pts, cam, max_points, min_distance)
+    def _replenish(self, gray, pts, cam, max_points=300, *, pixel_scale=1.0):
+        """Scale full-resolution feature spacing into native pyramid pixels."""
+        min_distance = max(1.0, self.feature_min_distance / pixel_scale)
+        return replenish(gray, pts, cam, max_points, min_distance=min_distance)
 
     # ---------------- mesh ----------------
 
@@ -315,12 +332,12 @@ class VisulaAcEst:
 
 
     def _build_triangles(self, points, max_edge=200.0, min_area=20.0):
-        """Compatibility adapter for smallFeratures.build_triangles."""
+        """Compatibility adapter for smallFeatures.build_triangles."""
         return build_triangles(points, max_edge, min_area)
 
 
     def filter_by_neighbors(self, good_old, good_new, links, thresh=2.0, min_links=1, neighbor_min_links=3):
-        """Compatibility adapter for smallFeratures.filter_by_neighbors."""
+        """Compatibility adapter for smallFeatures.filter_by_neighbors."""
         return filter_by_neighbors(good_old, good_new, links, thresh, min_links, neighbor_min_links)
 
 

@@ -48,7 +48,7 @@ class StateMachine:
             if status: self.stage = 1
 
         elif self.stage == 1:
-            self.hower(3)
+            self.hower(7)
 
 
        
