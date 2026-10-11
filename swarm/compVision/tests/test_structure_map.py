@@ -33,8 +33,9 @@ def grass_pair(shape=(480, 640), seed=5):
 
 class StructureMapperTests(unittest.TestCase):
     def test_box_rises_above_ground_in_the_height_grid(self):
-        # Nominal mount geometry says the shift is vertical; the images shift along -x.
-        cfg = StereoCameraConfig(res=(640, 480), left_focal=F, right_focal=F, baseline=B)
+        # Deliberately configure a rotated mount to exercise direction-mismatch detection.
+        cfg = StereoCameraConfig(res=(640, 480), left_focal=F, right_focal=F, baseline=B,
+                                 left_up=(1, 0, 0), right_up=(1, 0, 0))
         self.assertGreater(abs(cfg.disparity_direction()[1]), 0.9)
         # One frame only, so every observed cell counts (default needs 2 hits).
         mapper = StructureMapper(cfg, levels=(1, 2), depth_level=0, min_depth=4.0,

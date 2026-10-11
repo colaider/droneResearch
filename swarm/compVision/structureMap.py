@@ -1,8 +1,7 @@
-"""Large structures on coarse pyramid layers + dense stereo -> TerrainMap height grid.
+"""Optional large-structure and dense-stereo mapping path.
 
-Runs alongside ``VisulaAcEst`` on the ``Frame`` it returns (its pyramids are
-reused, nothing is recomputed). Used by the simulator ``DroneStruct`` and by
-the real-camera runners.
+This module is intentionally not wired into the active simulator or camera
+pipeline; it remains available for isolated experiments and future integration.
 """
 
 import numpy as np

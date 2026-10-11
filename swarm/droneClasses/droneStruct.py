@@ -1,8 +1,9 @@
 import cv2
+import numpy as np
+from swarm.compVision.terrainMap import PointMap
 from genesis.utils.misc import tensor_to_array
-from swarm.compVision.visualAccEst import VisulaAcEst
+from swarm.compVision.visualEst import VisulaEst
 from swarm.compVision.frame import prepare_camera_frame, compose_camera_display
-from swarm.compVision.structureMap import StructureMapper
 
 
 class DroneStruct:
@@ -16,16 +17,22 @@ class DroneStruct:
         self._camera_display = None
         self._camera_window_ready = False
         self._layer_windows = set()
+        self._depth_window_ready = False
+        self.point_map = PointMap(cam_cfg)
+        self.map_pose_position = np.zeros(3)
 
-        self.frame_processor = VisulaAcEst(cam_cfg.res, cam_cfg.fov)
+        self.frame_processor = VisulaEst(cam_cfg.res, cam_cfg.fov)
+        # This simulation path uses parallel cameras with a common projection.
+        separation = np.asarray(cam_cfg.camera_pos('right')) - cam_cfg.camera_pos('left')
+        if (not np.isclose(cam_cfg.left_focal, cam_cfg.right_focal)
+                or not np.allclose(cam_cfg.camera_axes('left'), cam_cfg.camera_axes('right'))
+                or not np.isclose(np.linalg.norm(separation), cam_cfg.baseline)
+                or abs(separation @ cam_cfg.camera_axes()[:, 2]) > 1e-8):
+            raise ValueError('Stereo depth needs matching simulation projections and a transverse calibrated baseline')
+        self.frame_processor.foc_l = cam_cfg.focal_px
         self.frame_processor.camera_saperation = cam_cfg.baseline
         self.frame_processor.disparity_direction = cam_cfg.disparity_direction()
         self.steps_cam = 0
-
-        # Large structures (boxes/buildings) on coarse pyramid layers + dense stereo -> TerrainMap.
-        # Levels 2-3: level 1 costs ~50 ms of LSD at 1080p. View with MapViewer().update(self.terrain, pos).
-        self.enable_structure_map = True
-        self.structure_mapper = StructureMapper(cam_cfg, levels=(2, 3), depth_level=1)
 
     def __getattr__(self, attr):
         return getattr(self._drone, attr)
@@ -50,6 +57,11 @@ class DroneStruct:
                 cv2.resizeWindow(title, w, h)
                 self._layer_windows.add(layer)
             cv2.imshow(title, image)
+        if self.frame_processor.depth_view is not None:
+            if not self._depth_window_ready:
+                cv2.namedWindow('Stereo depth', cv2.WINDOW_NORMAL | cv2.WINDOW_KEEPRATIO)
+                self._depth_window_ready = True
+            cv2.imshow('Stereo depth', self.frame_processor.depth_view)
         cv2.waitKey(1)
         
 
@@ -66,26 +78,20 @@ class DroneStruct:
 
 
     def camera_step(self):
+        # Capture pose in the same simulation step as the stereo exposure.
+        # Ground-truth pose is used ONLY to register/validate the map, never for stereo depth.
+        self.map_pose_position = tensor_to_array(self._drone.get_pos()).reshape(-1, 3)[0].copy()
+        map_quat = tensor_to_array(self._drone.get_quat()).reshape(-1, 4)[0].copy()
         raw_frames = self.get_two_frames()
         frames = self.frame_processor.processing(raw_frames, self.steps_cam)
-        if self.enable_structure_map:
-            self.structure_step(frames)
+        fp = self.frame_processor
+        self.point_map.add(fp.depth_points, self.map_pose_position, map_quat,
+                           colors=fp.depth_colors, sigma_depth=fp.depth_sigma, frame_idx=fp.depth_frame_idx)
         self.postpocessed_frames = frames.frames
         # Build only when a new camera sample arrives, not on every physics step.
         self._camera_display = self._compose_camera_display(self.postpocessed_frames, frames.gray_frames)
         self.steps_cam += 1
         return frames
-
-    @property
-    def terrain(self):
-        return self.structure_mapper.terrain
-
-    def structure_step(self, frames):
-        """Large features on coarse layers, dense depth, then feed the TerrainMap."""
-        pos = tensor_to_array(self._drone.get_pos())
-        quat = tensor_to_array(self._drone.get_quat())
-        self.structure_mapper.step(frames, pos, quat)
-        self.structure_mapper.draw(frames.frames[0])
 
     @staticmethod
     def _compose_camera_display(processed, tracking_gray):

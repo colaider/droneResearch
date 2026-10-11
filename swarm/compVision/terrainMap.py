@@ -95,3 +95,65 @@ class TerrainMap:
         a, b, c, d = a[quad], b[quad], c[quad], d[quad]
         faces = np.vstack([np.column_stack([a, b, d]), np.column_stack([a, d, c])])
         return verts, faces
+
+
+class PointMap:
+    """Bounded 3D voxel point map, preserving multiple heights at the same XY.
+
+    Stores measured points only, with no interpolation or image-triangle faces.
+    Each voxel receives at most one weighted observation per camera frame.
+    """
+    def __init__(self, cam_cfg, voxel_size=.05, max_voxels=50000):
+        from collections import OrderedDict
+        if not np.isfinite(voxel_size) or voxel_size <= 0 or max_voxels < 1:
+            raise ValueError('Positive voxel size and capacity required')
+        self.cam_cfg, self.voxel_size, self.max_voxels = cam_cfg, voxel_size, int(max_voxels)
+        self._voxels = OrderedDict()
+        self.last_frame_idx = -1
+
+    def add(self, pts_uvz, drone_pos, drone_quat, *, colors, sigma_depth, frame_idx):
+        if frame_idx <= self.last_frame_idx:
+            return
+        pts = np.asarray(pts_uvz, float).reshape(-1, 3)
+        colors = np.asarray(colors, np.uint8).reshape(-1, 3)
+        sigma = np.asarray(sigma_depth, float).reshape(-1)
+        if len(pts) != len(colors) or len(pts) != len(sigma):
+            raise ValueError('Map points, colours and uncertainty must have matching lengths')
+        position, quat = np.asarray(drone_pos, float), np.asarray(drone_quat, float)
+        if (position.shape != (3,) or quat.shape != (4,) or not np.isfinite(position).all()
+                or not np.isfinite(quat).all() or np.linalg.norm(quat) < 1e-9):
+            raise ValueError('Map requires a finite position and nonzero wxyz quaternion')
+        self.last_frame_idx = frame_idx
+        good = np.isfinite(pts).all(axis=1) & (pts[:, 2] > 0) & np.isfinite(sigma) & (sigma > 0)
+        pts, colors, sigma = pts[good], colors[good], sigma[good]
+        if not len(pts):
+            return
+        body = self.cam_cfg.backproject(pts[:, :2], pts[:, 2])
+        world = body @ quat_to_R(quat).T + position
+        good = np.isfinite(world).all(axis=1)
+        world, colors, sigma = world[good], colors[good], sigma[good]
+        keys, inverse = np.unique(np.floor(world / self.voxel_size).astype(np.int64), axis=0, return_inverse=True)
+        weights = 1 / np.maximum(sigma, .01)**2
+        for group, key in enumerate(keys):
+            ids = np.flatnonzero(inverse == group)
+            weight = weights[ids]
+            point = np.average(world[ids], axis=0, weights=weight)
+            color = colors[ids[np.argmax(weight)]]
+            # Duplicate layers must not multiply one frame's map confidence.
+            weight = float(weight.max())
+            key = tuple(key)
+            if key in self._voxels:
+                old_point, old_weight, _ = self._voxels[key]
+                point = (old_point*old_weight + point*weight)/(old_weight+weight)
+                weight = min(old_weight+weight, 1e6)
+            self._voxels[key] = (point, weight, color.copy())
+            self._voxels.move_to_end(key)
+        while len(self._voxels) > self.max_voxels:
+            self._voxels.popitem(last=False)
+
+    def points(self):
+        return np.asarray([v[0] for v in self._voxels.values()], float).reshape(-1, 3)
+
+    def colors(self):
+        """Return RGB floats for the 3D viewer; input colours are OpenCV BGR."""
+        return np.asarray([v[2] for v in self._voxels.values()], float).reshape(-1, 3)[:, ::-1] / 255

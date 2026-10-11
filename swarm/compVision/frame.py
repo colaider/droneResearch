@@ -204,3 +204,22 @@ def compose_layer_display(gray, points, links, layer, color):
                 (235, 235, 235), 1, cv2.LINE_AA)
     cv2.line(image, (0, 26), (image.shape[1] - 1, 26), color, 2)
     return image
+
+
+def compose_depth_display(gray, points, total_points):
+    """Sparse measured depth overlay; colour scale is labelled in metres per frame."""
+    image = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+    h, w = gray.shape
+    scale = min(640 / w, 450 / h, 1.0)
+    image = cv2.resize(image, (round(w * scale), round(h * scale)))
+    label = f'Stereo depth: {len(points)}/{total_points} points'
+    if len(points):
+        lo, hi = np.percentile(points[:, 2], [2, 98])
+        level = np.clip((points[:, 2]-lo)/max(hi-lo, .01), 0, 1)
+        colors = cv2.applyColorMap((255*level).astype(np.uint8).reshape(-1, 1), cv2.COLORMAP_TURBO)[:, 0]
+        for (u, v, _), color in zip(points, colors):
+            cv2.circle(image, (round(u*scale), round(v*scale)), 3, tuple(map(int, color)), -1)
+        label += f' | blue {lo:.2f}m - red {hi:.2f}m'
+    image = cv2.copyMakeBorder(image, 30, 0, 0, max(0, 640-image.shape[1]), cv2.BORDER_CONSTANT)
+    cv2.putText(image, label, (8, 20), cv2.FONT_HERSHEY_SIMPLEX, .45, (240, 240, 240), 1, cv2.LINE_AA)
+    return image

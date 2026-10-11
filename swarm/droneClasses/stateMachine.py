@@ -95,4 +95,7 @@ class StateMachine:
                 self.stage = 1
 
         elif self.stage == 1:
-            self.hower(4)
+            self.hower(5)
+
+
+       

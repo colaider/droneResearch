@@ -1,20 +1,55 @@
-# Visual navigation pipeline
+# Computer vision architecture
 
-The stages follow the architecture sketch:
+`VisulaEst.processing()` is the temporal tracking, velocity, and sparse stereo
+entry point. In the simulator it is called by `DroneStruct.camera_step()`; camera
+runners pass it a `[left, right]` pair.
 
 ```text
-FrameProcessor -> LargeFeatureDetector -> SmallFeatureTracker -> DepthEstimator -> VisulaAcEst
-    frame.py       largeFeatures.py         smallFeatures.py       depth.py       visualAccEst.py
+                    VisulaEst.processing([left, right], frame_idx)
+                                      |
+                update_frame -> FrameProcessor.process
+                  normalize / filter / grayscale / pyramid
+                                      |
+                     aply_flow: temporal tracking
+                  per-layer LK, previous LEFT -> current LEFT
+                  replenish -> GFTT/Canny candidates (smallFeatures.py)
+                     |                          |
+              layer_tracks[layer]          all_points[layer]
+              full-res left tracks         full-res left points
+                     |                          |
+                     +-> combine/filter -> estimate_velocities
+                          flow + tracks + supplied height
+                                                |
+                         estimate_depth -> estimate_frame_depth
+                         current LEFT + current RIGHT, per layer
+                         patch search -> LK refinement/reverse check
+                         -> signed disparity -> optical-axis depth
+                                      |
+                       depth_by_layer / depth_points
 ```
 
-`VisulaAcEst` remains the public entry point and coordinates the stages. Its own
-numerical work is motion compensation, velocity estimation, and velocity filtering.
-The original import and simulator/camera-runner interfaces are retained:
+`all_points` is a list indexed by pyramid layer. Each entry contains that
+layer's current **left-image** points in full-resolution pixel coordinates;
+it does not contain points from both cameras. Temporal LK runs independently
+for each layer, with its own cached seeds. Stereo matching happens afterward
+between the current left and right images at the corresponding layer.
+
+The simulator's active 3D map uses only the estimator's sparse stereo points:
+
+```text
+VisulaEst.depth_points -> PointMap (sparse tracked-feature map)
+```
+
+`largeFeatures.py` and `structureMap.py` are retained but isolated: the simulator
+and camera runners do not invoke them. Their structural detections and dense
+stereo points do not feed the active map.
+
+The original estimator import and caller interface are retained:
 
 ```python
-from swarm.compVision.visualAccEst import VisulaAcEst
+from swarm.compVision.visualEst import VisulaEst
 
-estimator = VisulaAcEst(res=(1920, 1080), fov=60)
+estimator = VisulaEst(res=(1920, 1080), fov=60)
 estimator.image_filters = ("clahe", "gaussian")
 estimator.filter_kernel_size = 3
 estimator.set_dt(1 / 30)
@@ -30,80 +65,67 @@ the existing sensor attributes and calling `push_sensors()` as the controller do
 
 | Stage | Owns | Output |
 | --- | --- | --- |
-| `frame.py` | Ordered CLAHE/Gaussian/median filters, grayscale conversion, Gaussian pyramids | `Frame`: clean stereo BGR images, gray images, full/half/quarter pyramids, frame index |
-| `largeFeatures.py` | Long-line detection at a coarse pyramid level; grouping nearby lines into padded regions | `LargeFeatures`: lines and region boxes in original-image pixels |
-| `smallFeatures.py` | Existing GFTT + Canny proximity + quadrant selection, temporal LK, forward/backward checks, affine/neighbor filters, Delaunay mesh | `FeatureTracks`: matched previous/current left-image points, triangles, links |
-| `depth.py` | Same-frame stereo LK, reverse checks, signed disparity/epipolar checks, depth reconstruction | `DepthResult`: aligned left/right matches, depths, validity, frame index |
-| `visualAccEst.py` | Stage orchestration, sensor windows, vertical-flow compensation, predicted-motion filtering, planar velocity/yaw fit and Kalman filtering | Existing public frame, velocity, and depth attributes |
+| `frame.py` | Normalize and filter each image; create grayscale images and pyramids | `Frame`: left/right BGR, grayscale images, per-camera pyramids, frame index |
+| `smallFeatures.py` | Replenish corners with GFTT/Canny; build image-space links and filter neighboring tracks | Candidate points and per-layer track helpers |
+| `visualEst.py` | Coordinate frame processing and stereo-depth coordination | Prepared frames, depth outputs, and public estimator interface |
+| `visualVelEst.py` | Per-layer temporal LK, motion compensation/filtering, and velocity fit | `all_points[layer]`, `layer_tracks`, velocity and tracking display state |
+| `visualDepthEst.py` | Match current left/right feature patches, validate matches, calculate and aggregate sparse depth | Per-layer `StereoDepth`, plus `depth_points` as full-resolution `(u, v, Z)` |
+| `terrainMap.py` | Convert sparse stereo observations into world-frame voxels | `PointMap` used by the active simulator |
+| `largeFeatures.py`, `denseStereo.py`, `structureMap.py` | Isolated structural detection and dense stereo mapping; not invoked by active runners | Future structure/height-map path |
 
-Only two clean stereo frames are retained. Drawing occurs on color copies, so
-mesh and region overlays never enter subsequent feature detection. Yellow boxes
-are current-frame structural proposals; blue points/lines are tracked features.
-Right-image overlays use actual current stereo matches and omit invalid matches.
+The estimator retains recent prepared frames for temporal tracking. Drawing is
+performed on color images, not the grayscale pyramids used for tracking. The
+stereo depth stage draws only validated current-frame right-camera matches.
 
-Feature coordinates always stay in original-image pixels. Large detection maps
-`pyrDown` coordinates by `2**level`, including odd image sizes. Full-resolution
-images remain the inputs to temporal and stereo LK. Each frame's large regions
-are cached for replenishing its points when the next frame arrives.
+Tracked and public feature coordinates are expressed in full-resolution
+left-image pixels. The layer-specific LK seeds are kept separately in native
+layer pixels. `visualDepthEst` scales stereo search by `2**layer` and returns
+right-image match coordinates and depth aligned to the left point rows.
 
-## What is reused, and what changes
+## Tracking details
 
-The fine detector retains the existing GFTT settings (`qualityLevel=0.005`,
-`minDistance=100`, `blockSize=11`), seven-pixel existing-point exclusion, Canny
-proximity check, and quadrant balancing. Large regions get first access to roughly
-35% of available new-point slots (rounded up); global detection supplies the rest.
-This reserves priority slots, not a cap on all points eventually inside regions.
-Set `estimator.small_features.region_fraction = 0` for the original global
-selection path. This split does not enable the separate experimental statistical
-budget sampler supplied earlier. The detector/tracker settings are now explicit
-attributes on `small_features` so that experiment can be added independently.
+Each pyramid layer has its own cached point seeds and receives a share of
+`max_feature_points` (default 1500 total). `replenish()` detects up to 500 GFTT
+candidates per layer (`qualityLevel=0.005`, `blockSize=11`), keeps candidates
+near Canny edges, and balances selection across image quadrants. The configured
+`feature_min_distance` is in full-resolution pixels and is scaled for each layer.
+New seeds are selected in the previous left image, then LK tracks them forward
+to the current left image. Forward/backward, affine, and mesh-neighbor checks
+filter tracks before they enter the velocity fit. Layer data stays separately
+available for display and depth matching.
 
-The existing LK, global affine, and mesh-neighbor filters are retained. Degenerate
-meshes and failed LK calls return empty tracks safely. New points cannot overflow
-the total point budget when existing tracks are concentrated in one quadrant.
+Image filters are applied by `FrameProcessor` in configured order; CLAHE is the
+default. An empty filter tuple disables filtering. Resolution changes require a
+new estimator with matching camera calibration.
 
-Filter settings now actually control preprocessing; the default remains CLAHE.
-The old implementation exposed these settings but applied CLAHE unconditionally.
-In-session resolution changes are rejected because a different pixel scale needs
-matching camera calibration. Create a fresh estimator with that calibration.
+## Current depth and velocity semantics
 
-## Depth and velocity semantics
+The current `processing()` order is `update_frame()`, `aply_flow()`,
+`estimate_velocities()`, then `estimate_depth()`. `aply_flow()` tracks and filters
+the temporal left-image flow, retaining aligned flow and point arrays across
+layers. `processing()` passes the same filtered rows to `estimate_velocities()`.
+For now, each track's Z comes from the supplied height; stereo depth is computed
+afterward and does not feed velocity.
 
-Stereo depth is now an active separate stage for the configured simulator camera
-model. It matches both the previous and current stereo pairs independently.
-Current right-image coordinates are **not** synthesized as old right + left flow.
-Disparity uses the configured `right - left` direction, so horizontal and vertical
-stereo baselines are supported.
+`camera_velocity` is `[vx, vy, supplied_sensor_vz, yaw_rate]`; `estimated_height`
+stores the robust Z statistic used to scale image flow. If too few tracks
+survive to fit velocity, all components fall back to supplied drone/IMU values.
 
-`DepthEstimator` requires rectified or already aligned common-intrinsic pinhole
-images with aligned principal points. It does not calibrate cameras. Raw USB
-images in `realCameraTest` have different intrinsics and are only resized/rotated;
-that runner explicitly sets `use_stereo_depth = False` until stereo calibration
-and rectification are supplied. With stereo disabled, the stage uses a positive
-supplied height for scaling if available and reports no measured stereo depth.
-
-Inspect `current_depth.valid` to distinguish measured depth from fallback values.
-Invalid matches use the median measured depth, or positive supplied height if no
-depth matches survive, preserving the previous fallback policy. If neither is
-available, depth is NaN and the velocity solver falls back to supplied sensor
-velocity. Filled depths are not included in `depth_points` or `depth_valid_frac`.
-Height as optical-axis depth remains an approximation when the drone is tilted.
-
-The velocity solver still estimates horizontal velocity and yaw rate using the
-existing model. It does not yet independently estimate vertical velocity.
-`camera_velocity[2]` now contains supplied `drone_vel[2]`, matching the controller's
-existing use of sensor vertical velocity. The old code incorrectly put a depth
-value in that velocity slot. The largest-decile depth statistic remains available
-as `estimated_height`, separately from `depth_median`.
+`estimate_frame_depth()` then matches each current left-image point against the
+same-frame right image. It requires rectified or aligned common-intrinsic images
+and calibrated focal length, baseline, and disparity direction. It returns
+per-layer matches, valid full-resolution `(u, v, Z)` map points, uncertainty,
+and summary statistics. This depth is optical-axis depth—not world altitude.
 
 The existing global affine/neighbor filters can reject points on surfaces with
 different depths. This refactor does not replace the motion model with a full
 visual-inertial optimizer. Validate navigation accuracy and timing with recorded
 or simulated sequences before drawing conclusions from feature counts.
 
-## Large structures and the height map
+## Isolated large-structure mapping
 
-GFTT on every pyramid layer lands mostly on grass: grass has strong gradients
+This optional path is retained for future work but is not called by the simulator
+or camera runners. GFTT on every pyramid layer lands mostly on grass: grass has strong gradients
 everywhere while box tops and roofs are smooth. Coarse layers have already lost
 the grass blades to `pyrDown`, so they look for *structure* instead:
 
@@ -119,22 +141,16 @@ Frame.pyramids --level 1-----> DenseStereo (SGBM) ----> DepthMap
 | `denseStereo.py` | `StereoRectifier` (identity in the sim; `.npz` from `scripts/calibrate_stereo.py` or ROS `left.yaml`/`right.yaml` for real cameras). `DenseStereo` runs SGBM on an existing layer for any axis-aligned baseline and invalidates textureless pixels (SGBM invents depth there). `fill_quad_plane()` gives smooth faces depth from a plane fit or, when they have no texture at all, by sliding the face's silhouette along the baseline. |
 | `structureMap.py` | `StructureMapper.step(frame, pos, quat)` ties it together and feeds `TerrainMap`; structure points get 4x weight so roof edges stay sharp. |
 
-`DroneStruct.camera_step` runs it on every camera frame (`enable_structure_map`),
-and draws the structures on the left image. Show the map with
-`MapViewer().update(drone.terrain, drone_pos)`. Cost at 1920x1080: ~16 ms detection
-(levels 2-3; level 1 adds ~50 ms of LSD), ~25 ms SGBM, ~10 ms fusion.
+When re-enabled, `StructureMapper.step` can combine structural points with
+dense depth and feed a `TerrainMap`. Its earlier measured cost at 1920x1080 was
+~16 ms detection (levels 2-3; level 1 adds ~50 ms of LSD), ~25 ms SGBM, ~10 ms fusion.
 
-On the first frame the mapper measures the real left-to-right image shift and
-warns (and uses the measurement) when `cam_cfg.disparity_direction()` disagrees.
+If re-enabled, the mapper measures the real left-to-right image shift on its
+first frame and warns (and uses the measurement) when
+`cam_cfg.disparity_direction()` disagrees.
 
-Real cameras: `testRealCameras.py --structures` (2D overlay only),
-`--calib swarm/config/stereo_calib.npz` (rectify + dense depth + map),
-`--map-viewer`. `testRB3Cameras.py` takes `--structures` / `--calib` likewise.
-
-Not yet wired into `VisulaAcEst`: in the per-layer loop of `aply_flow`, coarse
-levels can call `LargeFeatureDetector.detect_layer(gray, level, full_shape)`
-instead of GFTT `_replenish` and seed LK with `structure_points()` (divide by the
-layer's pixel scale), so tracked box corners flow through the existing stereo path.
+The active visual estimator continues to use the temporal GFTT/LK tracking and
+sparse stereo depth path described above.
 
 ## Checks
 

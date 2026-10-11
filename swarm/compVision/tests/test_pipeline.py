@@ -10,7 +10,7 @@ from realCameraTest import testRealCameras as runner
 from swarm.compVision.frame import Frame
 from swarm.compVision.largeFeatures import LargeFeatures
 from swarm.compVision.smallFeatures import FeatureTracks
-from swarm.compVision.visualAccEst import EnumFrame, VisulaAcEst
+from swarm.compVision.visualEst import EnumFrame, VisulaEst
 
 
 def texture(seed=31, shape=(480, 640)):
@@ -26,7 +26,7 @@ def translate(image, dx, dy):
 
 
 def estimator():
-    est = VisulaAcEst((640, 480), 60)
+    est = VisulaEst((640, 480), 60)
     est.image_filters = ()
     est.foc_l = 500.0
     est.camera_saperation = 0.12
@@ -217,7 +217,7 @@ class PipelineTests(unittest.TestCase):
 
     def test_real_camera_public_adapter_and_filter_settings(self):
         self.assertIs(EnumFrame, Frame)
-        self.assertIs(runner.VisulaAcEst, VisulaAcEst)
+        self.assertIs(runner.VisulaEst, VisulaEst)
         est = runner.make_estimator(500.0, (640, 480), filters=('median',), kernel_size=5)
         self.assertEqual(est.foc_l, 500.0)
         self.assertEqual(est.camera_saperation, runner.BASELINE)

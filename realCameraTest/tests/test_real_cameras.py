@@ -12,7 +12,7 @@ import numpy as np
 
 from realCameraTest import testRealCameras as runner
 from realCameraTest.display import compose_camera_display
-from swarm.compVision.visualAccEst import VisulaAcEst as SwarmEstimator
+from swarm.compVision.visualEst import VisulaEst as SwarmEstimator
 
 
 def textured(seed=0):
@@ -25,7 +25,7 @@ def textured(seed=0):
 class DirectConnectionTests(unittest.TestCase):
     def test_runner_uses_the_real_estimator_not_a_copy(self):
         # No duplicate estimator in the folder: the runner references the swarm class itself.
-        self.assertIs(runner.VisulaAcEst, SwarmEstimator)
+        self.assertIs(runner.VisulaEst, SwarmEstimator)
 
     def test_make_estimator_sets_calibration(self):
         est = runner.make_estimator(runner.LEFT_FOCAL, (640, 480), filters=('median',), kernel_size=5)
@@ -137,7 +137,7 @@ class RunnerTests(unittest.TestCase):
             return est
 
         with patch.object(runner, 'open_camera', side_effect=captures), patch.object(
-                runner, 'VisulaAcEst', FakeEstimator), patch.object(runner, 'make_estimator', tracking_make), \
+                runner, 'VisulaEst', FakeEstimator), patch.object(runner, 'make_estimator', tracking_make), \
                 patch.object(runner, 'RES', (160, 120)), patch.object(
                 runner, 'prepare_frame', wraps=runner.prepare_frame) as prepare, patch.object(
                 cv2, 'namedWindow') as window, patch.object(cv2, 'resizeWindow'), patch.object(
@@ -161,43 +161,37 @@ class RunnerTests(unittest.TestCase):
         self.assertTrue(all(c.released for c in captures))
 
 
-class StructureFlagTests(unittest.TestCase):
-    def test_cli_structure_flags(self):
+class StructureIsolationTests(unittest.TestCase):
+    def test_structure_and_height_map_flags_are_not_exposed(self):
         args = runner.parse_args([])
-        self.assertFalse(args.structures)
         self.assertIsNone(args.calib)
-        args = runner.parse_args(['--structures', '--calib', 'c.npz', '--map-viewer'])
-        self.assertTrue(args.structures and args.map_viewer)
-        self.assertEqual(args.calib, 'c.npz')
+        for flag in ('--structures', '--map-viewer'):
+            with self.subTest(flag=flag), self.assertRaises(SystemExit):
+                runner.parse_args([flag])
 
     def run_main(self, keys, **kwargs):
         frame = textured(3)[:240, :320]
         captures = [FakeCapture(0), FakeCapture(0)]
         for cap in captures:
             cap.frame = frame.copy()
-        mappers, real_mapper = [], runner.StructureMapper
+        estimators = []
+        real_make_estimator = runner.make_estimator
 
-        def make_mapper(*args, **kw):
-            mappers.append(real_mapper(*args, **kw))
-            return mappers[-1]
+        def make_estimator(*args, **kw):
+            estimator = real_make_estimator(*args, **kw)
+            estimators.append(estimator)
+            return estimator
 
         with patch.object(runner, 'open_camera', side_effect=captures), \
                 patch.object(runner, 'RES', (320, 240)), \
-                patch.object(runner, 'StructureMapper', side_effect=make_mapper), \
+                patch.object(runner, 'make_estimator', side_effect=make_estimator), \
                 patch.object(cv2, 'namedWindow'), patch.object(cv2, 'resizeWindow'), \
                 patch.object(cv2, 'imshow'), patch.object(cv2, 'waitKey', side_effect=keys), \
                 patch.object(cv2, 'destroyAllWindows'):
             self.assertEqual(runner.main(rotate=False, **kwargs), 0)
-        return mappers
+        return estimators
 
-    def test_structures_only_is_2d(self):
-        mappers = self.run_main([255, ord('q')], structures=True)
-        self.assertEqual(len(mappers), 1)
-        self.assertIsNone(mappers[0].depth_level)
-        self.assertIsNone(mappers[0].depth_map)
-        self.assertEqual(len(mappers[0].terrain.height()[np.isfinite(mappers[0].terrain.height())]), 0)
-
-    def test_calibration_rectifies_and_enables_dense_depth(self):
+    def test_calibration_rectifies_and_enables_sparse_estimator_depth(self):
         import tempfile
         K = np.array([[300.0, 0, 160], [0, 300, 120], [0, 0, 1]])
         with tempfile.TemporaryDirectory() as tmp:
@@ -205,12 +199,11 @@ class StructureFlagTests(unittest.TestCase):
             np.savez(path, K1=K, D1=np.zeros(5), K2=K, D2=np.zeros(5), R=np.eye(3),
                      T=np.array([-0.125, 0, 0]), size=np.array([320, 240]))
             # 's' must not swap cameras once a calibration fixes left/right.
-            mappers = self.run_main([ord('s'), ord('q')], calib=path)
-        mapper = mappers[0]
-        self.assertEqual(mapper.depth_level, 1)
-        self.assertIsNotNone(mapper.depth_map)
-        np.testing.assert_allclose(mapper.dense.direction, [-1, 0])
-        self.assertAlmostEqual(mapper.dense.baseline, 0.125, places=6)
+            estimators = self.run_main([ord('s'), ord('q')], calib=path)
+        estimator = estimators[0]
+        self.assertTrue(estimator.use_stereo_depth)
+        np.testing.assert_allclose(estimator.disparity_direction, [-1, 0])
+        self.assertAlmostEqual(estimator.camera_saperation, 0.125, places=6)
 
 
 if __name__ == '__main__':

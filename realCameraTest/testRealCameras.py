@@ -1,6 +1,6 @@
 """Test the real swarm estimator with two USB cameras -- no duplicate estimator.
 
-This drives swarm.compVision.visualAccEst.VisulaAcEst directly: it feeds the two camera
+This drives swarm.compVision.visualEst.VisulaEst directly: it feeds the two camera
 frames and supplies every input the estimator reads each step. There is no flight
 controller, so all drone/IMU inputs are provided as ZERO. Only the camera calibration
 (focal length, baseline) comes from camera_params.txt.
@@ -8,9 +8,8 @@ controller, so all drone/IMU inputs are provided as ZERO. Only the camera calibr
 Run directly or with `python -m realCameraTest.testRealCameras`.
 Keys: ESC/q quits; s swaps the dominant camera and resets tracking.
 
---structures overlays large structures (boxes/buildings) found on coarse pyramid layers.
 --calib swarm/config/stereo_calib.npz (from scripts/calibrate_stereo.py) rectifies the pair and
-adds dense stereo depth for those structures into a TerrainMap; --map-viewer shows that map.
+enables the estimator's sparse stereo depth output.
 """
 import argparse
 import sys
@@ -25,10 +24,9 @@ _REPO_ROOT = str(Path(__file__).resolve().parents[1])
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
-from swarm.compVision.visualAccEst import VisulaAcEst   # the real estimator, used as-is
+from swarm.compVision.visualEst import VisulaEst   # the real estimator, used as-is
 from swarm.compVision.frame import prepare_camera_frame
 from swarm.compVision.denseStereo import StereoRectifier
-from swarm.compVision.structureMap import StructureMapper, camera_for
 
 if __package__:
     from .display import compose_camera_display
@@ -63,7 +61,7 @@ def zero_drone_inputs(est):
 def make_estimator(focal_px, res, filters=None, kernel_size=None):
     """Instantiate the real estimator and set the camera calibration it uses."""
     fov = float(np.degrees(2.0 * np.arctan(res[1] / (2.0 * focal_px))))
-    est = VisulaAcEst(res, fov)
+    est = VisulaEst(res, fov)
     est.foc_l = float(focal_px)       # exact focal from camera_params.txt
     est.camera_saperation = BASELINE  # stereo baseline (m)
     # The USB images are rotated/resized but not stereo-rectified to a common
@@ -91,7 +89,7 @@ def prepare_frame(frame, rotation):
 
 
 def main(left_idx=0, right_idx=1, *, filters=None, kernel_size=None, rotate=True,
-         structures=False, calib=None, map_viewer=False):
+         calib=None):
     if left_idx == right_idx:
         raise ValueError("Choose two different camera indices")
     if filters is not None and any(name not in ('clahe', 'gaussian', 'median') for name in filters):
@@ -113,15 +111,6 @@ def main(left_idx=0, right_idx=1, *, filters=None, kernel_size=None, rotate=True
     rectifier = StereoRectifier.from_npz(calib) if calib else None
     if rectifier is not None:
         left_focal = rectifier.focal_px
-    mapper = None
-    if structures or rectifier is not None:
-        mapper = StructureMapper(camera_for(rectifier, tracking_res), levels=(2, 3),
-                                 depth_level=1 if rectifier is not None else None,
-                                 check_direction=False)
-    viewer = None
-    if map_viewer and mapper is not None and mapper.depth_level is not None:
-        from swarm.utilities.mapViewer import MapViewer
-        viewer = MapViewer(title='Structure height map')
 
     try:
         left = open_camera(left_idx, RES)
@@ -133,9 +122,12 @@ def main(left_idx=0, right_idx=1, *, filters=None, kernel_size=None, rotate=True
         est = make_estimator(left_focal, tracking_res, filters, kernel_size)
         if rectifier is not None:
             est.camera_saperation = rectifier.baseline
+            est.disparity_direction = rectifier.disparity_direction
+            est.use_stereo_depth = True
         print(f"left={left_idx} right={right_idx} | focal={left_focal:.1f}px "
               f"baseline={est.camera_saperation}m | filters={est.image_filters} | "
-              f"structures={'on' if mapper else 'off'} rectified={'yes' if rectifier else 'no'}")
+              f"sparse stereo depth={'on' if est.use_stereo_depth else 'off'} "
+              f"rectified={'yes' if rectifier else 'no'}")
 
         idx, failures = 0, 0
         previous_time = None
@@ -168,19 +160,11 @@ def main(left_idx=0, right_idx=1, *, filters=None, kernel_size=None, rotate=True
             zero_drone_inputs(est)                 # no drone -> all drone inputs are 0
             result = est.processing([fl, fr], idx)
             idx += 1
-            if mapper is not None:
-                mapper.step(result)
-                mapper.draw(result.frames[0])
-                if viewer is not None:
-                    viewer.update(mapper.terrain)
 
             display = compose_camera_display(result.frames, result.gray_frames)
             vx, vy, _, yaw = est.camera_velocity   # [vx, vy, vz, yaw_rate]
             status = (f"vx={vx:+.2f} vy={vy:+.2f} yaw={yaw:+.2f}rad/s "
                       f"depth={est.depth_median:.2f}m valid={est.depth_valid_frac:.0%}")
-            if mapper is not None:
-                st = mapper.stats()
-                status += f" | quads={st['quads']} lines={st['lines']} struct_depth={st['structure_depth_m']}m"
             display = cv2.copyMakeBorder(display, 28, 0, 0, 0, cv2.BORDER_CONSTANT)
             cv2.putText(display, status, (8, 19), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 0), 1, cv2.LINE_AA)
 
@@ -220,9 +204,7 @@ def parse_args(argv=None):
                         help='ordered filters; omit to inherit swarm defaults, or pass alone for no filters')
     parser.add_argument('--kernel-size', type=int, default=None, help='positive odd blur kernel size')
     parser.add_argument('--no-rotate', action='store_true', help='disable the 90-degree mounting corrections')
-    parser.add_argument('--structures', action='store_true', help='overlay large structures (boxes/buildings)')
-    parser.add_argument('--calib', default=None, help='stereo calibration .npz: rectify + dense depth + height map')
-    parser.add_argument('--map-viewer', action='store_true', help='3D view of the height map (needs --calib)')
+    parser.add_argument('--calib', default=None, help='stereo calibration .npz: rectify + enable sparse stereo depth')
     args = parser.parse_args(argv)
     if args.left == args.right:
         parser.error('left and right camera indices must differ')
@@ -235,4 +217,4 @@ if __name__ == '__main__':
     args = parse_args()
     raise SystemExit(main(args.left, args.right, filters=args.filters,
                           kernel_size=args.kernel_size, rotate=not args.no_rotate,
-                          structures=args.structures, calib=args.calib, map_viewer=args.map_viewer))
+                          calib=args.calib))
