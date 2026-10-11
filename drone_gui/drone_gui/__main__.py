@@ -56,11 +56,23 @@ def main(argv=None):
     state = State(CONFIG, ros, board, events)
     state.start()
 
-    httpd = serve(CONFIG, state)
+    try:
+        httpd = serve(CONFIG, state)
+    except OSError as exc:
+        # Almost always a panel that is still running - say so instead of a bare traceback.
+        state.stop()
+        ros.stop()
+        raise SystemExit("\n".join([
+            "cannot listen on %s:%d - %s" % (CONFIG.bind, CONFIG.port, exc),
+            "Another panel is probably still running. Find it with:",
+            "  Linux/WSL:  ss -ltnp | grep %d" % CONFIG.port,
+            "  Windows:    netstat -ano | findstr :%d" % CONFIG.port,
+            "or start this one on a different port: --port %d" % (CONFIG.port + 1),
+        ]))
     url = "http://%s:%d" % ("localhost" if CONFIG.bind in ("127.0.0.1", "0.0.0.0") else CONFIG.bind,
                             CONFIG.port)
     print("drone control center on %s   (board %s, ROS_DOMAIN_ID %d, %s transport)"
-          % (url, CONFIG.host, CONFIG.domain_id, args.transport))
+          % (url, CONFIG.host, CONFIG.domain_id, args.transport), flush=True)
     if CONFIG.bind == "0.0.0.0":
         print("  note: bound to all interfaces - the process controls are reachable from the "
               "network")

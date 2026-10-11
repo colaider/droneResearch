@@ -298,8 +298,14 @@ class Handler(BaseHTTPRequestHandler):
             pass
 
 
+class Server(ThreadingHTTPServer):
+    daemon_threads = True
+    # On Windows, SO_REUSEADDR lets a second process bind a port that is already being
+    # listened on, so two panels would both "start" and split the requests between them.
+    # Linux reports EADDRINUSE either way; turning it off here makes both behave the same.
+    allow_reuse_address = os.name != "nt"
+
+
 def serve(config, state):
     Handler.state = state
-    httpd = ThreadingHTTPServer((config.bind, config.port), Handler)
-    httpd.daemon_threads = True
-    return httpd
+    return Server((config.bind, config.port), Handler)
