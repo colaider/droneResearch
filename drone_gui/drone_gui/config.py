@@ -14,7 +14,9 @@ class Config:
     # --- the board ---------------------------------------------------------
     host: str = _env("DRONE_HOST", "192.168.1.243")
     user: str = _env("DRONE_USER", "ubuntu")
-    ssh_key: str = _env("DRONE_SSH_KEY", os.path.expanduser("~/.ssh/rb3_claude"))
+    # Whichever candidate key this machine already has (see setup_key.CANDIDATES); if it has
+    # none, this is where `--login` creates one.
+    ssh_key: str = _env("DRONE_SSH_KEY", "")
     ssh_timeout: float = float(_env("DRONE_SSH_TIMEOUT", "6"))
 
     # --- ROS ---------------------------------------------------------------
@@ -47,6 +49,11 @@ class Config:
         ("rb3-usb-host", "Renesas USB host re-probe (brings up /dev/ttyACM0)", False),
         ("sscrpcd", "Qualcomm sensor core daemon (IMU/baro/mag)", False),
     ])
+
+    def __post_init__(self):
+        if not self.ssh_key:
+            from .setup_key import default_key_path
+            self.ssh_key = default_key_path()
 
     @property
     def ssh_target(self):

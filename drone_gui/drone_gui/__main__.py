@@ -31,11 +31,21 @@ def main(argv=None):
                              "over SSH - works from WSL and needs nothing installed there. "
                              "dds: subscribe directly, only usable where the board can route "
                              "to this machine.")
+    parser.add_argument("--login", action="store_true",
+                        help="first run on this machine: create an SSH key if there is none "
+                             "and install it on the board (the board asks for its password), "
+                             "then carry on and start the panel")
     parser.add_argument("--open", action="store_true", help="open a browser on start-up")
     args = parser.parse_args(argv if argv is not None else sys.argv[1:])
 
     CONFIG.host, CONFIG.port, CONFIG.bind = args.host, args.port, args.bind
     CONFIG.domain_id, CONFIG.ssh_key = args.domain_id, args.ssh_key
+
+    if args.login:
+        from .setup_key import ensure_access
+        if not ensure_access(CONFIG):
+            return 1
+        print()
 
     events = EventLog(CONFIG.state_dir)
     events.add("panel started (domain %d, board %s)" % (CONFIG.domain_id, CONFIG.host))

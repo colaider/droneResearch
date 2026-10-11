@@ -39,7 +39,33 @@ run.cmd --open           :: ...and open a browser for you
 Windows is the simpler choice: the panel talks to the board over SSH either way, and the board
 reaches the Windows host directly (it cannot reach WSL at all - see below).
 
-First time, install the two units the panel controls (once, on the board):
+### First run on a new machine
+
+```bat
+run.cmd --login
+```
+
+```bash
+./run.sh --login
+```
+
+It creates `~/.ssh/rb3_drone` if this machine has no usable key, installs the public half on
+the board, and checks that key login and passwordless sudo work, then starts the panel.
+**The board asks for its password and ssh reads it directly** - the script never sees it, so
+it is not in Python memory, in argv or in any log. Running it again is harmless: it says the
+key already works and changes nothing.
+
+Without `--login` the panel picks up the first of `~/.ssh/rb3_drone`, `rb3_claude`,
+`id_ed25519` or `id_rsa` that exists, or use `--ssh-key PATH`.
+
+If the board does not allow password logins at all, add the key from a machine that already
+has access:
+
+```bash
+cat ~/.ssh/rb3_drone.pub | ssh ubuntu@192.168.1.243 'cat >> ~/.ssh/authorized_keys'
+```
+
+First time, install the units the panel controls (once, on the board):
 
 ```bash
 ./service/install_board_units.sh ubuntu@192.168.1.243
@@ -50,7 +76,8 @@ First time, install the two units the panel controls (once, on the board):
 | `--host` | `192.168.1.243` | the board |
 | `--port` / `--bind` | `8080` / `127.0.0.1` | loopback on purpose, see Security |
 | `--domain-id` | `42` | must match the board |
-| `--ssh-key` | `~/.ssh/rb3_claude` | needs to be readable with mode 600 |
+| `--ssh-key` | first key found | `rb3_drone`, `rb3_claude`, `id_ed25519`, `id_rsa`; mode 600 |
+| `--login` | off | create and install a key on first run, see above |
 | `--transport` | `ssh` | or `dds`, see below |
 
 Environment variables work too (`DRONE_HOST`, `DRONE_GUI_PORT`, `DRONE_GUI_BIND`, …), see

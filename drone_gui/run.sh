@@ -4,6 +4,7 @@
 #
 #   ./run.sh                 # http://localhost:8080
 #   ./run.sh --open          # ...and open a browser
+#   ./run.sh --login         # first run here: make an SSH key and install it on the board
 set -e
 cd "$(dirname "$0")"
 [ -z "$ROS_DISTRO" ] && source /opt/ros/jazzy/setup.bash
