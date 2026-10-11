@@ -38,7 +38,8 @@ import time
 import rclpy
 from geometry_msgs.msg import Twist, Vector3Stamped
 from nav_msgs.msg import Odometry
-from rclpy.executors import ExternalShutdownException
+from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
+from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from rclpy.time import Time
@@ -57,7 +58,10 @@ class FlightControllerNode(Node):
             ("port", "/dev/ttyACM0"),
             ("baud", 115200),
             ("rc_rate_hz", 50.0),             # stick stream rate
-            ("telemetry_rate_hz", 20.0),      # MSP polling rate
+            ("telemetry_rate_hz", 20.0),      # control loop rate (status + RC poll)
+            ("telemetry_poll_hz", 10.0),      # attitude/altitude poll rate; see loop()
+            ("battery_poll_hz", 2.0),         # battery changes slowly, and each MSP request
+                                              # costs a ~19 ms round trip
             ("command_timeout", 0.5),         # stop sending if no command for this long [s]
             ("require_override", True),       # refuse to send unless MSP OVERRIDE is on
             ("require_armed", True),          # refuse to send unless the radio armed it
@@ -139,7 +143,28 @@ class FlightControllerNode(Node):
         self.pub_pressure = self.create_publisher(FluidPressure, "pressure", qos_profile_sensor_data)
         self.pub_baro = self.create_publisher(Float32, "baro_altitude", 10)
 
-        self.timer = self.create_timer(1.0 / self.cfg["telemetry_rate_hz"], self.loop)
+        # Everything that talks MSP shares one serial port, so those callbacks must not
+        # overlap; the RB3's own sensors are a separate process and get their own group, or
+        # a slow MSP round trip would starve them (measured: the IMU lost 20% of its samples
+        # and attitude dropped from 20 Hz to 7 Hz when they shared a single-threaded executor).
+        self.serial_group = MutuallyExclusiveCallbackGroup()
+        self.sensor_group = MutuallyExclusiveCallbackGroup()
+
+        self.last_attitude = None
+        self.last_altitude = None
+        self.last_battery = None
+
+        # One timer owns the serial port and decimates the slower reads itself. Separate
+        # timers in one mutually-exclusive group would be simpler to read, but rclpy picks
+        # whichever timer is ready rather than round-robin, and the 20 Hz one is always
+        # ready: that starved attitude down to 1.3 Hz.
+        self.cycle = 0
+        self.telemetry_every = max(1, round(self.cfg["telemetry_rate_hz"]
+                                            / max(self.cfg["telemetry_poll_hz"], 0.1)))
+        self.battery_every = max(1, round(self.cfg["telemetry_rate_hz"]
+                                          / max(self.cfg["battery_poll_hz"], 0.1)))
+        self.timer = self.create_timer(1.0 / self.cfg["telemetry_rate_hz"], self.loop,
+                                       callback_group=self.serial_group)
         self.sensors = self.start_sensors()
 
     # --- subscriptions ----------------------------------------------------
@@ -158,6 +183,12 @@ class FlightControllerNode(Node):
 
     # --- main loop --------------------------------------------------------
     def loop(self):
+        """Safety path: arm state, arming flags and the override switch, then the sticks.
+
+        Only the two MSP requests the decision needs (status + RC) run here; attitude,
+        altitude and battery are polled on their own slower timers, because each request is
+        a blocking ~19 ms round trip and five of them per cycle cannot fit in 50 ms.
+        """
         now = time.monotonic()
         status = self.msp.status()
         rc_values = self.msp.rc()
@@ -196,7 +227,15 @@ class FlightControllerNode(Node):
                 "override not re-armed (flip it off and on)" if not self.override_seen_off else
                 "no recent command")
 
-        self.publish(modes, arming_flags, flag_count, armed, override_on, rc_values)
+        self.publish_status(arming_flags, flag_count, armed, override_on, rc_values)
+
+        # Telemetry is decimated: each MSP request is a blocking round trip, so polling all
+        # of it every cycle would not fit in the loop period.
+        self.cycle += 1
+        if self.cycle % self.telemetry_every == 0:
+            self.poll_telemetry()
+        if self.cycle % self.battery_every == 0:
+            self.poll_battery()
 
     def resolve_command(self, now):
         """cmd_attitude wins; cmd_vel is used when it is newer and odom feedback is fresh."""
@@ -224,32 +263,47 @@ class FlightControllerNode(Node):
         self.velocity.reset()
 
     # --- telemetry --------------------------------------------------------
-    def publish(self, modes, arming_flags, flag_count, armed, override_on, rc_values):
+    def poll_telemetry(self):
+        """Attitude and altitude from the flight controller. Called from loop() only, so it
+        never overlaps another MSP request."""
         stamp = self.get_clock().now().to_msg()
         attitude = self.msp.attitude()
         altitude = self.msp.altitude()
-        battery = self.msp.battery()
 
         if attitude:
+            self.last_attitude = attitude
             msg = Vector3Stamped()
             msg.header.stamp = stamp
             msg.header.frame_id = "base_link"
             msg.vector.x, msg.vector.y, msg.vector.z = attitude
             self.pub_attitude.publish(msg)
         if altitude:
+            self.last_altitude = altitude
             self.pub_altitude.publish(Float32(data=float(altitude[0])))
-        if battery:
-            volts, amps, mah, _rssi = battery
-            msg = BatteryState()
-            msg.header.stamp = stamp
-            msg.voltage = float(volts)
-            msg.current = float(-amps)          # ROS convention: negative = discharging
-            msg.charge = float("nan")
-            msg.capacity = float("nan")
-            msg.design_capacity = float("nan")
-            msg.percentage = float("nan")
-            msg.present = volts > 1.0
-            self.pub_battery.publish(msg)
+
+    def poll_battery(self):
+        battery = self.msp.battery()
+        if not battery:
+            return
+        self.last_battery = battery
+        volts, amps, mah, _rssi = battery
+        msg = BatteryState()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.voltage = float(volts)
+        msg.current = float(-amps)          # ROS convention: negative = discharging
+        msg.charge = float("nan")
+        msg.capacity = float("nan")
+        msg.design_capacity = float("nan")
+        msg.percentage = float("nan")
+        msg.present = volts > 1.0
+        self.pub_battery.publish(msg)
+
+    def publish_status(self, arming_flags, flag_count, armed, override_on, rc_values):
+        """Armed state and the JSON status blob. Makes no MSP requests of its own: the
+        telemetry values are whatever the slower timers last read."""
+        attitude = self.last_attitude
+        altitude = self.last_altitude
+        battery = self.last_battery
         self.pub_armed.publish(Bool(data=armed))
 
         self.pub_status.publish(String(data=json.dumps({
@@ -293,7 +347,8 @@ class FlightControllerNode(Node):
             "mag": self.cfg["see_mag_rate_hz"],
         }, sudo=self.cfg["see_sudo"], logger=self.get_logger())
         sensors.start()
-        self.create_timer(1.0 / self.cfg["see_publish_rate_hz"], self.pump_sensors)
+        self.create_timer(1.0 / self.cfg["see_publish_rate_hz"], self.pump_sensors,
+                          callback_group=self.sensor_group)
         return sensors
 
     def stamp_for(self, host_time, ssc_time):
@@ -387,7 +442,9 @@ def main(args=None):
     node = None
     try:
         node = FlightControllerNode()
-        rclpy.spin(node)
+        executor = MultiThreadedExecutor()
+        executor.add_node(node)
+        executor.spin()
     except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:

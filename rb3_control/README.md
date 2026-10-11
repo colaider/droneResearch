@@ -53,6 +53,36 @@ about *not* trying to reach them through the device tree.
 `swarm/droneClasses/dronePositionCTRL.py` (`control.VelocityController`) and only takes
 effect while fresh odometry is arriving.
 
+## Measured rates
+
+With the flight controller on USB and all four RB3 sensors streaming (`control.launch.py`
+defaults, props off):
+
+| Topic | Rate | Set by |
+| --- | --- | --- |
+| `imu` | 198 Hz | `see_gyro_rate_hz` |
+| `mag` | 50 Hz | `see_mag_rate_hz` |
+| `pressure`, `baro_altitude` | 25 Hz | `see_pressure_rate_hz` (sensor maximum) |
+| `status`, `armed` | 13 Hz | the control loop |
+| `attitude`, `altitude` | 6.7 Hz | `telemetry_poll_hz`, decimated from the loop |
+| `battery` | 1.3 Hz | `battery_poll_hz` |
+
+The control loop does not reach its configured 20 Hz: an MSP request to Betaflight over USB
+CDC costs about 28 ms round trip under load, and the loop makes two of them (arm state and RC
+channels) before it can decide whether to send sticks. That puts the ceiling near 18 Hz, so
+`telemetry_rate_hz: 20.0` self-limits to ~13 Hz once the decimated telemetry reads are mixed
+in. Handover to the radio therefore takes about one 75 ms cycle, which is what the safety
+model above assumes.
+
+Two things follow from this, both already in the code:
+
+* **The RB3 sensors get their own callback group** and the node runs on a
+  `MultiThreadedExecutor`. Sharing a single-threaded executor with the blocking MSP reads cost
+  the IMU 20 % of its samples (159 Hz instead of 200) and dragged `attitude` down to 7 Hz.
+* **The MSP reads are decimated inside one timer** rather than split across several timers in
+  one mutually-exclusive callback group. rclpy runs whichever timer is ready instead of
+  round-robin, and the 20 Hz loop is always ready, which starved `attitude` to 1.3 Hz.
+
 ## Install on the RB3
 
 ```bash

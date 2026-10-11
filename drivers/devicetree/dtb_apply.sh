@@ -79,6 +79,13 @@ paths = []
 for i, b in enumerate(blobs):
     p = f'/tmp/dtb_{i}.dtb'; open(p, 'wb').write(b); paths.append(p)
 sel = [i for i, p in enumerate(paths) if (get(p, 'qcom,msm-id'), get(p, 'qcom,board-id')) == live_ids]
+# Unrelated boards can carry the same msm-id/board-id pair (an Advantech DTB in the shipped
+# file matches the RB3's), so when the ids are ambiguous the model name decides.
+if len(sel) > 1:
+    exact = [i for i in sel if get(paths[i], 'model', 's') == live_model]
+    if exact:
+        print('%d DTBs share the running board ids; narrowing to the matching model' % len(sel))
+        sel = exact
 if not sel:
     sel = [i for i, p in enumerate(paths) if get(p, 'model', 's') == live_model]
     print('no exact id match, falling back to model match')
