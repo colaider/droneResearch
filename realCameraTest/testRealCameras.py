@@ -7,6 +7,10 @@ controller, so all drone/IMU inputs are provided as ZERO. Only the camera calibr
 
 Run directly or with `python -m realCameraTest.testRealCameras`.
 Keys: ESC/q quits; s swaps the dominant camera and resets tracking.
+
+--structures overlays large structures (boxes/buildings) found on coarse pyramid layers.
+--calib swarm/config/stereo_calib.npz (from scripts/calibrate_stereo.py) rectifies the pair and
+adds dense stereo depth for those structures into a TerrainMap; --map-viewer shows that map.
 """
 import argparse
 import sys
@@ -23,6 +27,8 @@ if _REPO_ROOT not in sys.path:
 
 from swarm.compVision.visualAccEst import VisulaAcEst   # the real estimator, used as-is
 from swarm.compVision.frame import prepare_camera_frame
+from swarm.compVision.denseStereo import StereoRectifier
+from swarm.compVision.structureMap import StructureMapper, camera_for
 
 if __package__:
     from .display import compose_camera_display
@@ -84,7 +90,8 @@ def prepare_frame(frame, rotation):
     return prepare_camera_frame(frame, resolution=RES, rotation=rotation)
 
 
-def main(left_idx=0, right_idx=1, *, filters=None, kernel_size=None, rotate=True):
+def main(left_idx=0, right_idx=1, *, filters=None, kernel_size=None, rotate=True,
+         structures=False, calib=None, map_viewer=False):
     if left_idx == right_idx:
         raise ValueError("Choose two different camera indices")
     if filters is not None and any(name not in ('clahe', 'gaussian', 'median') for name in filters):
@@ -102,6 +109,20 @@ def main(left_idx=0, right_idx=1, *, filters=None, kernel_size=None, rotate=True
     right_rotation = cv2.ROTATE_90_CLOCKWISE if rotate else None
     tracking_res = (RES[1], RES[0]) if rotate else RES   # 90-deg rotation swaps W/H
 
+    # Calibration is made on the rotated images (scripts/calibrate_stereo.py does the same).
+    rectifier = StereoRectifier.from_npz(calib) if calib else None
+    if rectifier is not None:
+        left_focal = rectifier.focal_px
+    mapper = None
+    if structures or rectifier is not None:
+        mapper = StructureMapper(camera_for(rectifier, tracking_res), levels=(2, 3),
+                                 depth_level=1 if rectifier is not None else None,
+                                 check_direction=False)
+    viewer = None
+    if map_viewer and mapper is not None and mapper.depth_level is not None:
+        from swarm.utilities.mapViewer import MapViewer
+        viewer = MapViewer(title='Structure height map')
+
     try:
         left = open_camera(left_idx, RES)
         right = open_camera(right_idx, RES)
@@ -110,8 +131,11 @@ def main(left_idx=0, right_idx=1, *, filters=None, kernel_size=None, rotate=True
             return 1
 
         est = make_estimator(left_focal, tracking_res, filters, kernel_size)
+        if rectifier is not None:
+            est.camera_saperation = rectifier.baseline
         print(f"left={left_idx} right={right_idx} | focal={left_focal:.1f}px "
-              f"baseline={BASELINE}m | filters={est.image_filters}")
+              f"baseline={est.camera_saperation}m | filters={est.image_filters} | "
+              f"structures={'on' if mapper else 'off'} rectified={'yes' if rectifier else 'no'}")
 
         idx, failures = 0, 0
         previous_time = None
@@ -138,15 +162,25 @@ def main(left_idx=0, right_idx=1, *, filters=None, kernel_size=None, rotate=True
             previous_time = now
 
             fl, fr = prepare_frame(fl, left_rotation), prepare_frame(fr, right_rotation)
+            if rectifier is not None:
+                fl, fr = rectifier.rectify(fl, fr)
 
             zero_drone_inputs(est)                 # no drone -> all drone inputs are 0
             result = est.processing([fl, fr], idx)
             idx += 1
+            if mapper is not None:
+                mapper.step(result)
+                mapper.draw(result.frames[0])
+                if viewer is not None:
+                    viewer.update(mapper.terrain)
 
             display = compose_camera_display(result.frames, result.gray_frames)
             vx, vy, _, yaw = est.camera_velocity   # [vx, vy, vz, yaw_rate]
             status = (f"vx={vx:+.2f} vy={vy:+.2f} yaw={yaw:+.2f}rad/s "
                       f"depth={est.depth_median:.2f}m valid={est.depth_valid_frac:.0%}")
+            if mapper is not None:
+                st = mapper.stats()
+                status += f" | quads={st['quads']} lines={st['lines']} struct_depth={st['structure_depth_m']}m"
             display = cv2.copyMakeBorder(display, 28, 0, 0, 0, cv2.BORDER_CONSTANT)
             cv2.putText(display, status, (8, 19), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 0), 1, cv2.LINE_AA)
 
@@ -158,7 +192,9 @@ def main(left_idx=0, right_idx=1, *, filters=None, kernel_size=None, rotate=True
             key = cv2.waitKey(1) & 0xFF
             if key in (27, ord('q')):
                 break
-            if key == ord('s'):
+            if key == ord('s') and rectifier is not None:
+                print("swap disabled: the stereo calibration fixes which camera is left")
+            elif key == ord('s'):
                 left_idx, right_idx = right_idx, left_idx
                 left, right = right, left
                 left_focal, right_focal = right_focal, left_focal
@@ -184,6 +220,9 @@ def parse_args(argv=None):
                         help='ordered filters; omit to inherit swarm defaults, or pass alone for no filters')
     parser.add_argument('--kernel-size', type=int, default=None, help='positive odd blur kernel size')
     parser.add_argument('--no-rotate', action='store_true', help='disable the 90-degree mounting corrections')
+    parser.add_argument('--structures', action='store_true', help='overlay large structures (boxes/buildings)')
+    parser.add_argument('--calib', default=None, help='stereo calibration .npz: rectify + dense depth + height map')
+    parser.add_argument('--map-viewer', action='store_true', help='3D view of the height map (needs --calib)')
     args = parser.parse_args(argv)
     if args.left == args.right:
         parser.error('left and right camera indices must differ')
@@ -195,4 +234,5 @@ def parse_args(argv=None):
 if __name__ == '__main__':
     args = parse_args()
     raise SystemExit(main(args.left, args.right, filters=args.filters,
-                          kernel_size=args.kernel_size, rotate=not args.no_rotate))
+                          kernel_size=args.kernel_size, rotate=not args.no_rotate,
+                          structures=args.structures, calib=args.calib, map_viewer=args.map_viewer))

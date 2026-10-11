@@ -6,16 +6,67 @@ these triangles do not establish physical surfaces or depth.
 filter_by_neighbors is a separate track-quality filter using supplied motion.
 Temporal optical flow, stereo matching and metric reconstruction live elsewhere.
 """
+from dataclasses import dataclass
+
 import cv2
 import numpy as np
-from scipy.spatial import Delaunay
+from scipy.spatial import Delaunay, QhullError
+
+
+# BGR colours used consistently for both points and within-layer mesh edges.
+LAYER_COLORS = ((255, 0, 0), (0, 220, 0), (0, 165, 255), (255, 0, 255), (255, 255, 0))
+
+
+@dataclass
+class LayerTracks:
+    """One layer's current tracks, all expressed in full-resolution pixels.
+
+    The mesh is image-space topology, not a reconstructed physical surface.
+    predicted_right_points retains the legacy flow-based right overlay; it is
+    not a measured current-frame stereo correspondence and must not give depth.
+    Native layer coordinates used to seed LK are kept separately by the estimator.
+    """
+    layer: int
+    frame_idx: int
+    old_points: np.ndarray
+    new_points: np.ndarray
+    old_right_points: np.ndarray
+    predicted_right_points: np.ndarray
+    flow: np.ndarray
+    triangles: np.ndarray
+    links: np.ndarray
+
+    @classmethod
+    def empty(cls, layer, frame_idx):
+        return cls(layer, frame_idx, *(np.empty((0, 2), np.float32) for _ in range(5)),
+                   np.empty((0, 3), int), np.empty((0, 2), int))
+
+
+def unique_point_mask(points, radius=5.0):
+    """Keep first finite point in each neighbourhood, for the combined motion fit.
+
+    Input order establishes priority (the configured layer order). Coordinates
+    and radius are full-resolution pixels. Per-layer display/history stay intact.
+    """
+    points = np.asarray(points)
+    keep = np.zeros(len(points), bool)
+    chosen = []
+    for i, point in enumerate(points):
+        if np.isfinite(point).all() and (not chosen or
+                np.all(np.sum((points[chosen] - point) ** 2, axis=1) >= radius ** 2)):
+            keep[i] = True
+            chosen.append(i)
+    return keep
 
 
 def replenish(gray, pts, cam, max_points=300, min_distance=100):
+    pts = np.asarray(pts, np.float32).reshape(-1, 2)[:max_points]
+    if len(pts) >= max_points:
+        return pts.copy()
     h, w = gray.shape
     mask = np.full((h, w), 255, np.uint8)
     for x, y in pts.astype(int):
-        cv2.circle(mask, (x, y), 7, 0, -1)
+        cv2.circle(mask, (x, y), max(1, int(np.ceil(min_distance))), 0, -1)
 
     cand = cv2.goodFeaturesToTrack(gray, maxCorners=500, qualityLevel=0.005, minDistance=min_distance, blockSize=11, mask=mask)
     if cand is None: return pts
@@ -45,7 +96,8 @@ def replenish(gray, pts, cam, max_points=300, min_distance=100):
     take = []
     for q in range(4):
         in_q = np.flatnonzero(cand_q == q)
-        take.extend(in_q[:quota[q]])
+        room = max(0, need - len(take))
+        take.extend(in_q[:min(int(quota[q]), room)])
 
     remaining_need = need - len(take)
     if remaining_need > 0:
@@ -60,12 +112,16 @@ def build_triangles(points, max_edge=200.0, min_area=20.0):
     points = np.asarray(points, dtype=np.float32)
     n = len(points)
     empty = (np.zeros((0, 3), int), points, np.zeros((0, 2), int), np.zeros((n, n), bool))
-    if n < 3: return empty
-    tri = Delaunay(points).simplices
+    if n < 3 or not np.isfinite(points).all(): return empty
+    try:
+        tri = Delaunay(points).simplices
+    except QhullError:
+        return empty
 
     p = points[tri]
     edge_len = np.linalg.norm(p - np.roll(p, 1, axis=1), axis=2)
-    area = 0.5 * np.abs(np.cross(p[:, 1] - p[:, 0], p[:, 2] - p[:, 0]))
+    a, b = p[:, 1] - p[:, 0], p[:, 2] - p[:, 0]
+    area = 0.5 * np.abs(a[:, 0] * b[:, 1] - a[:, 1] * b[:, 0])
     triangles = tri[(edge_len.max(axis=1) < max_edge) & (area > min_area)]
 
     e = np.vstack([triangles[:, [0, 1]], triangles[:, [1, 2]], triangles[:, [2, 0]]])

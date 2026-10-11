@@ -1,0 +1,31 @@
+[Unit]
+# Keep retrying for as long as it takes: giving up permanently is worse than a retry
+# every 5 s. This key is only honoured in [Unit] - systemd ignores it in [Service].
+StartLimitIntervalSec=0
+# The stereo visual-odometry estimator (realCameraTest/testRB3Cameras.py): the swarm
+# VisulaAcEst running on the drone's own cameras, publishing /vo/preview/compressed and
+# /vo/status.
+#
+# It opens the cameras directly through rb3_stereo.stereo.StereoCamera rather than
+# subscribing to /stereo, so it cannot run at the same time as drone-stereo.service.
+# Conflicts= makes systemd stop one when the other starts, instead of the second one failing
+# on a busy camera.
+Description=Drone stereo visual odometry (swarm estimator on the RB3 cameras)
+After=rb3-stereo-setup.service
+Requires=rb3-stereo-setup.service
+Conflicts=drone-stereo.service
+
+[Service]
+Type=simple
+User=ubuntu
+Environment=ROS_DOMAIN_ID=42
+WorkingDirectory=/home/ubuntu/droneResearch
+ExecStart=/bin/bash -lc 'source /opt/ros/jazzy/setup.bash && source /home/ubuntu/ros2_ws/install/setup.bash && exec python3 realCameraTest/testRB3Cameras.py'
+SyslogIdentifier=drone-vo
+Restart=always
+RestartSec=5
+KillSignal=SIGINT
+TimeoutStopSec=10
+
+[Install]
+WantedBy=multi-user.target

@@ -161,5 +161,57 @@ class RunnerTests(unittest.TestCase):
         self.assertTrue(all(c.released for c in captures))
 
 
+class StructureFlagTests(unittest.TestCase):
+    def test_cli_structure_flags(self):
+        args = runner.parse_args([])
+        self.assertFalse(args.structures)
+        self.assertIsNone(args.calib)
+        args = runner.parse_args(['--structures', '--calib', 'c.npz', '--map-viewer'])
+        self.assertTrue(args.structures and args.map_viewer)
+        self.assertEqual(args.calib, 'c.npz')
+
+    def run_main(self, keys, **kwargs):
+        frame = textured(3)[:240, :320]
+        captures = [FakeCapture(0), FakeCapture(0)]
+        for cap in captures:
+            cap.frame = frame.copy()
+        mappers, real_mapper = [], runner.StructureMapper
+
+        def make_mapper(*args, **kw):
+            mappers.append(real_mapper(*args, **kw))
+            return mappers[-1]
+
+        with patch.object(runner, 'open_camera', side_effect=captures), \
+                patch.object(runner, 'RES', (320, 240)), \
+                patch.object(runner, 'StructureMapper', side_effect=make_mapper), \
+                patch.object(cv2, 'namedWindow'), patch.object(cv2, 'resizeWindow'), \
+                patch.object(cv2, 'imshow'), patch.object(cv2, 'waitKey', side_effect=keys), \
+                patch.object(cv2, 'destroyAllWindows'):
+            self.assertEqual(runner.main(rotate=False, **kwargs), 0)
+        return mappers
+
+    def test_structures_only_is_2d(self):
+        mappers = self.run_main([255, ord('q')], structures=True)
+        self.assertEqual(len(mappers), 1)
+        self.assertIsNone(mappers[0].depth_level)
+        self.assertIsNone(mappers[0].depth_map)
+        self.assertEqual(len(mappers[0].terrain.height()[np.isfinite(mappers[0].terrain.height())]), 0)
+
+    def test_calibration_rectifies_and_enables_dense_depth(self):
+        import tempfile
+        K = np.array([[300.0, 0, 160], [0, 300, 120], [0, 0, 1]])
+        with tempfile.TemporaryDirectory() as tmp:
+            path = f'{tmp}/calib.npz'
+            np.savez(path, K1=K, D1=np.zeros(5), K2=K, D2=np.zeros(5), R=np.eye(3),
+                     T=np.array([-0.125, 0, 0]), size=np.array([320, 240]))
+            # 's' must not swap cameras once a calibration fixes left/right.
+            mappers = self.run_main([ord('s'), ord('q')], calib=path)
+        mapper = mappers[0]
+        self.assertEqual(mapper.depth_level, 1)
+        self.assertIsNotNone(mapper.depth_map)
+        np.testing.assert_allclose(mapper.dense.direction, [-1, 0])
+        self.assertAlmostEqual(mapper.dense.baseline, 0.125, places=6)
+
+
 if __name__ == '__main__':
     unittest.main()

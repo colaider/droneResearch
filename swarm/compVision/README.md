@@ -101,13 +101,49 @@ different depths. This refactor does not replace the motion model with a full
 visual-inertial optimizer. Validate navigation accuracy and timing with recorded
 or simulated sequences before drawing conclusions from feature counts.
 
+## Large structures and the height map
+
+GFTT on every pyramid layer lands mostly on grass: grass has strong gradients
+everywhere while box tops and roofs are smooth. Coarse layers have already lost
+the grass blades to `pyrDown`, so they look for *structure* instead:
+
+```text
+Frame.pyramids --levels 2,3--> LargeFeatureDetector --> lines, corners, smooth quads
+Frame.pyramids --level 1-----> DenseStereo (SGBM) ----> DepthMap
+                                    map_points() ------> TerrainMap.add(weight_scale=...)
+```
+
+| Module | Does |
+| --- | --- |
+| `largeFeatures.py` | Per layer: texture map `std / (mean + 16)` (grass high, faces low); LSD lines kept only when one side is smooth; right-angle corners; convex smooth polygons (`quads`). All coordinates in full-resolution pixels. `structure_points()` and `draw_large_features()` for later stages. |
+| `denseStereo.py` | `StereoRectifier` (identity in the sim; `.npz` from `scripts/calibrate_stereo.py` or ROS `left.yaml`/`right.yaml` for real cameras). `DenseStereo` runs SGBM on an existing layer for any axis-aligned baseline and invalidates textureless pixels (SGBM invents depth there). `fill_quad_plane()` gives smooth faces depth from a plane fit or, when they have no texture at all, by sliding the face's silhouette along the baseline. |
+| `structureMap.py` | `StructureMapper.step(frame, pos, quat)` ties it together and feeds `TerrainMap`; structure points get 4x weight so roof edges stay sharp. |
+
+`DroneStruct.camera_step` runs it on every camera frame (`enable_structure_map`),
+and draws the structures on the left image. Show the map with
+`MapViewer().update(drone.terrain, drone_pos)`. Cost at 1920x1080: ~16 ms detection
+(levels 2-3; level 1 adds ~50 ms of LSD), ~25 ms SGBM, ~10 ms fusion.
+
+On the first frame the mapper measures the real left-to-right image shift and
+warns (and uses the measurement) when `cam_cfg.disparity_direction()` disagrees.
+
+Real cameras: `testRealCameras.py --structures` (2D overlay only),
+`--calib swarm/config/stereo_calib.npz` (rectify + dense depth + map),
+`--map-viewer`. `testRB3Cameras.py` takes `--structures` / `--calib` likewise.
+
+Not yet wired into `VisulaAcEst`: in the per-layer loop of `aply_flow`, coarse
+levels can call `LargeFeatureDetector.detect_layer(gray, level, full_shape)`
+instead of GFTT `_replenish` and seed LK with `structure_points()` (divide by the
+layer's pixel scale), so tracked box corners flow through the existing stereo path.
+
 ## Checks
 
-Run from the repository root with its Python environment:
+Run from the repository root with its Python environment (the test folders are
+not packages, so name the modules):
 
 ```sh
-.venv-py313/bin/python -m unittest discover -s swarm/compVision/tests -v
-.venv-py313/bin/python -m unittest discover -s realCameraTest/tests -v
+.venv-py313/bin/python -m unittest swarm.compVision.tests.test_large_features swarm.compVision.tests.test_dense_stereo swarm.compVision.tests.test_structure_map swarm.compVision.tests.test_frame
+.venv-py313/bin/python -m unittest realCameraTest.tests.test_real_cameras realCameraTest.tests.test_calibrate_stereo
 ```
 
 These are headless module/integration checks. No Genesis session or physical

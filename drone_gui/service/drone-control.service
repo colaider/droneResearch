@@ -1,0 +1,33 @@
+[Unit]
+# Keep retrying for as long as it takes: giving up permanently is worse than a retry
+# every 5 s. This key is only honoured in [Unit] - systemd ignores it in [Service].
+StartLimitIntervalSec=0
+# The flight controller bridge, as a supervised service so the control panel can start and
+# stop it and so exactly ONE process owns /dev/ttyACM0: a second opener gets corrupted MSP
+# replies and both die.
+Description=Drone flight controller bridge (rb3_control, MSP over USB + RB3 sensors)
+After=rb3-usb-host.service sscrpcd.service
+Wants=rb3-usb-host.service
+
+[Service]
+Type=simple
+User=ubuntu
+Environment=ROS_DOMAIN_ID=42
+# ros2 launch needs the workspace on PYTHONPATH/AMENT_PREFIX_PATH, which only the setup
+# scripts provide, hence the login-style shell.
+ExecStart=/bin/bash -lc 'source /opt/ros/jazzy/setup.bash && source /home/ubuntu/ros2_ws/install/setup.bash && exec ros2 launch rb3_control control.launch.py'
+SyslogIdentifier=drone-control
+# Restart=always, not on-failure: `ros2 launch` exits 0 when the node under it dies, so a
+# failure looks like a clean stop to systemd. The flight controller re-enumerating on USB
+# (which it does on a power glitch) kills the node with
+#   SerialException: device reports readiness to read but returned no data
+# and the service would otherwise stay dead until someone noticed.
+Restart=always
+RestartSec=5
+# The radio keeps arm/disarm, so a restart cannot take the drone over on its own: the node
+# requires the MSP OVERRIDE switch to go off->on before it sends anything.
+KillSignal=SIGINT
+TimeoutStopSec=10
+
+[Install]
+WantedBy=multi-user.target

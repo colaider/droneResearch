@@ -3,6 +3,11 @@
 //   CCI_I2C0 = cci0 i2c-bus@0, CSI0 = csiphy0 (2 lanes with DIP2-1 OFF), MCLK0 = GPIO64,
 //   reset = GPIO20, DOVDD = vreg_l18b_1p8. Sensor address 0xc0 (8-bit) = 0x60.
 // Build: dtc -@ -I dts -O dtb -o ov9282-cam0a.dtbo ov9282-cam0a.dtso
+//
+// On stock DTBs that also wire camss port@3 to the (absent) IMX577 - the build flashed in
+// 2026-10 does - this overlay is NOT enough on its own: camss waits for that sensor's subdev
+// and never registers a media device, so the OV9282 stays unusable too. Apply both:
+//   ./dtb_apply.sh ov9282-cam0a.dtso camss-disable-imx577.dtso
 /dts-v1/;
 /plugin/;
 

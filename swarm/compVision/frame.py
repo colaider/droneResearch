@@ -180,3 +180,27 @@ def compose_camera_display(processed, tracking_gray):
         top = cv2.hconcat([tile(processed[0], "Left camera"), tile(processed[1], "Right camera")])
         bottom = cv2.hconcat([tile(tracking_gray[0], "Left tracking input", True), tile(tracking_gray[1], "Right tracking input", True)])
         return cv2.vconcat([top, bottom])
+
+
+def compose_layer_display(gray, points, links, layer, color):
+    """Draw only this layer's tracks; points must be in native layer pixels.
+
+    Work on a BGR copy so overlays never contaminate the grayscale LK inputs.
+    A header identifies the layer, native resolution and surviving point count.
+    """
+    image = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+    points = np.asarray(points).reshape(-1, 2)
+    pixels = np.rint(points).astype(int)
+    for a, b in links:
+        cv2.line(image, tuple(pixels[a]), tuple(pixels[b]), color, 1)
+    for x, y in pixels:
+        cv2.circle(image, (x, y), 2, color, -1)
+    h, w = gray.shape
+    # Pad narrow coarse layers so their labels remain readable without resizing their pixels.
+    image = cv2.copyMakeBorder(image, 28, 0, 0, max(0, 330 - w), cv2.BORDER_CONSTANT,
+                               value=(32, 32, 32))
+    label = f'Layer {layer} | {w}x{h} | {len(points)} points'
+    cv2.putText(image, label, (8, 19), cv2.FONT_HERSHEY_SIMPLEX, .45,
+                (235, 235, 235), 1, cv2.LINE_AA)
+    cv2.line(image, (0, 26), (image.shape[1] - 1, 26), color, 2)
+    return image

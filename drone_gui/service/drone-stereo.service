@@ -1,0 +1,26 @@
+[Unit]
+# Keep retrying for as long as it takes: giving up permanently is worse than a retry
+# every 5 s. This key is only honoured in [Unit] - systemd ignores it in [Service].
+StartLimitIntervalSec=0
+# The stereo camera node. Needs the kernel side up first (camss combo mode + CAM0B bridge),
+# which rb3-stereo-setup.service does.
+Description=Drone stereo camera node (rb3_stereo, /stereo topics)
+After=rb3-stereo-setup.service
+Requires=rb3-stereo-setup.service
+# Both open the cameras directly, so only one of them can run.
+Conflicts=drone-vo.service
+
+[Service]
+Type=simple
+User=ubuntu
+Environment=ROS_DOMAIN_ID=42
+ExecStart=/bin/bash -lc 'source /opt/ros/jazzy/setup.bash && source /home/ubuntu/ros2_ws/install/setup.bash && export FASTRTPS_DEFAULT_PROFILES_FILE=$(ros2 pkg prefix rb3_stereo)/share/rb3_stereo/config/fastdds.xml && exec ros2 launch rb3_stereo stereo.launch.py'
+SyslogIdentifier=drone-stereo
+# Same reasoning as drone-control: ros2 launch exits 0 when the node dies under it.
+Restart=always
+RestartSec=5
+KillSignal=SIGINT
+TimeoutStopSec=10
+
+[Install]
+WantedBy=multi-user.target
