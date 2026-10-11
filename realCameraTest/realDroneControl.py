@@ -380,9 +380,16 @@ class RealDroneNode:
                         bias = (f"cmd roll={r:+.3f} pitch={pt:+.3f} yaw_rate={yr:+.3f} throttle={th:.3f}"
                                 f"  (FC mixes this to the 4 motors)")
 
-                    # measured attitude coming back from the FC AFTER the bias is applied
+                    # attitude the CONTROL LOOP itself uses (IMU-integrated in DroneCTRL.step);
+                    # this is what the bias U is computed against, not external telemetry.
+                    try:
+                        croll, cpitch, cyaw = sm.controller.get_attitude()
+                        ctrl_att = f"ctrl_att roll={croll:+.3f} pitch={cpitch:+.3f} yaw={cyaw:+.3f} rad"
+                    except AttributeError:
+                        ctrl_att = "ctrl_att n/a (controller.step not run yet)"
+                    # attitude the FC reports back on /drone/attitude (telemetry; 0 until FC streams)
                     mroll, mpitch, myaw = self._bridge.att
-                    meas = (f"meas roll={mroll:+.3f} pitch={mpitch:+.3f} yaw={myaw:+.3f} rad")
+                    fc_att = f"fc_att roll={mroll:+.3f} pitch={mpitch:+.3f} yaw={myaw:+.3f} rad"
 
                     print(f"[{step}] stage={sm.stage} armed={self.armed} "
                           f"dt={a.dt:.4f}s({1.0/a.dt:.0f}Hz) fps={a.fps} | "
@@ -391,7 +398,7 @@ class RealDroneNode:
                           f"vx={vx:+.2f} vy={vy:+.2f} z_est={z_est:.2f} depth={fp.depth_median:.2f} | "
                           f"baro_alt={baro_alt:+.2f}m "
                           f"ctrl_alt={'n/a' if ctrl_alt is None else f'{ctrl_alt:+.2f}m'} "
-                          f"setpoint={a.altitude:.2f}m | {bias} | {meas}", flush=True)
+                          f"setpoint={a.altitude:.2f}m | {bias} | {ctrl_att} | {fc_att}", flush=True)
 
                 step += 1
                 next_t += a.dt
