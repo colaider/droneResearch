@@ -115,9 +115,16 @@ fi
 
 read -rp "write the patched device tree to $PART ? [y/N] " answer
 [ "$answer" = "y" ] || { echo "aborted, partition untouched"; exit 0; }
+# Roll back to what the partition held a moment ago, not to dtb_a_backup.img: that one is
+# from the first ever run and may be a different stock DTB build (reflashing dtb_a from a
+# Flash Files package replaces it), in which case restoring it would undo the reflash too.
+cp dtb_a_current.img dtb_a_rollback.img
 sudo cp new_multi.dtb "$DTB"
 sudo umount dtbmnt
 trap - EXIT
 sudo dd if=dtb_a_new.img of=$PART bs=1M status=none conv=fsync
-echo "written. reboot to pick it up. If the board does not come back:"
-echo "  sudo dd if=dtb_a_backup.img of=$PART bs=1M conv=fsync   (from a recovery shell / EDL)"
+echo "written. reboot to pick it up. If the board does not come back, from a recovery shell"
+echo "or EDL, in this directory:"
+echo "  sudo dd if=dtb_a_rollback.img of=$PART bs=1M conv=fsync   (the state just replaced)"
+echo "  sudo dd if=dtb_a_backup.img   of=$PART bs=1M conv=fsync   (first-ever backup: check"
+echo "      it is the same stock build as the one now flashed before relying on it)"
