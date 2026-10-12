@@ -4,7 +4,7 @@ from unittest.mock import patch
 import cv2
 import numpy as np
 
-from swarm.compVision.visualDepthEst import SparseStereoDepth, triangulate_altitude
+from swarm.compVision.visualDepthEst import SparseStereoDepth
 from swarm.compVision.visualEst import VisulaEst
 from swarm.compVision.terrainMap import PointMap
 from swarm.config.cameraConfig import StereoCameraConfig
@@ -140,14 +140,6 @@ class StereoTests(unittest.TestCase):
             est.processing([current,current],2)
         self.assertEqual(est.depth_points.shape,(0,3));self.assertTrue(np.isnan(est.depth_median))
         self.assertEqual(est.depth_frame_idx,2)
-
-    def test_legacy_signed_triangulation_still_rejects_wrong_sign(self):
-        left=np.array([[100.,100.,0.],[200.,100.,0.]])
-        right=left+np.array([[-8,0,0],[8,0,0]])
-        pairs=[left,right]
-        triangulate_altitude(pairs,[left.copy(),right.copy()],focal_px=400,baseline=.12,disparity_direction=[-1,0])
-        self.assertAlmostEqual(left[0,2],6);self.assertTrue(np.isnan(left[1,2]))
-
 
 class PointMapTests(unittest.TestCase):
     def setUp(self):

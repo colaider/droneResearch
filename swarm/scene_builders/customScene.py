@@ -55,14 +55,14 @@ class CustomScene:
             plane_size=(size, size),
             tile_size=(5.0, 5.0),
         ),
-        surface=gs.surfaces.Rough(
-            diffuse_texture=gs.textures.ImageTexture(
-                image_path=str(Path(__file__).resolve().parents[1] / "objects" / "grass.jpg")
-            )
-        )
         # surface=gs.surfaces.Rough(
-        #     color=(1.0, 1.0, 1.0),
+        #     diffuse_texture=gs.textures.ImageTexture(
+        #         image_path=str(Path(__file__).resolve().parents[1] / "objects" / "grass.jpg")
+        #     )
         # )
+        surface=gs.surfaces.Rough(
+            color=(1.0, 1.0, 1.0),
+        )
         )
         self.entities['ground_plane'] = plane
         self.static_objects.append(plane)

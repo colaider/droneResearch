@@ -3,7 +3,6 @@ import numpy as np
 from collections import deque
 import time
 import swarm.config.cameraConfig as camConfig
-from swarm.compVision.visualDepthEst import triangulate_altitude
 from swarm.compVision.smallFeatures import (
     replenish, build_triangles, filter_by_neighbors, LayerTracks, LAYER_COLORS, unique_point_mask,
 )
@@ -339,27 +338,6 @@ class VisulaAcEst:
     def filter_by_neighbors(self, good_old, good_new, links, thresh=2.0, min_links=1, neighbor_min_links=3):
         """Compatibility adapter for smallFeatures.filter_by_neighbors."""
         return filter_by_neighbors(good_old, good_new, links, thresh, min_links, neighbor_min_links)
-
-
-    def trinagulate_altitude(self, news, flow, olds, triangles, links,
-                            min_disparity_px=0.3, max_epipolar_error_px=1.0) -> list:
-        """Compatibility adapter; stereo geometry lives in depth.py."""
-        direction = getattr(self, 'disparity_direction', None)
-        if direction is None:
-            direction = camConfig.STEREO_CAM.disparity_direction()
-        triangulate_altitude(
-            news, olds, focal_px=self.foc_l, baseline=self.camera_saperation,
-            disparity_direction=direction, frame_size=getattr(self, 'frame_size', None),
-            use_stereo_depth=getattr(self, 'use_stereo_depth', True),
-            min_disparity_px=min_disparity_px,
-            max_epipolar_error_px=max_epipolar_error_px,
-        )
-        valid = np.isfinite(news[0][:, 2]) & (news[0][:, 2] > 0)
-        self.depth_valid_frac = float(valid.mean()) if len(valid) else 0.0
-        self.depth_median = float(np.median(news[0][valid, 2])) if valid.any() else np.nan
-        self.depth_points = news[0][valid].copy()  # image coordinates (u, v, Z)
-        self.depth_frame_idx = self.current_frame.idx
-        return news
 
 
     def estimate_velocities(self, flow, points):

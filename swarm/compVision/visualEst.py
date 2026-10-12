@@ -103,11 +103,12 @@ class VisulaEst(VisualVelocityEstimator):
         """Run frame preparation, left-camera tracking, velocity, then stereo depth."""
         self.update_frame(frame, idx)
         self.aply_flow()
+        self.estimate_depth()
         self.estimate_velocities(
             self.velocity_flows[self.velocity_point_mask],
             self.velocity_points[self.velocity_point_mask],
         )
-        self.estimate_depth()
+
         self.layer_views = [
             compose_layer_display(
                 gray,
