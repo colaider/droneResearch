@@ -1,15 +1,13 @@
-from communication.reader import Reader
+from GNNSDenaiedDrone.controll.communication.Rb3ReadSend import ReaderSender
 import time
 
 
 def main():
-    reader = Reader()                      # creates and owns its node
+    reader = ReaderSender()                     
     try:
         while True:
-            reader.step()                  # all the plumbing: spin + latch
-            print("gyro:", reader.get_gyro(),
-                  "accel:", reader.get_accel(),
-                  "baro:", reader.get_baro())
+            reader.step()                  
+            reader.send(0, 0, 0, 10)
             time.sleep(0.05)
     except KeyboardInterrupt:
         pass
