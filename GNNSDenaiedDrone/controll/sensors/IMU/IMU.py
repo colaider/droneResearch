@@ -113,6 +113,10 @@ class IMU:
         self._vel += a_world * dt                       # velocity (world frame)
         self._pos += v_old * dt + 0.5 * a_world * dt ** 2   # position (world frame)
 
+    def fuse_vertical_velocity(self, ref_vz, w=0.9):
+        """Anchor the drifty accel vz to an external vertical velocity (barometer)."""
+        self._vel[2] = w * self._vel[2] + (1 - w) * ref_vz
+
     # ---------------- getters ----------------
     def get_attitude(self):
         return self._att.copy()              # [roll, pitch, yaw] rad

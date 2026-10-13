@@ -21,6 +21,8 @@ class Sensors:
     def update(self, accel, gyro, baro, dt):
         self.imu.update(accel, gyro, dt)
         self._update_baro_velocity(float(baro), dt)
+        if not self.imu.is_calibrating():
+            self.imu.fuse_vertical_velocity(self._baro_vel, 0.9)   # vz = 0.9 accel + 0.1 baro
 
     def _update_baro_velocity(self, baro, dt):
         self._baro = baro
