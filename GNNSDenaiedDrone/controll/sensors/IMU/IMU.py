@@ -60,10 +60,6 @@ class IMU:
         norm = np.linalg.norm(mean_acc)
         self.gyro_bias = c["gyro"] / c["count"]
 
-        # Accelerometer leveling: measure the ACTUAL tilt from the gravity direction instead of
-        # assuming the drone is level. The world frame keeps gravity straight down, and the start
-        # pose keeps its real roll/pitch. The bias then only corrects the MAGNITUDE along gravity
-        # -- the direction is explained by the tilt, not wrongly absorbed into the bias.
         if norm > 1e-6:
             roll0 = np.arctan2(mean_acc[1], mean_acc[2])
             pitch0 = np.arctan2(-mean_acc[0], np.sqrt(mean_acc[1] ** 2 + mean_acc[2] ** 2))
@@ -93,22 +89,22 @@ class IMU:
     def _update_vel_pos(self, accel, dt):
         roll, pitch, yaw = self._att
         ax, ay, az = accel
-        # 1) body -> LEVELED frame (roll, pitch) and remove gravity on z
+
         a_level = np.array([
             ax * np.cos(pitch) + ay * np.sin(roll) * np.sin(pitch) + az * np.cos(roll) * np.sin(pitch),
             ay * np.cos(roll) - az * np.sin(roll),
             -ax * np.sin(pitch) + ay * np.sin(roll) * np.cos(pitch) + az * np.cos(roll) * np.cos(pitch) - G,
         ])
-        # 2) LEVELED -> WORLD: rotate the horizontal components by yaw so x/y stay in a FIXED
-        #    world frame (z is vertical, unaffected by yaw). This was missing -> x/y spun with heading.
+
+
         cy, sy = np.cos(yaw), np.sin(yaw)
         a_world = np.array([
             cy * a_level[0] - sy * a_level[1],
             sy * a_level[0] + cy * a_level[1],
             a_level[2],
         ])
-        # Constant-acceleration integration: position uses the OLD velocity + ½·a·dt², which is
-        # exact for constant a over the step (more accurate than pos += new_velocity·dt).
+
+
         v_old = self._vel.copy()
         self._vel += a_world * dt                       # velocity (world frame)
         self._pos += v_old * dt + 0.5 * a_world * dt ** 2   # position (world frame)

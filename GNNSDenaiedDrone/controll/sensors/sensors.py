@@ -1,7 +1,3 @@
-"""Sensors: the single interface the controller uses. It composes the sensor estimators and
-forwards to them -- the IMU (attitude/velocity/position) plus the barometer. Later a visual
-estimator joins here and get_fused_position() fuses them.
-"""
 import numpy as np
 
 from sensors.IMU.IMU import IMU
