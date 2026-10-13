@@ -10,14 +10,8 @@ On the drone, from the repo root:
     source ~/ros2_ws/install/setup.bash
     python3 realCameraTest/testRB3Cameras.py                 # 640x400 @ 30 fps
     python3 realCameraTest/testRB3Cameras.py --height 1.0    # assume 1 m above the scene
-<<<<<<< HEAD
-    python3 realCameraTest/testRB3Cameras.py --structures    # overlay boxes/buildings (2D only)
-    python3 realCameraTest/testRB3Cameras.py --calib swarm/config/stereo_calib.npz   # + dense depth/map
 Once scripts/calibrate_rb3.py has calibrated the cameras, rb3_stereo rectifies every pair itself and the
 estimator takes focal length, baseline and disparity direction from that calibration (--raw: off).
-=======
-    python3 realCameraTest/testRB3Cameras.py --calib swarm/config/stereo_calib.npz --stereo-depth
->>>>>>> 89164a153ffd6f83a9db4e011b4d1f2bc4893615
 On WSL / another machine:
     bash scripts/view_stereo.sh --ns /vo
 
@@ -41,7 +35,7 @@ if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
 from swarm.compVision.visualEst import VisulaEst   # the real estimator, used as-is
-from swarm.compVision.denseStereo import StereoRectifier
+from swarm.config.cameraConfig import StereoCameraConfig
 
 BIG_CORES, LITTLE_CORES = {4, 5, 6, 7}, {0, 1, 2, 3}     # Cortex-A78 / Cortex-A55 of the QCS6490
 
@@ -178,32 +172,37 @@ def main(args):
     pin(BIG_CORES)                                  # estimator + OpenCV's worker threads
     cv2.setNumThreads(len(BIG_CORES))
 
-    est = VisulaEst((w, h), args.vfov)
-    est.camera_saperation = args.baseline
-    est.use_stereo_depth = args.stereo_depth
     rectifier = cam.rectifier                       # rb3_stereo rectifies every pair (stereo_calib.npz)
-    software_rectifier = None
-    if rectifier is not None:
-        if args.calib:
-            print(f"--calib ignored: the camera already rectifies with {rectifier.path}")
-    elif args.calib:
-        rectifier = software_rectifier = StereoRectifier.from_npz(args.calib)
-    if rectifier is not None:
-        est.foc_l, est.camera_saperation = rectifier.focal_px, rectifier.baseline
-<<<<<<< HEAD
-        est.disparity_direction = np.asarray(rectifier.disparity_direction, float)
-    mapper = None
-    if args.structures or args.calib:             # opt-in: dense depth costs a lot of CPU
-        # 640x400 is small: levels 1-2 are cheap and still grass-free.
-        mapper = StructureMapper(camera_for(rectifier, (w, h)), levels=(1, 2),
-                                 depth_level=1 if rectifier is not None else None,
-                                 check_direction=False)
-    print(f"{w}x{h} @ {args.fps} fps | " + ("rectified, " if rectifier is not None else f"vfov {args.vfov} deg, ")
+    if args.stereo_depth and rectifier is None:
+        raise ValueError("--stereo-depth requires the RB3 stereo calibration; remove --raw")
+    focal_px = (
+        float(rectifier.focal_px) if rectifier is not None
+        else (h / 2) / np.tan(np.deg2rad(args.vfov) / 2)
+    )
+    baseline = float(rectifier.baseline) if rectifier is not None else args.baseline
+    disparity_direction = (
+        rectifier.disparity_direction if rectifier is not None else (-1.0, 0.0)
+    )
+    camera_config = StereoCameraConfig(
+        res=(w, h),
+        left_focal=focal_px,
+        right_focal=focal_px,
+        baseline=baseline,
+        epipolar_direction=disparity_direction,
+    )
+    est = VisulaEst(
+        camera_config,
+        image_filters=("clahe",),
+        convert_to_grayscale=True,
+        filters_enabled=True,
+        filter_kernel_size=3,
+        pyramid_levels=2,
+        max_stereo_skew_s=0.005,
+    )
+    est.use_stereo_depth = args.stereo_depth
+    print(f"{w}x{h} @ {args.fps} fps | "
+          + ("rectified, " if rectifier is not None else f"vfov {args.vfov} deg, ")
           + f"focal {est.foc_l:.0f}px baseline {est.camera_saperation:.3f} m | "
-=======
-        est.disparity_direction = rectifier.disparity_direction
-    print(f"{w}x{h} @ {args.fps} fps | focal {est.foc_l:.0f}px (vfov {args.vfov} deg) baseline {args.baseline} m | "
->>>>>>> 89164a153ffd6f83a9db4e011b4d1f2bc4893615
           f"stereo depth {'on' if est.use_stereo_depth else 'off'} | assumed height {args.height} m"
           + ("" if args.no_ros else f" | live view: view_stereo.sh --ns {args.ns}"))
 
@@ -219,8 +218,6 @@ def main(args):
             prev_t = pair.t_left
             set_drone_inputs(est, args.height)
             left_img, right_img = pair.left, pair.right
-            if software_rectifier is not None:
-                left_img, right_img = software_rectifier.rectify(left_img, right_img)
             frames = [cv2.cvtColor(left_img, cv2.COLOR_GRAY2BGR), cv2.cvtColor(right_img, cv2.COLOR_GRAY2BGR)]
             t0 = time.perf_counter()
             result = est.processing(frames, idx)       # the estimator takes BGR frames
@@ -271,14 +268,7 @@ def parse_args(argv=None):
     p.add_argument('--baseline', type=float, default=0.05, help='stereo baseline in m')
     p.add_argument('--height', type=float, default=0.0, help='assumed height above the scene in m (0 = like testRealCameras)')
     p.add_argument('--stereo-depth', action='store_true', help='stereo depth (needs calibrated, rectified cameras)')
-<<<<<<< HEAD
-    p.add_argument('--structures', action='store_true', help='overlay large structures (boxes/buildings)')
-    p.add_argument('--calib', default=None, help='stereo calibration .npz: rectify + dense structure depth '
-                                                 '(not needed once rb3_stereo rectifies with its own)')
     p.add_argument('--raw', action='store_true', help="don't rectify with rb3_stereo's stereo calibration")
-=======
-    p.add_argument('--calib', default=None, help='stereo calibration .npz: rectify the pair for sparse depth')
->>>>>>> 89164a153ffd6f83a9db4e011b4d1f2bc4893615
     p.add_argument('--ns', default='/vo', help='ROS namespace of the live view')
     p.add_argument('--preview-fps', type=float, default=10.0)
     p.add_argument('--preview-scale', type=float, default=0.5)

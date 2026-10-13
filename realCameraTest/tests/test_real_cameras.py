@@ -103,11 +103,16 @@ class FakeCapture:
 
 
 class FakeEstimator:
-    """Stand-in matching how the runner uses the estimator (make_estimator sets attrs after init)."""
-    def __init__(self, res, fov):
-        self.res, self.fov = res, fov
-        self.image_filters = ('clahe',)
-        self.filter_kernel_size = 3
+    """Stand-in that captures the runner's explicit estimator configuration."""
+    def __init__(self, camera_config, **configuration):
+        self.res = camera_config.res
+        self.fov = camera_config.fov
+        self.focal_px = camera_config.focal_px
+        self.foc_l = camera_config.focal_px
+        self.camera_saperation = camera_config.baseline
+        self.disparity_direction = camera_config.disparity_direction()
+        self.image_filters = configuration['image_filters']
+        self.filter_kernel_size = configuration['filter_kernel_size']
         self.camera_velocity = np.zeros(4)   # [vx, vy, vz, yaw_rate]
         self.depth_median, self.depth_valid_frac = np.nan, 0.0
         self.depth_points = np.empty((0, 3))

@@ -32,6 +32,7 @@ class StereoCameraConfig:
     mount_pos: Tuple[float, float, float] = (baseline / 2, 0.0, 0.0)
     look_dir: Tuple[float, float, float] = (0.0, 0.0, -1.0)   # looking down
     link_idx_local: int = 0
+    epipolar_direction: Tuple[float, float] | None = None
 
     def __post_init__(self):
         if self.baseline_axis not in _AXES:
@@ -99,6 +100,12 @@ class StereoCameraConfig:
 
     def disparity_direction(self):
         """Unit (du, dv) in the left image: direction a static point shifts left -> right image."""
+        if self.epipolar_direction is not None:
+            direction = np.asarray(self.epipolar_direction, dtype=float)
+            if (direction.shape != (2,) or not np.isfinite(direction).all()
+                    or np.linalg.norm(direction) == 0):
+                raise ValueError('epipolar_direction must be a finite nonzero 2D vector')
+            return direction / np.linalg.norm(direction)
         x, y, _ = self.camera_axes().T
         shift = np.array(self.camera_pos('right')) - np.array(self.camera_pos('left'))
         d = np.array([-shift @ x, shift @ y])

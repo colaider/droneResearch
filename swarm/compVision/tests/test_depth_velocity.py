@@ -7,7 +7,7 @@ import numpy as np
 
 from swarm.compVision.frame import Frame
 from swarm.compVision.visualDepthEst import FrameDepth, estimate_vertical_velocity
-from swarm.compVision.visualEst import VisulaEst
+from swarm.compVision.tests.estimator_factory import make_estimator
 
 
 def frame_depth(depths):
@@ -43,7 +43,7 @@ class DepthVelocityTests(unittest.TestCase):
                 estimate_vertical_velocity(depth, depth, dt)
 
     def test_velocity_fit_returns_complete_vector_with_depth_vertical_speed(self):
-        estimator = VisulaEst((640, 480), 60)
+        estimator = make_estimator()
         estimator.drone_vel[2] = 0.75
         estimator.drone_ang_vel = np.zeros(3)
         estimator.avg_ang_vel = np.zeros(3)
@@ -66,7 +66,7 @@ class DepthVelocityTests(unittest.TestCase):
         np.testing.assert_array_equal(velocity, estimator.camera_velocity)
 
     def test_processing_publishes_depth_rate_and_falls_back_on_first_frame(self):
-        estimator = VisulaEst((640, 480), 60)
+        estimator = make_estimator()
         estimator.set_dt(0.2)
         estimator.drone_vel[2] = 0.75
 

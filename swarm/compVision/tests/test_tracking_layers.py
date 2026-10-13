@@ -6,7 +6,8 @@ import cv2
 import numpy as np
 
 from swarm.compVision.smallFeatures import LAYER_COLORS, build_triangles, replenish, unique_point_mask
-from swarm.compVision.visualEst import VisulaEst
+from swarm.compVision.tests.estimator_factory import make_estimator
+from swarm.visualization.display import draw_tracks
 
 
 class TrackingLayerTests(unittest.TestCase):
@@ -16,10 +17,10 @@ class TrackingLayerTests(unittest.TestCase):
         texture = np.random.default_rng(4).integers(0, 256, (61, 81), dtype=np.uint8)
         self.image = cv2.cvtColor(cv2.resize(texture, (self.width, self.height),
                                            interpolation=cv2.INTER_NEAREST), cv2.COLOR_GRAY2BGR)
-        self.est = VisulaEst((self.width, self.height), 60)
-        self.est.frame_processor.pyramid_levels = 3  # fixed fixture; production may use more layers
-        self.est.disparity_direction = np.array([0., 1.])  # synthetic right image shifts down
-        self.est.image_filters = ()
+        self.est = make_estimator(
+            (self.width, self.height), 60, pyramid_levels=3,
+            disparity_direction=(0., 1.), image_filters=(),
+        )
         self.est.drone_pos[2] = 10
 
     def stereo(self, index):
@@ -102,8 +103,8 @@ class TrackingLayerTests(unittest.TestCase):
         for color in LAYER_COLORS[:3]:
             canvas = np.zeros((40, 40, 3), np.uint8)
             points = np.float32([[5, 5], [30, 5], [5, 30]])
-            left, right = self.est.drawing(canvas.copy(), canvas.copy(), points, points,
-                                           np.array([[0, 1], [1, 2], [0, 2]]), color=color)
+            left, right = draw_tracks(canvas.copy(), canvas.copy(), points, points,
+                                      np.array([[0, 1], [1, 2], [0, 2]]), color=color)
             np.testing.assert_array_equal(left[5, 15], color)
             np.testing.assert_array_equal(right[5, 15], color)
 

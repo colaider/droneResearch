@@ -2,6 +2,7 @@
 
 import cv2
 import numpy as np
+from swarm.visualization.display import draw_tracks
 
 from swarm.compVision.smallFeatures import (
     LAYER_COLORS,
@@ -281,7 +282,7 @@ class VisualVelocityEstimator:
         z = self._current_height()
         olds = [np.column_stack((points, np.full(len(points), z))) for points in (good_old, old_r)]
         news = [np.column_stack((points, np.full(len(points), z))) for points in (good_new, new_r)]
-        annotated_frame, annotated_r = self.drawing(
+        annotated_frame, annotated_r = draw_tracks(
             annotated_frame, annotated_r, good_new, new_r, links,
             color=LAYER_COLORS[layer % len(LAYER_COLORS)],
         )
@@ -369,29 +370,6 @@ class VisualVelocityEstimator:
         self.estimated_height = float(z_estimated)
         self.camera_velocity = np.insert(kalman.get(), 2, vz)
         return self.camera_velocity.copy()
-
-    @staticmethod
-    def drawing(annotated_frame, annotated_r, good_new, new_r, links,
-                color=(255, 0, 0)):
-        """Draw left temporal tracks and any available right-image points."""
-        for a, b in links:
-            cv2.line(
-                annotated_frame, tuple(good_new[a].astype(int)),
-                tuple(good_new[b].astype(int)), color, 2,
-            )
-        for x, y in good_new.astype(int):
-            cv2.circle(annotated_frame, (x, y), 2, color, -1)
-
-        valid_right = np.isfinite(new_r).all(axis=1)
-        for a, b in links:
-            if valid_right[a] and valid_right[b]:
-                cv2.line(
-                    annotated_r, tuple(new_r[a].astype(int)),
-                    tuple(new_r[b].astype(int)), color, 2,
-                )
-        for x, y in new_r[valid_right].astype(int):
-            cv2.circle(annotated_r, (x, y), 2, color, -1)
-        return annotated_frame, annotated_r
 
     def point_prediction_filtering(self, old, new):
         """Reject tracks inconsistent with commanded motion and IMU rotation."""

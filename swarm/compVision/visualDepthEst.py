@@ -1,33 +1,11 @@
 """Stereo point-depth calculations, independent of tracking and estimator state."""
-from dataclasses import dataclass
+from swarm.compVision.estimatorTypes import StereoDepth, FrameDepth
 
 import cv2
 import numpy as np
 
-from swarm.compVision.frame import compose_depth_display
 from swarm.compVision.smallFeatures import LAYER_COLORS, unique_point_mask
-
-
-@dataclass
-class StereoDepth:
-    """Same-frame matches aligned with the input point rows; invalid depth is NaN."""
-    right_points: np.ndarray  # full-resolution pixels
-    depths: np.ndarray       # optical-axis metres, NOT world altitude
-    valid: np.ndarray
-    scores: np.ndarray       # normalized patch correlation, not a probability
-    sigma_depth: np.ndarray  # approximate depth uncertainty for map weighting
-
-
-@dataclass
-class FrameDepth:
-    """Aggregated stereo-depth results for one frame."""
-    by_layer: list
-    points: np.ndarray
-    colors: np.ndarray
-    sigma: np.ndarray
-    median: float
-    valid_fraction: float
-    view: np.ndarray
+from swarm.visualization.display import compose_depth_display
 
 
 def estimate_vertical_velocity(previous, current, dt):

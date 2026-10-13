@@ -25,6 +25,7 @@ if _REPO_ROOT not in sys.path:
 
 from swarm.compVision.visualEst import VisulaEst   # the real estimator, used as-is
 from swarm.compVision.frame import prepare_camera_frame
+from swarm.config.cameraConfig import StereoCameraConfig
 
 if __package__:
     from .display import compose_camera_display
@@ -103,18 +104,26 @@ def zero_drone_inputs(est):
 
 
 def make_estimator(focal_px, res, filters=None, kernel_size=None):
-    """Instantiate the real estimator and set the camera calibration it uses."""
-    fov = float(np.degrees(2.0 * np.arctan(res[1] / (2.0 * focal_px))))
-    est = VisulaEst(res, fov)
-    est.foc_l = float(focal_px)       # exact focal from camera_params.txt
-    est.camera_saperation = BASELINE  # stereo baseline (m)
+    """Create the estimator with explicit camera and frame-processing settings."""
+    camera_config = StereoCameraConfig(
+        res=res,
+        left_focal=float(focal_px),
+        right_focal=float(focal_px),
+        baseline=BASELINE,
+        epipolar_direction=(-1.0, 0.0),
+    )
+    est = VisulaEst(
+        camera_config,
+        image_filters=("clahe",) if filters is None else tuple(filters),
+        convert_to_grayscale=True,
+        filters_enabled=True,
+        filter_kernel_size=3 if kernel_size is None else kernel_size,
+        pyramid_levels=2,
+        max_stereo_skew_s=0.005,
+    )
     # The USB images are rotated/resized but not stereo-rectified to a common
     # projection. Enable only after supplying that calibration and rectification.
     est.use_stereo_depth = False
-    if filters is not None:
-        est.image_filters = tuple(filters)
-    if kernel_size is not None:
-        est.filter_kernel_size = kernel_size
     return est
 
 
@@ -146,7 +155,7 @@ def main(left_idx=0, right_idx=1, *, filters=None, kernel_size=None, rotate=True
     np.seterr(divide='ignore', invalid='ignore')
 
     left = right = viewer = None
-    point_cloud = CameraDepthPointCloud() if show_3d else None
+    point_cloud = CameraDepthPointCloud()
     left_focal, right_focal = LEFT_FOCAL, RIGHT_FOCAL
     left_rotation = cv2.ROTATE_90_COUNTERCLOCKWISE if rotate else None
     right_rotation = cv2.ROTATE_90_CLOCKWISE if rotate else None
@@ -206,6 +215,8 @@ def main(left_idx=0, right_idx=1, *, filters=None, kernel_size=None, rotate=True
             idx += 1
 
             display = compose_camera_display(result.frames, result.gray_frames)
+            if display is None:
+                raise RuntimeError("Camera display requires left and right frames")
             vx, vy, _, yaw = est.camera_velocity   # [vx, vy, vz, yaw_rate]
             status = (f"vx={vx:+.2f} vy={vy:+.2f} yaw={yaw:+.2f}rad/s "
                       f"depth={est.depth_median:.2f}m valid={est.depth_valid_frac:.0%}")

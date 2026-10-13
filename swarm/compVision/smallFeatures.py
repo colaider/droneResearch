@@ -6,7 +6,7 @@ these triangles do not establish physical surfaces or depth.
 filter_by_neighbors is a separate track-quality filter using supplied motion.
 Temporal optical flow, stereo matching and metric reconstruction live elsewhere.
 """
-from dataclasses import dataclass
+from swarm.compVision.estimatorTypes import LayerTracks
 
 import cv2
 import numpy as np
@@ -15,28 +15,6 @@ from scipy.spatial import Delaunay, QhullError
 
 # BGR colours used consistently for both points and within-layer mesh edges.
 LAYER_COLORS = ((255, 0, 0), (0, 220, 0), (0, 165, 255), (255, 0, 255), (255, 255, 0))
-
-
-@dataclass
-class LayerTracks:
-    """One layer's current tracks, all expressed in full-resolution pixels.
-
-    The mesh is image-space topology, not a reconstructed physical surface.
-    Stereo correspondences/depth are stored separately from temporal tracking.
-    Native layer coordinates used to seed LK are kept separately by the estimator.
-    """
-    layer: int
-    frame_idx: int
-    old_points: np.ndarray
-    new_points: np.ndarray
-    flow: np.ndarray
-    triangles: np.ndarray
-    links: np.ndarray
-
-    @classmethod
-    def empty(cls, layer, frame_idx):
-        return cls(layer, frame_idx, *(np.empty((0, 2), np.float32) for _ in range(3)),
-                   np.empty((0, 3), int), np.empty((0, 2), int))
 
 
 def unique_point_mask(points, radius=5.0):

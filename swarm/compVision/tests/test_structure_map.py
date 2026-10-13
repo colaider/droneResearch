@@ -28,7 +28,10 @@ def grass_pair(shape=(480, 640), seed=5):
     db = int(round(F * B / Z_BOX))
     right[BOX[0], BOX[1].start - db:BOX[1].stop - db] = top
     bgr = lambda g: cv2.cvtColor(g, cv2.COLOR_GRAY2BGR)
-    return FrameProcessor(image_filters=(), pyramid_levels=4).process([bgr(left), bgr(right)], 7)
+    return FrameProcessor(
+        image_filters=(), filter_kernel_size=3, pyramid_levels=4,
+        convert_to_grayscale=True, filters_enabled=True,
+    ).process([bgr(left), bgr(right)], 7)
 
 
 class StructureMapperTests(unittest.TestCase):
