@@ -31,8 +31,10 @@ class CameraTopic:
             self.info[side].header.frame_id = f"stereo_{side}_optical_frame"
 
         # Side-by-side JPEG preview, so the drone_gui camera panel can show what the cameras see.
-        self.pub_preview = node.create_publisher(CompressedImage, f"{ns}/preview/compressed",
-                                                 qos_profile_sensor_data)
+        self.pub_preview = node.create_publisher(CompressedImage, f"{ns}/preview/compressed", qos_profile_sensor_data)
+        # Separate topic for the PROCESSED image (your vision output). Left untouched by preview.
+        self.pub_processed = node.create_publisher(CompressedImage, f"{ns}/processed/compressed",
+                                                   qos_profile_sensor_data)
         self.preview_fps = 10.0
         self.preview_scale = 0.5
         self._t_prev = 0.0
@@ -43,8 +45,7 @@ class CameraTopic:
         self._thread.start()
 
     def _image(self, frame, stamp, frame_id):
-        msg = Image(height=frame.shape[0], width=frame.shape[1], encoding="mono8",
-                    is_bigendian=0, step=frame.shape[1])
+        msg = Image(height=frame.shape[0], width=frame.shape[1], encoding="mono8", is_bigendian=0, step=frame.shape[1])
         msg.header.stamp, msg.header.frame_id = stamp, frame_id
         data = array.array("B")
         data.frombytes(np.ascontiguousarray(frame))
@@ -66,18 +67,31 @@ class CameraTopic:
             now = time.monotonic()
             if self.preview_fps > 0 and now - self._t_prev >= 1.0 / self.preview_fps:
                 self._t_prev = now
-                self._publish_preview(pair.left, pair.right, stamp)
+                # plain camera preview (unchanged) ...
+                preview = np.hstack((pair.left, pair.right))
+                if self.preview_scale != 1.0:
+                    preview = cv2.resize(preview, None, fx=self.preview_scale, fy=self.preview_scale,
+                                         interpolation=cv2.INTER_AREA)
+                self._publish_jpeg(self.pub_preview, preview, stamp, "stereo_preview")
+                # ... and your processed image on its own topic
+                processed = self.process(pair.left, pair.right)
+                if processed is not None:
+                    self._publish_jpeg(self.pub_processed, processed, stamp, "stereo_processed")
 
-    def _publish_preview(self, left, right, stamp):
-        img = np.hstack((left, right))
-        if self.preview_scale != 1.0:
-            img = cv2.resize(img, None, fx=self.preview_scale, fy=self.preview_scale,
-                             interpolation=cv2.INTER_AREA)
+    def process(self, left, right):
+        """Return the image to publish on <ns>/processed/compressed, or None to skip.
+
+        Replace this with your real processing (runs on the full-res raw frames). For now it
+        just returns the left frame so the topic has something to show.
+        """
+        return left
+
+    def _publish_jpeg(self, pub, img, stamp, frame_id):
         ok, jpg = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 75])
         if ok:
             msg = CompressedImage(format="jpeg", data=jpg.tobytes())
-            msg.header.stamp, msg.header.frame_id = stamp, "stereo_preview"
-            self.pub_preview.publish(msg)
+            msg.header.stamp, msg.header.frame_id = stamp, frame_id
+            pub.publish(msg)
 
     def stop(self):
         self._stop = True
