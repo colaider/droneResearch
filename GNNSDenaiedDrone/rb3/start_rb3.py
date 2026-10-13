@@ -5,6 +5,19 @@
 Each topic is an independent small class; a missing/failed one (no cameras, no flight controller)
 is a warning, not fatal, so the rest still come up.
 """
+import os
+import sys
+
+# rb3_control and rb3_stereo now live NESTED under this folder:
+#   rb3/rb3_control/rb3_control/...   and   rb3/rb3_stereo/rb3_stereo/...
+# Put each package root on sys.path so `import rb3_control` / `import rb3_stereo` (used by the
+# topic classes) resolve to these moved copies. Must run BEFORE importing the topic classes.
+_HERE = os.path.dirname(os.path.abspath(__file__))
+for _pkg in ("rb3_control", "rb3_stereo"):
+    _root = os.path.join(_HERE, _pkg)
+    if _root not in sys.path:
+        sys.path.insert(0, _root)
+
 import rclpy
 from rclpy.executors import MultiThreadedExecutor
 

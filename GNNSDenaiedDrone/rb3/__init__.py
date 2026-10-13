@@ -8,3 +8,13 @@ One small class per topic, each reusing the proven drivers in rb3_control / rb3_
 
 start_rb3.py starts all of them on one node.
 """
+import os as _os
+import sys as _sys
+
+# rb3_control and rb3_stereo are nested under this folder; put their package roots on sys.path
+# so `import rb3_control` / `import rb3_stereo` resolve to the moved copies.
+_HERE = _os.path.dirname(_os.path.abspath(__file__))
+for _pkg in ("rb3_control", "rb3_stereo"):
+    _root = _os.path.join(_HERE, _pkg)
+    if _os.path.isdir(_root) and _root not in _sys.path:
+        _sys.path.insert(0, _root)
