@@ -1,18 +1,9 @@
-from communication.Rb3ReadSend import ReaderSender
+from controllers.control_loop import ControlLoop
 import time
 
-
+loop = ControlLoop()
 def main():
-    reader = ReaderSender()                     
-    try:
-        while True:
-            reader.step()                  
-            reader.send(0, 0, 0, 10)
-            time.sleep(0.05)
-    except KeyboardInterrupt:
-        pass
-    finally:
-        reader.close()
+    loop.run()
 
 
 if __name__ == "__main__":
