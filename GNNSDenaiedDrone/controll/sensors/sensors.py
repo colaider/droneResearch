@@ -23,6 +23,13 @@ class Sensors:
         self.gyro_bias = np.zeros(3)     # gyro offset: mean(gyro)
         self._calib = None
 
+        # low-pass on the acceleration (cuts noise; higher = smoother but laggier)
+        self.accel_lp = 0.3
+        self._accel_f = np.zeros(3)
+        # z complementary filter: pull the drifty accel-z toward the drift-free barometer
+        self.k_pos_z = 0.02              # correct position by this fraction of the baro error
+        self.k_vel_z = 0.002             # and nudge velocity, which damps the drift itself
+
     # ---------------- update ----------------
     def update(self, accel, gyro, baro, dt):
         accel = np.asarray(accel, dtype=float)
@@ -39,8 +46,10 @@ class Sensors:
         # level) and a_world comes out clean on every axis -- including y.
         accel_c = accel - self.accel_bias
         gyro_c = gyro - self.gyro_bias
-        self._update_attitude(accel_c, gyro_c, dt)
-        self._update_accel_vel_pos(accel_c, dt)
+        # low-pass the de-biased acceleration before it feeds attitude + integration
+        self._accel_f = self.accel_lp * self._accel_f + (1 - self.accel_lp) * accel_c
+        self._update_attitude(self._accel_f, gyro_c, dt)
+        self._update_accel_vel_pos(self._accel_f, dt)
 
     # ---------------- calibration (accel + gyro) ----------------
     def start_calibration(self, n=200):
@@ -88,6 +97,12 @@ class Sensors:
         ])
         self._vel += a_world * dt          # integrate acceleration -> velocity
         self._pos += self._vel * dt        # integrate velocity -> position
+
+        # z complementary filter: the barometer is drift-free, so pull z (and vz) toward it.
+        if self._prev_baro is not None:
+            err = self._baro - self._pos[2]
+            self._pos[2] += self.k_pos_z * err
+            self._vel[2] += self.k_vel_z * err
 
     def _update_baro_velocity(self, baro, dt):
         if self._prev_baro is not None and dt > 0:
