@@ -49,7 +49,7 @@ class ControlLoop:
 
                 self.step(dt)            # read -> sensors.update -> state machine
 
-                if i % 50 == 0:
+                if i % 2 == 0:
                     cmd = self.sm.last_cmd
                     print(f"[{i}] {self.sm.stage:9s} dt={dt*1e3:4.1f}ms "
                           f"att={np.round(self.sensors.get_attitude(),3)} "
