@@ -26,32 +26,29 @@ from std_msgs.msg import Float32
 
 class Reader:
     def __init__(self, node=None, ns="/drone"):
-        # Own a node when none is given, so main does not have to create/spin one.
         self._owns_node = node is None
         if self._owns_node and not rclpy.ok():
             rclpy.init()
         self.node = node if node is not None else rclpy.create_node("reader")
-        # newest received values (written by the callbacks)
+
+
         self._accel = np.zeros(3)
         self._gyro = np.zeros(3)
         self._baro = 0.0
-        # latched snapshot (written by read(), returned by the getters)
+
+        
         self._accel_s = np.zeros(3)
         self._gyro_s = np.zeros(3)
         self._baro_s = 0.0
 
         ns = ns.rstrip("/")
-        node.create_subscription(Imu, f"{ns}/imu", self._on_imu, qos_profile_sensor_data)
-        node.create_subscription(Float32, f"{ns}/baro_altitude", self._on_baro, 10)
+        self.node.create_subscription(Imu, f"{ns}/imu", self._on_imu, qos_profile_sensor_data)
+        self.node.create_subscription(Float32, f"{ns}/baro_altitude", self._on_baro, 10)
 
     # --- listeners: keep the latest value ---
     def _on_imu(self, m):
-        self._accel = np.array([m.linear_acceleration.x,
-                                m.linear_acceleration.y,
-                                m.linear_acceleration.z])
-        self._gyro = np.array([m.angular_velocity.x,
-                               m.angular_velocity.y,
-                               m.angular_velocity.z])
+        self._accel = np.array([m.linear_acceleration.x, m.linear_acceleration.y, m.linear_acceleration.z])
+        self._gyro = np.array([m.angular_velocity.x, m.angular_velocity.y, m.angular_velocity.z])
 
     def _on_baro(self, m):
         self._baro = float(m.data)
