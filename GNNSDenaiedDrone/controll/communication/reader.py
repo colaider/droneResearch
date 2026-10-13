@@ -7,22 +7,30 @@ It subscribes to the topics the rb3 classes publish:
 The callbacks keep the newest sample. Calling read() latches that newest sample into a snapshot;
 the getters then return that snapshot, so one control tick sees one consistent set of values.
 
-    reader = Reader(node)
-    ...                      # node must be spinning (spin_once / an executor)
-    reader.read()            # sample the latest values now
-    acc = reader.get_accel()
-    gyr = reader.get_gyro()
-    alt = reader.get_baro()
+    reader = Reader()        # creates and owns its node
+    while True:
+        reader.step()        # spin + latch (all the plumbing in one call)
+        gyr = reader.get_gyro()
+        acc = reader.get_accel()
+        alt = reader.get_baro()
+
+If you instead run many components on one shared node that you spin yourself, pass that node in
+(`Reader(node=my_node)`) and call read() (not step()) once per tick, spinning the node elsewhere.
 """
 import numpy as np
+import rclpy
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Imu
 from std_msgs.msg import Float32
 
 
 class Reader:
-    def __init__(self, node, ns="/drone"):
-        self.node = node
+    def __init__(self, node=None, ns="/drone"):
+        # Own a node when none is given, so main does not have to create/spin one.
+        self._owns_node = node is None
+        if self._owns_node and not rclpy.ok():
+            rclpy.init()
+        self.node = node if node is not None else rclpy.create_node("reader")
         # newest received values (written by the callbacks)
         self._accel = np.zeros(3)
         self._gyro = np.zeros(3)
@@ -48,12 +56,23 @@ class Reader:
     def _on_baro(self, m):
         self._baro = float(m.data)
 
-    # --- sample + getters ---
+    # --- the one call main needs: do all the utility steps ---
+    def step(self, timeout_sec=0.0):
+        """Process incoming messages, then latch them. Call once per loop; getters read after."""
+        rclpy.spin_once(self.node, timeout_sec=timeout_sec)
+        self.read()
+
     def read(self):
         """Latch the latest accel, gyro and barometer values into the snapshot."""
         self._accel_s = self._accel.copy()
         self._gyro_s = self._gyro.copy()
         self._baro_s = self._baro
+
+    def close(self):
+        if self._owns_node:
+            self.node.destroy_node()
+            if rclpy.ok():
+                rclpy.shutdown()
 
     def get_accel(self):
         return self._accel_s.copy()      # [ax, ay, az] m/s^2

@@ -1,14 +1,21 @@
 from communication.reader import Reader
-import rclpy
-
-rclpy.init()
-node = rclpy.create_node("reader")     # <-- the node you pass to Reader
-reader = Reader(node)
+import time
 
 
 def main():
-    print(reader.get_gyro)
+    reader = Reader()                      # creates and owns its node
+    try:
+        while True:
+            reader.step()                  # all the plumbing: spin + latch
+            print("gyro:", reader.get_gyro(),
+                  "accel:", reader.get_accel(),
+                  "baro:", reader.get_baro())
+            time.sleep(0.05)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        reader.close()
+
 
 if __name__ == "__main__":
-    while 1:
-        main()
+    main()
