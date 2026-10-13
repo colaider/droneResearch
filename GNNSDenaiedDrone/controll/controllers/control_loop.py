@@ -32,7 +32,8 @@ class ControlLoop:
 
 
     def step(self, dt):
-        self.reader.read()                                  # latch newest accel/gyro/baro
+        self.reader.read() 
+        self.reader.step()                                 # latch newest accel/gyro/baro
         self.sensors.update(self.reader.get_accel(), self.reader.get_gyro(), self.reader.get_baro(), dt)
         self.sm.step()                                      # WARMUP -> CALIBRATE -> HOVER
 
