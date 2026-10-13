@@ -62,18 +62,18 @@ If the board does not allow password logins at all, add the key from a machine t
 has access:
 
 ```bash
-cat ~/.ssh/rb3_drone.pub | ssh ubuntu@192.168.1.243 'cat >> ~/.ssh/authorized_keys'
+cat ~/.ssh/rb3_drone.pub | ssh ubuntu@192.168.0.172 'cat >> ~/.ssh/authorized_keys'
 ```
 
 First time, install the units the panel controls (once, on the board):
 
 ```bash
-./service/install_board_units.sh ubuntu@192.168.1.243
+./service/install_board_units.sh ubuntu@192.168.0.172
 ```
 
 | Option | Default | |
 | --- | --- | --- |
-| `--host` | `192.168.1.243` | the board |
+| `--host` | `192.168.0.172` | the board |
 | `--port` / `--bind` | `8080` / `127.0.0.1` | loopback on purpose, see Security |
 | `--domain-id` | `42` | must match the board |
 | `--ssh-key` | first key found | `rb3_drone`, `rb3_claude`, `id_ed25519`, `id_rsa`; mode 600 |

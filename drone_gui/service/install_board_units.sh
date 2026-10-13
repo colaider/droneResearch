@@ -1,6 +1,6 @@
 #!/bin/bash
 # Install the two units the control panel starts and stops. Run on the board, or from the
-# repo on a workstation:  ./install_board_units.sh ubuntu@192.168.1.243
+# repo on a workstation:  ./install_board_units.sh ubuntu@192.168.0.172
 set -e
 cd "$(dirname "$0")"
 UNITS="drone-control.service drone-stereo.service"
