@@ -1,4 +1,4 @@
-from GNNSDenaiedDrone.controll.communication.Rb3ReadSend import ReaderSender
+from communication.Rb3ReadSend import ReaderSender
 import time
 
 
