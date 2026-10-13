@@ -10,4 +10,5 @@ def main():
     print(reader.get_gyro)
 
 if __name__ == "__main__":
-    main()
+    while 1:
+        main()
