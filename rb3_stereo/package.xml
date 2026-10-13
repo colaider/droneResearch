@@ -1,0 +1,24 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>rb3_stereo</name>
+  <version>0.1.0</version>
+  <description>Synchronized OV9282 global-shutter stereo camera (CAM0A + CAM0B) on the Qualcomm RB3 Gen 2
+    vision mezzanine, 30/60/120 fps, with a drop-in subscriber/publisher matching the swarm simulation.</description>
+  <maintainer email="domkut@seznam.cz">domku</maintainer>
+  <license>GPL-2.0-only</license>
+
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>rcl_interfaces</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>python3-opencv</exec_depend>
+  <exec_depend>python3-yaml</exec_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>
