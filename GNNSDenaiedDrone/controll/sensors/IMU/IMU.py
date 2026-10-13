@@ -22,6 +22,11 @@ class IMU:
         self.gyro_bias = np.zeros(3)     # mean(gyro)
         self._calib = None
 
+        # attitude complementary-filter time constant [s]: how long the accelerometer takes to
+        # correct the gyro. Using a time constant (not a fixed weight) makes the filter behave the
+        # same regardless of dt.  (tau=0.5 s reproduces the old 0.98 weight at dt=0.01.)
+        self.att_tau = 0.5
+
     # ---------------- update ----------------
     def update(self, accel, gyro, dt):
         accel = np.asarray(accel, dtype=float)
@@ -48,13 +53,29 @@ class IMU:
         c["acc"] += accel
         c["gyro"] += gyro
         c["count"] += 1
-        if c["count"] >= c["n"]:
-            self.gyro_bias = c["gyro"] / c["count"]
-            self.accel_bias = c["acc"] / c["count"] - np.array([0.0, 0.0, G])
-            self._att[:] = 0.0              # start pose = world frame (level)
-            self._vel[:] = 0.0
-            self._pos[:] = 0.0
-            self._calib = None
+        if c["count"] < c["n"]:
+            return
+
+        mean_acc = c["acc"] / c["count"]
+        norm = np.linalg.norm(mean_acc)
+        self.gyro_bias = c["gyro"] / c["count"]
+
+        # Accelerometer leveling: measure the ACTUAL tilt from the gravity direction instead of
+        # assuming the drone is level. The world frame keeps gravity straight down, and the start
+        # pose keeps its real roll/pitch. The bias then only corrects the MAGNITUDE along gravity
+        # -- the direction is explained by the tilt, not wrongly absorbed into the bias.
+        if norm > 1e-6:
+            roll0 = np.arctan2(mean_acc[1], mean_acc[2])
+            pitch0 = np.arctan2(-mean_acc[0], np.sqrt(mean_acc[1] ** 2 + mean_acc[2] ** 2))
+            self._att[:] = [roll0, pitch0, 0.0]            # yaw defines the world x axis = 0
+            self.accel_bias = mean_acc - mean_acc * (G / norm)   # magnitude-only correction
+        else:
+            self._att[:] = 0.0
+            self.accel_bias = np.zeros(3)
+
+        self._vel[:] = 0.0
+        self._pos[:] = 0.0
+        self._calib = None
 
     def is_calibrating(self):
         return self._calib is not None
@@ -65,7 +86,7 @@ class IMU:
         if abs(np.linalg.norm(accel) - G) < 1.0:
             roll_acc = np.arctan2(accel[1], accel[2])
             pitch_acc = np.arctan2(-accel[0], np.sqrt(accel[1] ** 2 + accel[2] ** 2))
-            a = 0.98
+            a = self.att_tau / (self.att_tau + dt)   # dt-independent complementary weight
             self._att[0] = a * self._att[0] + (1 - a) * roll_acc
             self._att[1] = a * self._att[1] + (1 - a) * pitch_acc
 
@@ -86,8 +107,11 @@ class IMU:
             sy * a_level[0] + cy * a_level[1],
             a_level[2],
         ])
-        self._vel += a_world * dt          # integrate acceleration -> velocity (world frame)
-        self._pos += self._vel * dt        # integrate velocity -> position (world frame)
+        # Constant-acceleration integration: position uses the OLD velocity + ½·a·dt², which is
+        # exact for constant a over the step (more accurate than pos += new_velocity·dt).
+        v_old = self._vel.copy()
+        self._vel += a_world * dt                       # velocity (world frame)
+        self._pos += v_old * dt + 0.5 * a_world * dt ** 2   # position (world frame)
 
     # ---------------- getters ----------------
     def get_attitude(self):
