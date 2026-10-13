@@ -1,22 +1,5 @@
-"""Sensors: turn raw accelerometer / gyro / barometer readings into state estimates.
-
-Pure numpy, no ROS. The control loop feeds it the latest raw values + the step dt each tick
-(via update); the getters then return the estimates for that tick.
-
-Computes:
-  - attitude angles          (gyro integration + accel tilt correction)
-  - accelerometer velocity    (world-frame acceleration integrated)
-  - accelerometer position    (velocity integrated)
-  - barometer velocity        (rate of change of baro altitude, EMA-smoothed)
-Passes through:
-  - accelerometer acceleration, barometer altitude (position), angular velocities
-
-get_fused_position() returns the IMU position for now; later it will fuse the visual estimator.
-"""
 import numpy as np
-
 G = 9.81
-
 
 class Sensors:
     def __init__(self, baro_vel_ema=0.8):
@@ -31,12 +14,11 @@ class Sensors:
         self._att = np.zeros(3)          # [roll, pitch, yaw] rad
         self._vel = np.zeros(3)          # accel-integrated velocity (world) [vx, vy, vz]
         self._pos = np.zeros(3)          # accel-integrated position (world) [x, y, z]
-        self._baro_vel = 0.0             # vertical velocity from the barometer
+        self._baro_vel = 0.0            
         self._prev_baro = None
 
     # ---------------- update ----------------
     def update(self, accel, gyro, baro, dt):
-        """Feed the latest raw values and the step dt. Call once per control tick."""
         accel = np.asarray(accel, dtype=float)
         gyro = np.asarray(gyro, dtype=float)
         baro = float(baro)
@@ -47,9 +29,7 @@ class Sensors:
         self._update_baro_velocity(baro, dt)
 
     def _update_attitude(self, accel, gyro, dt):
-        # integrate the gyro
         self._att += gyro * dt
-        # correct roll/pitch toward the accelerometer's gravity direction when near 1 g
         if abs(np.linalg.norm(accel) - G) < 1.0:
             roll_acc = np.arctan2(accel[1], accel[2])
             pitch_acc = np.arctan2(-accel[0], np.sqrt(accel[1] ** 2 + accel[2] ** 2))
@@ -66,6 +46,7 @@ class Sensors:
             ay * np.cos(roll) - az * np.sin(roll),
             -ax * np.sin(pitch) + ay * np.sin(roll) * np.cos(pitch) + az * np.cos(roll) * np.cos(pitch) - G,
         ])
+        print(a_world)
         self._vel += a_world * dt          # integrate acceleration -> velocity
         self._pos += self._vel * dt        # integrate velocity -> position
 

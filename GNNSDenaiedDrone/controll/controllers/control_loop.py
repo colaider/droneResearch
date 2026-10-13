@@ -39,10 +39,11 @@ class ControlLoop:
                 self.step(dt)
 
                 if i % 50 == 0:                             # ~2 Hz heartbeat: see the data update
-                    print(f"[{i}] dt={dt*1e3:4.1f}ms  att={np.round(self.sensors.get_attitude(),3)}"
-                          f"  baro={self.sensors.get_baro_position():+.2f}m"
-                          f"  baro_v={self.sensors.get_baro_velocity():+.2f}"
-                          f"  acc_pos={np.round(self.sensors.get_acc_position(),2)}", flush=True)
+                    # print(f"[{i}] dt={dt*1e3:4.1f}ms  att={np.round(self.sensors.get_attitude(),3)}"
+                    #       f"  baro={self.sensors.get_baro_position():+.2f}m"
+                    #       f"  baro_v={self.sensors.get_baro_velocity():+.2f}"
+                    #       f"  acc_pos={np.round(self.sensors.get_acc_position(),2)}", flush=True)
+                    pass
                 i += 1
 
                 next_t += self.dt
