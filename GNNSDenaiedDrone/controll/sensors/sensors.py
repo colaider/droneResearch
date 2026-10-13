@@ -1,6 +1,7 @@
 import numpy as np
 G = 9.81
 
+
 class Sensors:
     def __init__(self, baro_vel_ema=0.8):
         self.baro_vel_ema = baro_vel_ema
@@ -17,9 +18,10 @@ class Sensors:
         self._baro_vel = 0.0
         self._prev_baro = None
 
-        # bias: the residual world acceleration measured at rest, subtracted every tick
-        self.accel_bias = np.zeros(3)
-        self._calib = None               # {"sum", "count", "n"} while calibrating
+        # biases measured at rest, subtracted from the RAW body readings BEFORE anything else
+        self.accel_bias = np.zeros(3)    # body accel offset: mean(accel) - [0,0,g]
+        self.gyro_bias = np.zeros(3)     # gyro offset: mean(gyro)
+        self._calib = None
 
     # ---------------- update ----------------
     def update(self, accel, gyro, baro, dt):
@@ -27,11 +29,46 @@ class Sensors:
         gyro = np.asarray(gyro, dtype=float)
         baro = float(baro)
         self._accel, self._gyro, self._baro = accel, gyro, baro
-
-        self._update_attitude(accel, gyro, dt)
-        self._update_accel_vel_pos(accel, dt)
         self._update_baro_velocity(baro, dt)
 
+        if self._calib is not None:
+            self._accumulate_calibration(accel, gyro)
+            return                              # gathering bias: hold the estimates
+
+        # De-bias in the BODY frame first, so the attitude filter sees [0,0,g] at rest (stays
+        # level) and a_world comes out clean on every axis -- including y.
+        accel_c = accel - self.accel_bias
+        gyro_c = gyro - self.gyro_bias
+        self._update_attitude(accel_c, gyro_c, dt)
+        self._update_accel_vel_pos(accel_c, dt)
+
+    # ---------------- calibration (accel + gyro) ----------------
+    def start_calibration(self, n=200):
+        """Hold the drone STILL and LEVEL. Over the next n updates:
+             gyro_bias  = mean(gyro)
+             accel_bias = mean(accel) - [0, 0, g]
+        The start pose becomes the world frame (attitude reset to level)."""
+        self.accel_bias = np.zeros(3)
+        self.gyro_bias = np.zeros(3)
+        self._calib = {"acc": np.zeros(3), "gyro": np.zeros(3), "count": 0, "n": int(n)}
+
+    def _accumulate_calibration(self, accel, gyro):
+        c = self._calib
+        c["acc"] += accel
+        c["gyro"] += gyro
+        c["count"] += 1
+        if c["count"] >= c["n"]:
+            self.gyro_bias = c["gyro"] / c["count"]
+            self.accel_bias = c["acc"] / c["count"] - np.array([0.0, 0.0, G])
+            self._att[:] = 0.0              # start pose = world frame (level)
+            self._vel[:] = 0.0
+            self._pos[:] = 0.0
+            self._calib = None
+
+    def is_calibrating(self):
+        return self._calib is not None
+
+    # ---------------- estimators ----------------
     def _update_attitude(self, accel, gyro, dt):
         self._att += gyro * dt
         if abs(np.linalg.norm(accel) - G) < 1.0:
@@ -44,28 +81,13 @@ class Sensors:
     def _update_accel_vel_pos(self, accel, dt):
         roll, pitch = self._att[0], self._att[1]
         ax, ay, az = accel
-        # rotate body acceleration to world and remove gravity
         a_world = np.array([
             ax * np.cos(pitch) + ay * np.sin(roll) * np.sin(pitch) + az * np.cos(roll) * np.sin(pitch),
             ay * np.cos(roll) - az * np.sin(roll),
             -ax * np.sin(pitch) + ay * np.sin(roll) * np.cos(pitch) + az * np.cos(roll) * np.cos(pitch) - G,
         ])
-       
-
-        # Calibrating: keep the drone still, average a_world, then lock it as the bias.
-        if self._calib is not None:
-            self._calib["sum"] += a_world
-            self._calib["count"] += 1
-            if self._calib["count"] >= self._calib["n"]:
-                self.accel_bias = self._calib["sum"] / self._calib["count"]
-                self._vel[:] = 0.0          # drop drift accumulated during calibration
-                self._pos[:] = 0.0
-                self._calib = None
-            return                          # don't integrate while calibrating
-
-        a_world = a_world - self.accel_bias  # remove the measured resting offset
-        self._vel += a_world * dt            # integrate acceleration -> velocity
-        self._pos += self._vel * dt          # integrate velocity -> position
+        self._vel += a_world * dt          # integrate acceleration -> velocity
+        self._pos += self._vel * dt        # integrate velocity -> position
         print(a_world)
 
     def _update_baro_velocity(self, baro, dt):
@@ -75,18 +97,7 @@ class Sensors:
             self._baro_vel = b * self._baro_vel + (1 - b) * raw
         self._prev_baro = baro
 
-    # ---------------- calibration ----------------
-    def start_calibration(self, n=200):
-        """Begin biasing: hold the drone still and level. Over the next n update() calls the
-        resting a_world is averaged and stored as accel_bias; position/velocity stay frozen
-        until it finishes. Call is_calibrating() to know when it is done."""
-        self.accel_bias = np.zeros(3)       # measure the raw (uncorrected) residual
-        self._calib = {"sum": np.zeros(3), "count": 0, "n": int(n)}
-
-    def is_calibrating(self):
-        return self._calib is not None
-
-    # ---------------- estimates ----------------
+    # ---------------- getters ----------------
     def get_attitude(self):
         return self._att.copy()            # [roll, pitch, yaw] rad
 
@@ -103,7 +114,6 @@ class Sensors:
         # For now just the IMU position. Later: fuse the visual estimator here.
         return self._pos.copy()
 
-    # ---------------- pass-through (raw latest) ----------------
     def get_acceleration(self):
         return self._accel.copy()          # body accel [ax, ay, az] m/s^2
 

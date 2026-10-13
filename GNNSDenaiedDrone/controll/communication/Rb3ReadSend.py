@@ -27,10 +27,8 @@ class ReaderSender:
         self._gyro_s = np.zeros(3)
         self._baro_s = 0.0
 
-        # in
         self.node.create_subscription(Imu, f"{ns}/imu", self._on_imu, qos_profile_sensor_data)
         self.node.create_subscription(Float32, f"{ns}/baro_altitude", self._on_baro, 10)
-        # out: the motor command topic
         self._cmd_pub = self.node.create_publisher(Twist, f"{ns}/cmd_attitude", 10)
 
     # --- listeners: keep the latest value ---

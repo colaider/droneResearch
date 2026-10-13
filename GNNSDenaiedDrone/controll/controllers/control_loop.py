@@ -1,6 +1,5 @@
 import threading
 import time
-
 import numpy as np
 import rclpy
 from rclpy.executors import SingleThreadedExecutor
@@ -15,16 +14,18 @@ class ControlLoop:
         rclpy.init()
         self.node = rclpy.create_node("control_loop")
         self.reader = ReaderSender(node=self.node, ns=ns)   
-        self.sensors = Sensors()                            #
+        self.sensors = Sensors()                            
 
         self._executor = SingleThreadedExecutor()
         self._executor.add_node(self.node)
         self._spin = threading.Thread(target=self._executor.spin, daemon=True)
         self._spin.start()
 
+
     def step(self, dt):
         self.reader.read()                                  
         self.sensors.update(self.reader.get_accel(), self.reader.get_gyro(), self.reader.get_baro(), dt)
+
 
     def run(self):
         next_t = time.monotonic()
@@ -35,12 +36,9 @@ class ControlLoop:
                 now = time.monotonic()
                 dt = self.dt if last is None else max(1e-4, now - last)
                 last = now
-                
                 self.step(dt)
 
-                if i == 200:                       # ~2 s warm-up (attitude converges)
-                    self.sensors.start_calibration(200)
-                # ... keep the drone STILL and LEVEL through the warm-up + calibration ...
+                if i == 200: self.sensors.start_calibration(200)
 
 
                 if i % 50 == 0:                             # ~2 Hz heartbeat: see the data update
@@ -65,10 +63,3 @@ class ControlLoop:
             self.node.destroy_node()
             rclpy.shutdown()
 
-
-def main():
-    ControlLoop(dt=0.01, ns="/drone").run()
-
-
-if __name__ == "__main__":
-    main()
