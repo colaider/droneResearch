@@ -14,7 +14,7 @@ CALIB_SAMPLES = 200     # ~2 s: average the resting accel+gyro bias
 
 
 class ControlLoop:
-    def __init__(self, dt=0.01, ns="/drone", altitude=1.0, send=False):
+    def __init__(self, dt=0.01, ns="/drone", altitude=1.0, send=True):
         self.dt = dt
         rclpy.init()
         self.node = rclpy.create_node("control_loop")
@@ -32,8 +32,7 @@ class ControlLoop:
 
 
     def step(self, dt):
-        self.reader.read() 
-        self.reader.step()                                 # latch newest accel/gyro/baro
+        self.reader.read()                                  # latch only; executor spins in background
         self.sensors.update(self.reader.get_accel(), self.reader.get_gyro(), self.reader.get_baro(), dt)
         self.sm.step()                                      # WARMUP -> CALIBRATE -> HOVER
 

@@ -70,15 +70,24 @@ class IMU:
             self._att[1] = a * self._att[1] + (1 - a) * pitch_acc
 
     def _update_vel_pos(self, accel, dt):
-        roll, pitch = self._att[0], self._att[1]
+        roll, pitch, yaw = self._att
         ax, ay, az = accel
-        a_world = np.array([
+        # 1) body -> LEVELED frame (roll, pitch) and remove gravity on z
+        a_level = np.array([
             ax * np.cos(pitch) + ay * np.sin(roll) * np.sin(pitch) + az * np.cos(roll) * np.sin(pitch),
             ay * np.cos(roll) - az * np.sin(roll),
             -ax * np.sin(pitch) + ay * np.sin(roll) * np.cos(pitch) + az * np.cos(roll) * np.cos(pitch) - G,
         ])
-        self._vel += a_world * dt          # integrate acceleration -> velocity
-        self._pos += self._vel * dt        # integrate velocity -> position
+        # 2) LEVELED -> WORLD: rotate the horizontal components by yaw so x/y stay in a FIXED
+        #    world frame (z is vertical, unaffected by yaw). This was missing -> x/y spun with heading.
+        cy, sy = np.cos(yaw), np.sin(yaw)
+        a_world = np.array([
+            cy * a_level[0] - sy * a_level[1],
+            sy * a_level[0] + cy * a_level[1],
+            a_level[2],
+        ])
+        self._vel += a_world * dt          # integrate acceleration -> velocity (world frame)
+        self._pos += self._vel * dt        # integrate velocity -> position (world frame)
 
     # ---------------- getters ----------------
     def get_attitude(self):
