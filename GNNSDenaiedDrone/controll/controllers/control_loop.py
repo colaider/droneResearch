@@ -35,8 +35,13 @@ class ControlLoop:
                 now = time.monotonic()
                 dt = self.dt if last is None else max(1e-4, now - last)
                 last = now
-
+                
                 self.step(dt)
+
+                if i == 200:                       # ~2 s warm-up (attitude converges)
+                    self.sensors.start_calibration(200)
+                # ... keep the drone STILL and LEVEL through the warm-up + calibration ...
+
 
                 if i % 50 == 0:                             # ~2 Hz heartbeat: see the data update
                     # print(f"[{i}] dt={dt*1e3:4.1f}ms  att={np.round(self.sensors.get_attitude(),3)}"

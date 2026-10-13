@@ -14,8 +14,12 @@ class Sensors:
         self._att = np.zeros(3)          # [roll, pitch, yaw] rad
         self._vel = np.zeros(3)          # accel-integrated velocity (world) [vx, vy, vz]
         self._pos = np.zeros(3)          # accel-integrated position (world) [x, y, z]
-        self._baro_vel = 0.0            
+        self._baro_vel = 0.0
         self._prev_baro = None
+
+        # bias: the residual world acceleration measured at rest, subtracted every tick
+        self.accel_bias = np.zeros(3)
+        self._calib = None               # {"sum", "count", "n"} while calibrating
 
     # ---------------- update ----------------
     def update(self, accel, gyro, baro, dt):
@@ -46,9 +50,23 @@ class Sensors:
             ay * np.cos(roll) - az * np.sin(roll),
             -ax * np.sin(pitch) + ay * np.sin(roll) * np.cos(pitch) + az * np.cos(roll) * np.cos(pitch) - G,
         ])
+       
+
+        # Calibrating: keep the drone still, average a_world, then lock it as the bias.
+        if self._calib is not None:
+            self._calib["sum"] += a_world
+            self._calib["count"] += 1
+            if self._calib["count"] >= self._calib["n"]:
+                self.accel_bias = self._calib["sum"] / self._calib["count"]
+                self._vel[:] = 0.0          # drop drift accumulated during calibration
+                self._pos[:] = 0.0
+                self._calib = None
+            return                          # don't integrate while calibrating
+
+        a_world = a_world - self.accel_bias  # remove the measured resting offset
+        self._vel += a_world * dt            # integrate acceleration -> velocity
+        self._pos += self._vel * dt          # integrate velocity -> position
         print(a_world)
-        self._vel += a_world * dt          # integrate acceleration -> velocity
-        self._pos += self._vel * dt        # integrate velocity -> position
 
     def _update_baro_velocity(self, baro, dt):
         if self._prev_baro is not None and dt > 0:
@@ -56,6 +74,17 @@ class Sensors:
             b = self.baro_vel_ema
             self._baro_vel = b * self._baro_vel + (1 - b) * raw
         self._prev_baro = baro
+
+    # ---------------- calibration ----------------
+    def start_calibration(self, n=200):
+        """Begin biasing: hold the drone still and level. Over the next n update() calls the
+        resting a_world is averaged and stored as accel_bias; position/velocity stay frozen
+        until it finishes. Call is_calibrating() to know when it is done."""
+        self.accel_bias = np.zeros(3)       # measure the raw (uncorrected) residual
+        self._calib = {"sum": np.zeros(3), "count": 0, "n": int(n)}
+
+    def is_calibrating(self):
+        return self._calib is not None
 
     # ---------------- estimates ----------------
     def get_attitude(self):
