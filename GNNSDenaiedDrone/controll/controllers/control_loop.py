@@ -56,7 +56,7 @@ class ControlLoop:
                           f"baro={self.sensors.get_baro_position():+.2f}m "
                           f"cmd={None if cmd is None else np.round(cmd,3)}"
                           f"pos={self.sensors.get_acc_position()}", 
-                          f"acc={ self.sensors.get_acceleration()}"flush=True)
+                          f"acc={ self.sensors.get_acceleration()}", flush=True)
                 i += 1
 
                 next_t += self.dt
