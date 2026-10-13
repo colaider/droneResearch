@@ -88,7 +88,6 @@ class Sensors:
         ])
         self._vel += a_world * dt          # integrate acceleration -> velocity
         self._pos += self._vel * dt        # integrate velocity -> position
-        print(a_world)
 
     def _update_baro_velocity(self, baro, dt):
         if self._prev_baro is not None and dt > 0:
