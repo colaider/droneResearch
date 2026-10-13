@@ -1,8 +1,9 @@
 from communication.reader import Reader
+import rclpy
 
-
-reader = Reader()
-
+rclpy.init()
+node = rclpy.create_node("reader")     # <-- the node you pass to Reader
+reader = Reader(node)
 
 
 def main():
