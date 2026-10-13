@@ -14,6 +14,14 @@ class ReaderSender:
         self.node = node if node is not None else rclpy.create_node("reader")
         ns = ns.rstrip("/")
 
+        # The RB3 IMU is z-DOWN (reads gravity on -z -> estimator saw roll = -pi and position
+        # exploded on any tilt). Flip 180 deg about x (negate y and z) to the estimator's z-UP,
+        # right-handed frame, so gravity reads +z and attitude is ~0 when level.
+        # If horizontal x/y or yaw come out mirrored, adjust these signs (keep the product +1 to
+        # stay right-handed).
+        self._accel_sign = np.array([1.0, -1.0, -1.0])
+        self._gyro_sign = np.array([1.0, -1.0, -1.0])
+
         # latest received values, and the latched snapshot the getters return
         self._accel = np.zeros(3)
         self._gyro = np.zeros(3)
@@ -28,8 +36,10 @@ class ReaderSender:
 
     # --- listeners: keep the latest value ---
     def _on_imu(self, m):
-        self._accel = np.array([m.linear_acceleration.x, m.linear_acceleration.y, m.linear_acceleration.z])
-        self._gyro = np.array([m.angular_velocity.x, m.angular_velocity.y, m.angular_velocity.z])
+        self._accel = np.array([m.linear_acceleration.x, m.linear_acceleration.y,
+                                m.linear_acceleration.z]) * self._accel_sign
+        self._gyro = np.array([m.angular_velocity.x, m.angular_velocity.y,
+                               m.angular_velocity.z]) * self._gyro_sign
 
     def _on_baro(self, m):
         self._baro = float(m.data)
