@@ -326,12 +326,18 @@ class VisualVelocityEstimator:
         return filter_by_neighbors(
             good_old, good_new, links, thresh, min_links, neighbor_min_links)
 
-    def estimate_velocities(self, flow, points):
-        """Fit planar visual motion from filtered flow and supplied-height Z."""
+    def estimate_velocities(self, flow, points, vertical_velocity=np.nan):
+        """Estimate and return ``[vx, vy, vz, yaw_rate]`` from visual and depth data."""
+        vz = (
+            float(vertical_velocity)
+            if np.isfinite(vertical_velocity)
+            else float(self.drone_vel[2])
+        )
         if len(points) < 2:
             self.estimated_height = np.nan
             self.camera_velocity = self._fallback_velocity()
-            return None
+            self.camera_velocity[2] = vz
+            return self.camera_velocity.copy()
 
         ang_vel, att = self.avg_ang_vel, self.avg_att
         height, width = self.frame_size[:2]
@@ -361,7 +367,8 @@ class VisualVelocityEstimator:
         kalman.update(measured)
 
         self.estimated_height = float(z_estimated)
-        self.camera_velocity = np.insert(kalman.get(), 2, self.drone_vel[2])
+        self.camera_velocity = np.insert(kalman.get(), 2, vz)
+        return self.camera_velocity.copy()
 
     @staticmethod
     def drawing(annotated_frame, annotated_r, good_new, new_r, links,

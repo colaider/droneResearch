@@ -1,6 +1,6 @@
 import cv2
 import numpy as np
-from swarm.compVision.terrainMap import PointMap
+from swarm.mapping.terrainMap import PointMap
 from genesis.utils.misc import tensor_to_array
 from swarm.compVision.visualEst import VisulaEst
 from swarm.compVision.frame import prepare_camera_frame, compose_camera_display

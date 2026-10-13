@@ -71,6 +71,25 @@ class DirectConnectionTests(unittest.TestCase):
         self.assertIsNotNone(grid)
         self.assertEqual(grid.ndim, 3)
 
+    def test_camera_depth_point_cloud_backprojects_and_converts_colors(self):
+        cloud = runner.CameraDepthPointCloud()
+        cloud.update(
+            np.array([[60, 40, 5], [np.nan, 20, 2], [80, 50, -1]]),
+            np.array([[10, 20, 30], [40, 50, 60], [70, 80, 90]], dtype=np.uint8),
+            focal_px=100,
+            frame_shape=(100, 120, 3),
+            frame_idx=7,
+        )
+
+        np.testing.assert_allclose(cloud.points(), [[0, 0.5, -5]])
+        np.testing.assert_allclose(cloud.colors(), [[30 / 255, 20 / 255, 10 / 255]])
+        self.assertEqual(cloud.last_frame_idx, 7)
+
+    def test_camera_depth_point_cloud_rejects_mismatched_colors(self):
+        cloud = runner.CameraDepthPointCloud()
+        with self.assertRaisesRegex(ValueError, "matching lengths"):
+            cloud.update([[60, 40, 5]], [], 100, (100, 120, 3), 0)
+
 
 class FakeCapture:
     def __init__(self, value, opened=True, grab_ok=True):
@@ -91,6 +110,8 @@ class FakeEstimator:
         self.filter_kernel_size = 3
         self.camera_velocity = np.zeros(4)   # [vx, vy, vz, yaw_rate]
         self.depth_median, self.depth_valid_frac = np.nan, 0.0
+        self.depth_points = np.empty((0, 3))
+        self.depth_colors = np.empty((0, 3), dtype=np.uint8)
         self.indices, self.pushes = [], 0
 
     def push_sensors(self): self.pushes += 1
@@ -111,6 +132,7 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(args.filters, ['gaussian', 'clahe'])
         self.assertEqual(args.kernel_size, 5)
         self.assertTrue(args.no_rotate)
+        self.assertTrue(runner.parse_args(['--3d']).show_3d)
 
     def test_capture_failure_releases_both_cameras(self):
         captures = [FakeCapture(20, opened=False), FakeCapture(40)]
@@ -160,12 +182,39 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(show.call_count, 2)
         self.assertTrue(all(c.released for c in captures))
 
+    def test_optional_3d_viewer_receives_current_depth_and_closes(self):
+        captures = [FakeCapture(20), FakeCapture(40)]
+        calls = []
+
+        class FakeViewer:
+            def update(self, cloud, drone_pos=None):
+                calls.append((cloud.points().copy(), drone_pos.copy()))
+
+            def close(self):
+                calls.append("closed")
+
+        viewer = FakeViewer()
+        with patch.object(runner, 'open_camera', side_effect=captures), \
+                patch.object(runner, 'VisulaEst', FakeEstimator), \
+                patch.object(runner, 'create_depth_viewer', return_value=viewer), \
+                patch.object(runner, 'RES', (160, 120)), \
+                patch.object(cv2, 'namedWindow'), patch.object(cv2, 'resizeWindow'), \
+                patch.object(cv2, 'imshow'), patch.object(cv2, 'waitKey', return_value=ord('q')), \
+                patch.object(cv2, 'destroyAllWindows'):
+            self.assertEqual(runner.main(rotate=False, show_3d=True), 0)
+
+        self.assertEqual(len(calls), 2)
+        np.testing.assert_array_equal(calls[0][0], np.empty((0, 3)))
+        np.testing.assert_array_equal(calls[0][1], np.zeros(3))
+        self.assertEqual(calls[1], "closed")
+        self.assertTrue(all(capture.released for capture in captures))
+
 
 class StructureIsolationTests(unittest.TestCase):
     def test_structure_and_height_map_flags_are_not_exposed(self):
         args = runner.parse_args([])
-        self.assertIsNone(args.calib)
-        for flag in ('--structures', '--map-viewer'):
+        self.assertFalse(hasattr(args, 'calib'))
+        for flag in ('--structures', '--map-viewer', '--calib'):
             with self.subTest(flag=flag), self.assertRaises(SystemExit):
                 runner.parse_args([flag])
 
@@ -191,19 +240,14 @@ class StructureIsolationTests(unittest.TestCase):
             self.assertEqual(runner.main(rotate=False, **kwargs), 0)
         return estimators
 
-    def test_calibration_rectifies_and_enables_sparse_estimator_depth(self):
-        import tempfile
-        K = np.array([[300.0, 0, 160], [0, 300, 120], [0, 0, 1]])
-        with tempfile.TemporaryDirectory() as tmp:
-            path = f'{tmp}/calib.npz'
-            np.savez(path, K1=K, D1=np.zeros(5), K2=K, D2=np.zeros(5), R=np.eye(3),
-                     T=np.array([-0.125, 0, 0]), size=np.array([320, 240]))
-            # 's' must not swap cameras once a calibration fixes left/right.
-            estimators = self.run_main([ord('s'), ord('q')], calib=path)
-        estimator = estimators[0]
-        self.assertTrue(estimator.use_stereo_depth)
-        np.testing.assert_allclose(estimator.disparity_direction, [-1, 0])
-        self.assertAlmostEqual(estimator.camera_saperation, 0.125, places=6)
+    def test_unrectified_images_keep_stereo_depth_off_and_cameras_swappable(self):
+        estimators = self.run_main([ord('s'), ord('q')])
+
+        self.assertEqual(len(estimators), 2)
+        self.assertFalse(estimators[0].use_stereo_depth)
+        self.assertFalse(estimators[1].use_stereo_depth)
+        self.assertEqual(estimators[0].foc_l, runner.LEFT_FOCAL)
+        self.assertEqual(estimators[1].foc_l, runner.RIGHT_FOCAL)
 
 
 if __name__ == '__main__':

@@ -9,6 +9,7 @@ from swarm.compVision.frame import Frame, FrameProcessor, compose_layer_display
 from swarm.compVision.smallFeatures import LAYER_COLORS
 from swarm.compVision.visualDepthEst import (
     SparseStereoDepth,
+    estimate_vertical_velocity,
     estimate_frame_depth,
 )
 from swarm.compVision.visualVelEst import VisualVelocityEstimator, VelocityKalmanFilter
@@ -52,6 +53,9 @@ class VisulaEst(VisualVelocityEstimator):
         self.depth_median = np.nan
         self.depth_valid_frac = 0.0
         self.depth_points = np.empty((0, 3))
+        self.previous_depth = None
+        self.current_depth = None
+        self.depth_velocity_z = np.nan
         self.stereo = SparseStereoDepth()
         self.depth_by_layer = []
         self.depth_colors = np.empty((0, 3), np.uint8)
@@ -104,9 +108,10 @@ class VisulaEst(VisualVelocityEstimator):
         self.update_frame(frame, idx)
         self.aply_flow()
         self.estimate_depth()
-        self.estimate_velocities(
+        return_velocity = self.estimate_velocities(
             self.velocity_flows[self.velocity_point_mask],
             self.velocity_points[self.velocity_point_mask],
+            vertical_velocity=self.depth_velocity_z,
         )
 
         self.layer_views = [
@@ -119,6 +124,7 @@ class VisulaEst(VisualVelocityEstimator):
             )
             for layer, gray in enumerate(self.current_frame.pyramids[0])
         ]
+        self.camera_velocity = return_velocity
         return self.current_frame
 
     def estimate_depth(self):
@@ -138,6 +144,11 @@ class VisulaEst(VisualVelocityEstimator):
             baseline=self.camera_saperation,
             direction=direction,
             cross_layer_min_distance=self.cross_layer_min_distance,
+        )
+        self.previous_depth = self.current_depth
+        self.current_depth = result
+        self.depth_velocity_z = estimate_vertical_velocity(
+            self.previous_depth, self.current_depth, self.dt
         )
         self.depth_by_layer = result.by_layer
         self.depth_points = result.points

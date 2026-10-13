@@ -10,7 +10,7 @@ import numpy as np
 from swarm.compVision.frame import FrameProcessor
 from swarm.compVision.structureMap import StructureMapper, camera_for
 from swarm.compVision.denseStereo import StereoRectifier
-from swarm.compVision.terrainMap import TerrainMap
+from swarm.mapping.terrainMap import TerrainMap
 from swarm.config.cameraConfig import StereoCameraConfig
 
 F, B, Z_GROUND, Z_BOX = 500.0, 0.12, 10.0, 6.0

@@ -8,8 +8,7 @@ controller, so all drone/IMU inputs are provided as ZERO. Only the camera calibr
 Run directly or with `python -m realCameraTest.testRealCameras`.
 Keys: ESC/q quits; s swaps the dominant camera and resets tracking.
 
---calib swarm/config/stereo_calib.npz (from scripts/calibrate_stereo.py) rectifies the pair and
-enables the estimator's sparse stereo depth output.
+The USB camera images are not stereo-rectified, so sparse stereo depth is disabled.
 """
 import argparse
 import sys
@@ -26,7 +25,6 @@ if _REPO_ROOT not in sys.path:
 
 from swarm.compVision.visualEst import VisulaEst   # the real estimator, used as-is
 from swarm.compVision.frame import prepare_camera_frame
-from swarm.compVision.denseStereo import StereoRectifier
 
 if __package__:
     from .display import compose_camera_display
@@ -40,6 +38,52 @@ RIGHT_FOCAL = (1175.14 + 1177.06) / 2.0
 BASELINE = 0.125
 RES = (1920, 1080)
 WINDOW = "Stereo cameras"
+
+
+class CameraDepthPointCloud:
+    """Adapt per-frame pixel/depth samples to camera-local XYZ for MapViewer."""
+
+    def __init__(self):
+        self._points = np.empty((0, 3), dtype=float)
+        self._colors = np.empty((0, 3), dtype=float)
+        self.last_frame_idx = -1
+
+    def update(self, points_uvz, colors_bgr, focal_px, frame_shape, frame_idx):
+        points_uvz = np.asarray(points_uvz, dtype=float).reshape(-1, 3)
+        colors_bgr = np.asarray(colors_bgr, dtype=np.uint8).reshape(-1, 3)
+        if len(points_uvz) != len(colors_bgr):
+            raise ValueError("Depth points and colors must have matching lengths")
+        if not np.isfinite(focal_px) or focal_px <= 0:
+            raise ValueError("Focal length must be finite and positive")
+
+        height, width = frame_shape[:2]
+        valid = np.isfinite(points_uvz).all(axis=1) & (points_uvz[:, 2] > 0)
+        uvz = points_uvz[valid]
+        self._points = np.column_stack((
+            (uvz[:, 0] - width / 2) * uvz[:, 2] / focal_px,
+            -(uvz[:, 1] - height / 2) * uvz[:, 2] / focal_px,
+            -uvz[:, 2],
+        ))
+        self._colors = colors_bgr[valid, ::-1].astype(float) / 255.0
+        self.last_frame_idx = frame_idx
+
+    def points(self):
+        return self._points
+
+    def colors(self):
+        return self._colors
+
+
+def create_depth_viewer():
+    """Import and construct the optional Qt/OpenGL viewer on demand."""
+    from swarm.utilities.mapViewer import MapViewer
+
+    return MapViewer(
+        title="Stereo camera-local depth",
+        distance=10.0,
+        show_triangles=False,
+        update_every=1,
+    )
 
 
 def zero_drone_inputs(est):
@@ -89,7 +133,7 @@ def prepare_frame(frame, rotation):
 
 
 def main(left_idx=0, right_idx=1, *, filters=None, kernel_size=None, rotate=True,
-         calib=None):
+         show_3d=False):
     if left_idx == right_idx:
         raise ValueError("Choose two different camera indices")
     if filters is not None and any(name not in ('clahe', 'gaussian', 'median') for name in filters):
@@ -101,16 +145,12 @@ def main(left_idx=0, right_idx=1, *, filters=None, kernel_size=None, rotate=True
     # resulting divide warnings (those frames fall back to a zero velocity by design).
     np.seterr(divide='ignore', invalid='ignore')
 
-    left = right = None
+    left = right = viewer = None
+    point_cloud = CameraDepthPointCloud() if show_3d else None
     left_focal, right_focal = LEFT_FOCAL, RIGHT_FOCAL
     left_rotation = cv2.ROTATE_90_COUNTERCLOCKWISE if rotate else None
     right_rotation = cv2.ROTATE_90_CLOCKWISE if rotate else None
     tracking_res = (RES[1], RES[0]) if rotate else RES   # 90-deg rotation swaps W/H
-
-    # Calibration is made on the rotated images (scripts/calibrate_stereo.py does the same).
-    rectifier = StereoRectifier.from_npz(calib) if calib else None
-    if rectifier is not None:
-        left_focal = rectifier.focal_px
 
     try:
         left = open_camera(left_idx, RES)
@@ -120,14 +160,11 @@ def main(left_idx=0, right_idx=1, *, filters=None, kernel_size=None, rotate=True
             return 1
 
         est = make_estimator(left_focal, tracking_res, filters, kernel_size)
-        if rectifier is not None:
-            est.camera_saperation = rectifier.baseline
-            est.disparity_direction = rectifier.disparity_direction
-            est.use_stereo_depth = True
+        if show_3d:
+            viewer = create_depth_viewer()
         print(f"left={left_idx} right={right_idx} | focal={left_focal:.1f}px "
               f"baseline={est.camera_saperation}m | filters={est.image_filters} | "
-              f"sparse stereo depth={'on' if est.use_stereo_depth else 'off'} "
-              f"rectified={'yes' if rectifier else 'no'}")
+              "sparse stereo depth=off (camera pair is not rectified)")
 
         idx, failures = 0, 0
         previous_time = None
@@ -154,11 +191,18 @@ def main(left_idx=0, right_idx=1, *, filters=None, kernel_size=None, rotate=True
             previous_time = now
 
             fl, fr = prepare_frame(fl, left_rotation), prepare_frame(fr, right_rotation)
-            if rectifier is not None:
-                fl, fr = rectifier.rectify(fl, fr)
 
             zero_drone_inputs(est)                 # no drone -> all drone inputs are 0
             result = est.processing([fl, fr], idx)
+            if viewer is not None:
+                point_cloud.update(
+                    est.depth_points,
+                    est.depth_colors,
+                    est.foc_l,
+                    result.frames[0].shape,
+                    idx,
+                )
+                viewer.update(point_cloud, drone_pos=np.zeros(3))
             idx += 1
 
             display = compose_camera_display(result.frames, result.gray_frames)
@@ -176,9 +220,7 @@ def main(left_idx=0, right_idx=1, *, filters=None, kernel_size=None, rotate=True
             key = cv2.waitKey(1) & 0xFF
             if key in (27, ord('q')):
                 break
-            if key == ord('s') and rectifier is not None:
-                print("swap disabled: the stereo calibration fixes which camera is left")
-            elif key == ord('s'):
+            if key == ord('s'):
                 left_idx, right_idx = right_idx, left_idx
                 left, right = right, left
                 left_focal, right_focal = right_focal, left_focal
@@ -193,6 +235,8 @@ def main(left_idx=0, right_idx=1, *, filters=None, kernel_size=None, rotate=True
         for cap in (left, right):
             if cap is not None:
                 cap.release()
+        if viewer is not None:
+            viewer.close()
         cv2.destroyAllWindows()
 
 
@@ -204,7 +248,8 @@ def parse_args(argv=None):
                         help='ordered filters; omit to inherit swarm defaults, or pass alone for no filters')
     parser.add_argument('--kernel-size', type=int, default=None, help='positive odd blur kernel size')
     parser.add_argument('--no-rotate', action='store_true', help='disable the 90-degree mounting corrections')
-    parser.add_argument('--calib', default=None, help='stereo calibration .npz: rectify + enable sparse stereo depth')
+    parser.add_argument('--3d', dest='show_3d', action='store_true',
+                        help='open a camera-local 3D viewer for valid stereo depth points')
     args = parser.parse_args(argv)
     if args.left == args.right:
         parser.error('left and right camera indices must differ')
@@ -217,4 +262,4 @@ if __name__ == '__main__':
     args = parse_args()
     raise SystemExit(main(args.left, args.right, filters=args.filters,
                           kernel_size=args.kernel_size, rotate=not args.no_rotate,
-                          calib=args.calib))
+                          show_3d=args.show_3d))

@@ -6,7 +6,7 @@ import numpy as np
 
 from swarm.compVision.visualDepthEst import SparseStereoDepth
 from swarm.compVision.visualEst import VisulaEst
-from swarm.compVision.terrainMap import PointMap
+from swarm.mapping.terrainMap import PointMap
 from swarm.config.cameraConfig import StereoCameraConfig
 
 

@@ -30,6 +30,28 @@ class FrameDepth:
     view: np.ndarray
 
 
+def estimate_vertical_velocity(previous, current, dt):
+    """Estimate positive-up velocity from consecutive downward-camera depth frames.
+
+    This approximation assumes a static, mostly level scene and a near-level
+    downward-facing camera. It returns NaN until both frames contain at least
+    three valid stereo points.
+    """
+    if not np.isfinite(dt) or dt <= 0:
+        raise ValueError("Frame interval must be finite and positive")
+    if previous is None or current is None:
+        return np.nan
+
+    previous_depths = previous.points[:, 2]
+    current_depths = current.points[:, 2]
+    previous_depths = previous_depths[np.isfinite(previous_depths)]
+    current_depths = current_depths[np.isfinite(current_depths)]
+    if len(previous_depths) < 3 or len(current_depths) < 3:
+        return np.nan
+
+    return float((np.median(current_depths) - np.median(previous_depths)) / dt)
+
+
 def estimate_frame_depth(frame, all_points, point_colors, layer_tracks, stereo, *,
                          use_stereo_depth, focal_px, baseline, direction,
                          cross_layer_min_distance):
@@ -103,6 +125,8 @@ def estimate_frame_depth(frame, all_points, point_colors, layer_tracks, stereo, 
     )
 
 
+
+
 class SparseStereoDepth:
     """Sparse stereo for equal-intrinsic, rectified horizontal/vertical image pairs.
 
@@ -120,7 +144,18 @@ class SparseStereoDepth:
         self.min_depth, self.max_depth = min_depth, max_depth
         self.max_fb_error, self.max_epipolar_error = max_fb_error, max_epipolar_error
 
-    def estimate(self, left, right, points, *, focal_px, baseline, direction, pixel_scale=1.0):
+    @staticmethod
+    def _empty_result(point_count):
+        return StereoDepth(
+            np.full((point_count, 2), np.nan, np.float32),
+            np.full(point_count, np.nan),
+            np.zeros(point_count, bool),
+            np.full(point_count, np.nan),
+            np.full(point_count, np.nan),
+        )
+
+    @staticmethod
+    def _validate_inputs(left, right, points, focal_px, baseline, direction, pixel_scale):
         points = np.asarray(points, np.float32).reshape(-1, 2)
         direction = np.asarray(direction, float)
         if (not np.isfinite(focal_px) or focal_px <= 0 or not np.isfinite(baseline) or baseline <= 0
@@ -133,79 +168,123 @@ class SparseStereoDepth:
         axis = int(np.argmax(np.abs(direction)))
         if abs(direction[1-axis]) > 1e-6:
             raise ValueError('Rectify stereo images to horizontal or vertical epipolar lines first')
-        n = len(points)
-        result = StereoDepth(np.full((n, 2), np.nan, np.float32), np.full(n, np.nan),
-                             np.zeros(n, bool), np.full(n, np.nan), np.full(n, np.nan))
-        if not n:
-            return result
-        native = points / pixel_scale
-        h, w = left.shape
-        dims = np.array([w, h])
+        return points, direction, axis
+
+    def _find_patch_matches(self, left, right, native_points, direction, axis,
+                            dimensions, pixel_scale, focal_px, baseline, result):
         radius = self.patch_size // 2
         fB = focal_px * baseline
         lo = max(1, int(np.ceil(fB / self.max_depth / pixel_scale)))
         hi = int(np.floor(min(self.max_disparity, fB / self.min_depth) / pixel_scale))
-        offsets = np.arange(lo, hi+1) * np.sign(direction[axis])
+        offsets = np.arange(lo, hi + 1) * np.sign(direction[axis])
         rows, seeds = [], []
-        for i, point in enumerate(native):
-            if not np.isfinite(point).all() or np.any(point < radius) or np.any(point >= dims-radius-1):
+        for i, point in enumerate(native_points):
+            if (not np.isfinite(point).all() or np.any(point < radius)
+                    or np.any(point >= dimensions - radius - 1)):
                 continue
             template = cv2.getRectSubPix(left, (self.patch_size, self.patch_size), tuple(point))
             if template.std() < 5:
                 continue
             candidates = point[axis] + offsets
-            candidates = candidates[(candidates >= radius) & (candidates < dims[axis]-radius-1)]
+            candidates = candidates[
+                (candidates >= radius) & (candidates < dimensions[axis] - radius - 1)
+            ]
             if len(candidates) < 3:
                 continue
             start, end = candidates.min(), candidates.max()
-            center = point.copy(); center[axis] = (start+end)/2
+            center = point.copy()
+            center[axis] = (start + end) / 2
             size = [self.patch_size, self.patch_size]
-            size[axis] += int(round(float(end-start)))
+            size[axis] += int(round(float(end - start)))
             strip = cv2.getRectSubPix(right, tuple(size), tuple(center))
             scores = cv2.matchTemplate(strip, template, cv2.TM_CCOEFF_NORMED).ravel()
-            best = int(np.argmax(scores)); score = float(scores[best])
-            other = scores[np.abs(np.arange(len(scores))-best) > 2]
-            if not np.isfinite(score) or score < self.min_score or (len(other) and score-other.max() < self.uniqueness):
+            best = int(np.argmax(scores))
+            score = float(scores[best])
+            other = scores[np.abs(np.arange(len(scores)) - best) > 2]
+            if (not np.isfinite(score) or score < self.min_score
+                    or (len(other) and score - other.max() < self.uniqueness)):
                 continue
-            seed = point.copy(); seed[axis] = start + best
-            rows.append(i); seeds.append(seed); result.scores[i] = score
+            seed = point.copy()
+            seed[axis] = start + best
+            rows.append(i)
+            seeds.append(seed)
+            result.scores[i] = score
+        return rows, seeds, radius, fB
+
+    def _track_matches(self, left, right, native_points, rows, seeds,
+                       dimensions, radius, pixel_scale):
         if not rows:
-            return result
+            return None
         rows = np.asarray(rows)
-        old = native[rows, None, :].copy()
+        old = native_points[rows, None, :].copy()
         seeds = np.asarray(seeds, np.float32).reshape(-1, 1, 2)
-        lk = dict(winSize=(self.patch_size, self.patch_size), maxLevel=0,
-                  flags=cv2.OPTFLOW_USE_INITIAL_FLOW,
-                  criteria=(cv2.TERM_CRITERIA_COUNT | cv2.TERM_CRITERIA_EPS, 30, .001))
-        matched, status, _ = cv2.calcOpticalFlowPyrLK(left, right, old, seeds.copy(), **lk)
+        lk = dict(
+            winSize=(self.patch_size, self.patch_size),
+            maxLevel=0,
+            flags=cv2.OPTFLOW_USE_INITIAL_FLOW,
+            criteria=(cv2.TERM_CRITERIA_COUNT | cv2.TERM_CRITERIA_EPS, 30, .001),
+        )
+        matched, status, _ = cv2.calcOpticalFlowPyrLK(
+            left, right, old, seeds.copy(), **lk
+        )
         if matched is None or status is None:
-            return result
+            return None
         matched = matched.reshape(-1, 2)
         good = ((status.ravel() == 1) & np.isfinite(matched).all(axis=1)
-                & (np.linalg.norm(matched-seeds[:, 0], axis=1) < 2)
-                & (matched >= radius).all(axis=1) & (matched < dims-radius-1).all(axis=1))
+                & (np.linalg.norm(matched - seeds[:, 0], axis=1) < 2)
+                & (matched >= radius).all(axis=1)
+                & (matched < dimensions - radius - 1).all(axis=1))
         rows, old, matched = rows[good], old[good], matched[good]
         if not len(rows):
-            return result
-        back, status, _ = cv2.calcOpticalFlowPyrLK(right, left, matched[:, None].copy(), old.copy(), **lk)
+            return None
+        back, status, _ = cv2.calcOpticalFlowPyrLK(
+            right, left, matched[:, None].copy(), old.copy(), **lk
+        )
         if back is None or status is None:
-            return result
+            return None
         good = ((status.ravel() == 1) & np.isfinite(back.reshape(-1, 2)).all(axis=1)
-                & (np.linalg.norm(back[:, 0]-old[:, 0], axis=1)*pixel_scale < self.max_fb_error))
-        rows, matched = rows[good], matched[good]*pixel_scale
-        delta = matched-points[rows]
+                & (np.linalg.norm(back[:, 0] - old[:, 0], axis=1) * pixel_scale
+                   < self.max_fb_error))
+        return rows[good], matched[good] * pixel_scale
+
+    def _store_depths(self, result, points, direction, matched_rows,
+                      matched_points, fB, pixel_scale):
+        rows, matched = matched_rows, matched_points
+        delta = matched - points[rows]
         disparity = delta @ direction
         epipolar = abs(delta @ np.array([-direction[1], direction[0]]))
         with np.errstate(divide='ignore', invalid='ignore'):
-            depth = fB/disparity
-            sigma = depth**2/fB * (.25*pixel_scale)
+            depth = fB / disparity
+            sigma = depth**2 / fB * (.25 * pixel_scale)
         good = ((disparity > .3) & (disparity <= self.max_disparity)
                 & (epipolar < self.max_epipolar_error) & np.isfinite(depth)
                 & (depth >= self.min_depth) & (depth <= self.max_depth)
-                & (sigma/depth < .15))
+                & (sigma / depth < .15))
         rows = rows[good]
         result.right_points[rows] = matched[good]
         result.depths[rows] = depth[good]
         result.sigma_depth[rows] = sigma[good]
         result.valid[rows] = True
+
+    def estimate(self, left, right, points, *, focal_px, baseline, direction, pixel_scale=1.0):
+        points, direction, axis = self._validate_inputs(
+            left, right, points, focal_px, baseline, direction, pixel_scale
+        )
+        result = self._empty_result(len(points))
+        if not len(points):
+            return result
+        native_points = points / pixel_scale
+        height, width = left.shape
+        dimensions = np.array([width, height])
+        rows, seeds, radius, fB = self._find_patch_matches(
+            left, right, native_points, direction, axis, dimensions,
+            pixel_scale, focal_px, baseline, result,
+        )
+        tracked = self._track_matches(
+            left, right, native_points, rows, seeds, dimensions, radius, pixel_scale
+        )
+        if tracked is None:
+            return result
+        rows, matched = tracked
+        self._store_depths(result, points, direction, rows, matched, fB, pixel_scale)
         return result
