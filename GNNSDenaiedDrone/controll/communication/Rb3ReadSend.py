@@ -52,12 +52,12 @@ class ReaderSender:
         self._baro_s = self._baro
 
     # --- command out: roll, pitch [rad], yaw rate [rad/s], throttle [0..1] -> motors ---
-    def send(self, roll, pitch, yaw, throttle):
+    def send(self, cmd: np.ndarray):
         msg = Twist()
-        msg.angular.x = float(roll)
-        msg.angular.y = float(pitch)
-        msg.angular.z = float(yaw)
-        msg.linear.z = float(throttle)
+        msg.angular.x = float(cmd[0])
+        msg.angular.y = float(cmd[1])
+        msg.angular.z = float(cmd[2])
+        msg.linear.z = float(cmd[3])
         self._cmd_pub.publish(msg)
 
     def get_accel(self):

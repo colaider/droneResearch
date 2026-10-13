@@ -5,10 +5,12 @@ pairs and publishes them on <ns>/left|right/image_raw and <ns>/left|right/camera
 """
 import array
 import threading
+import time
 
+import cv2
 import numpy as np
 from rclpy.qos import qos_profile_sensor_data
-from sensor_msgs.msg import Image
+from sensor_msgs.msg import CompressedImage, Image
 
 from rb3_stereo import camera_info
 from rb3_stereo.stereo import StereoCamera
@@ -27,6 +29,13 @@ class CameraTopic:
                      for side in ("left", "right")}
         for side in ("left", "right"):
             self.info[side].header.frame_id = f"stereo_{side}_optical_frame"
+
+        # Side-by-side JPEG preview, so the drone_gui camera panel can show what the cameras see.
+        self.pub_preview = node.create_publisher(CompressedImage, f"{ns}/preview/compressed",
+                                                 qos_profile_sensor_data)
+        self.preview_fps = 10.0
+        self.preview_scale = 0.5
+        self._t_prev = 0.0
 
         self.cam = StereoCamera(w, h, fps, calibration="").start()   # raw (unrectified) images
         self._stop = False
@@ -53,6 +62,22 @@ class CameraTopic:
                 img_pub.publish(self._image(frame, stamp, f"stereo_{side}_optical_frame"))
                 self.info[side].header.stamp = stamp
                 info_pub.publish(self.info[side])
+
+            now = time.monotonic()
+            if self.preview_fps > 0 and now - self._t_prev >= 1.0 / self.preview_fps:
+                self._t_prev = now
+                self._publish_preview(pair.left, pair.right, stamp)
+
+    def _publish_preview(self, left, right, stamp):
+        img = np.hstack((left, right))
+        if self.preview_scale != 1.0:
+            img = cv2.resize(img, None, fx=self.preview_scale, fy=self.preview_scale,
+                             interpolation=cv2.INTER_AREA)
+        ok, jpg = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 75])
+        if ok:
+            msg = CompressedImage(format="jpeg", data=jpg.tobytes())
+            msg.header.stamp, msg.header.frame_id = stamp, "stereo_preview"
+            self.pub_preview.publish(msg)
 
     def stop(self):
         self._stop = True
