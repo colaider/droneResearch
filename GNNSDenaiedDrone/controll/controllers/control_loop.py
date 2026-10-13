@@ -6,15 +6,24 @@ from rclpy.executors import SingleThreadedExecutor
 
 from communication.Rb3ReadSend import ReaderSender
 from sensors.sensors import Sensors
+from controllers.controller import Controller
+from controllers.state_machine import StateMachine
+
+WARMUP_STEPS = 200      # ~2 s: let the attitude estimate settle BEFORE measuring bias
+CALIB_SAMPLES = 200     # ~2 s: average the resting accel+gyro bias
 
 
 class ControlLoop:
-    def __init__(self, dt=0.01, ns="/drone"):
+    def __init__(self, dt=0.01, ns="/drone", altitude=1.0, send=False):
         self.dt = dt
         rclpy.init()
         self.node = rclpy.create_node("control_loop")
-        self.reader = ReaderSender(node=self.node, ns=ns)   
-        self.sensors = Sensors()                            
+        self.reader = ReaderSender(node=self.node, ns=ns)
+        self.sensors = Sensors()
+        self.controller = Controller(dt=dt)
+        self.sm = StateMachine(self.sensors, self.controller, self.reader,
+                               altitude=altitude, warmup_steps=WARMUP_STEPS,
+                               calib_samples=CALIB_SAMPLES, send=send)
 
         self._executor = SingleThreadedExecutor()
         self._executor.add_node(self.node)
@@ -23,8 +32,9 @@ class ControlLoop:
 
 
     def step(self, dt):
-        self.reader.read()                                  
+        self.reader.read()                                  # latch newest accel/gyro/baro
         self.sensors.update(self.reader.get_accel(), self.reader.get_gyro(), self.reader.get_baro(), dt)
+        self.sm.step()                                      # WARMUP -> CALIBRATE -> HOVER
 
 
     def run(self):
@@ -36,17 +46,15 @@ class ControlLoop:
                 now = time.monotonic()
                 dt = self.dt if last is None else max(1e-4, now - last)
                 last = now
-                self.step(dt)
 
-                if i == 200: self.sensors.start_calibration(200)
+                self.step(dt)            # read -> sensors.update -> state machine
 
-
-                if i % 50 == 0:                             # ~2 Hz heartbeat: see the data update
-                    print(f"[{i}] dt={dt*1e3:4.1f}ms  att={np.round(self.sensors.get_attitude(),3)}"
-                          f"  baro={self.sensors.get_baro_position():+.2f}m"
-                          f"  baro_v={self.sensors.get_baro_velocity():+.2f}"
-                          f"  acc_pos={np.round(self.sensors.get_acc_position(),2)}", flush=True)
-                    pass
+                if i % 50 == 0:
+                    cmd = self.sm.last_cmd
+                    print(f"[{i}] {self.sm.stage:9s} dt={dt*1e3:4.1f}ms "
+                          f"att={np.round(self.sensors.get_attitude(),3)} "
+                          f"baro={self.sensors.get_baro_position():+.2f}m "
+                          f"cmd={None if cmd is None else np.round(cmd,3)}", flush=True)
                 i += 1
 
                 next_t += self.dt
