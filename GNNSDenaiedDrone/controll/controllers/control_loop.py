@@ -54,7 +54,8 @@ class ControlLoop:
                     print(f"[{i}] {self.sm.stage:9s} dt={dt*1e3:4.1f}ms "
                           f"att={np.round(self.sensors.get_attitude(),3)} "
                           f"baro={self.sensors.get_baro_position():+.2f}m "
-                          f"cmd={None if cmd is None else np.round(cmd,3)}", flush=True)
+                          f"cmd={None if cmd is None else np.round(cmd,3)}"
+                          f"pos={self.sensors.get_acc_position():+.4f}", flush=True)
                 i += 1
 
                 next_t += self.dt
@@ -65,6 +66,13 @@ class ControlLoop:
             self.close()
 
     def close(self):
+        # Neutral stop: make the last thing on the wire zero tilt / zero throttle, so a Ctrl-C
+        # does not leave the FC holding a non-zero command for the command_timeout window.
+        try:
+            self.reader.send([0.0, 0.0, 0.0, 0.0])
+            time.sleep(0.05)
+        except Exception:
+            pass
         self._executor.shutdown()
         self._spin.join(timeout=1.0)
         if rclpy.ok():

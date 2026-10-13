@@ -21,7 +21,7 @@ from rb3_control.control import sticks_from_command
 
 class CommandTopic:
     def __init__(self, node, ns="/drone", port="/dev/ttyACM0", baud=115200,
-                 rc_rate_hz=50.0, loop_hz=20.0, command_timeout=0.5,
+                 rc_rate_hz=100.0, loop_hz=20.0, command_timeout=0.2,
                  max_tilt_deg=15.0, max_yaw_rate_deg=120.0,
                  throttle_min=1000, throttle_max=2000,
                  require_armed=True, require_override=True):
@@ -49,6 +49,7 @@ class CommandTopic:
                 "commands will NEVER be sent. Assign it in the Modes tab, or pass "
                 "require_override=False (bench, props off).")
         self._last_reason = None
+        self._allowed = False            # set by the gate loop; lets _on_cmd push immediately
 
         self.rc = msp_proto.RcStream(self.msp, self.msp.rc_map(), rc_rate_hz,
                                      idle_throttle=throttle_min)
@@ -63,6 +64,18 @@ class CommandTopic:
     def _on_cmd(self, m):
         self.command = (m.angular.x, m.angular.y, m.angular.z, m.linear.z)
         self.command_stamp = time.monotonic()
+        # Low latency: push to the FC the instant a command arrives (100 Hz), instead of waiting
+        # for the slow gate loop. The gate loop (safety reads, MSP-limited ~18 Hz) only decides
+        # whether we are _allowed; it does not bottleneck the command itself.
+        if self._allowed:
+            self._apply_command()
+
+    def _apply_command(self):
+        roll, pitch, yaw_rate, throttle = self.command
+        self.rc.set_sticks(*sticks_from_command(
+            roll, pitch, yaw_rate, throttle, self.max_tilt, self.max_yaw_rate,
+            throttle_min=self.throttle_min, throttle_max=self.throttle_max))
+        self.rc.paused = False
 
     def _loop(self):
         now = time.monotonic()
@@ -86,12 +99,9 @@ class CommandTopic:
         fresh = self.command is not None and (now - self.command_stamp) < self.command_timeout
         allowed = ((not self.require_armed or armed) and not rx_lost and fresh
                    and override_on and self.override_seen_off)
+        self._allowed = allowed
         if allowed:
-            roll, pitch, yaw_rate, throttle = self.command
-            self.rc.set_sticks(*sticks_from_command(
-                roll, pitch, yaw_rate, throttle, self.max_tilt, self.max_yaw_rate,
-                throttle_min=self.throttle_min, throttle_max=self.throttle_max))
-            self.rc.paused = False
+            self._apply_command()              # keep sticks fresh / set them on first allow
             reason = "SENDING sticks to the FC"
         else:
             self._release()
@@ -108,6 +118,7 @@ class CommandTopic:
             self._last_reason = reason
 
     def _release(self):
+        self._allowed = False
         self.rc.set_sticks(1500, 1500, 1500, self.throttle_min)
         self.rc.paused = True
 
