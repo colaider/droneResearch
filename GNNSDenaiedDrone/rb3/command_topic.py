@@ -39,7 +39,16 @@ class CommandTopic:
         self.override = self.msp.mode_range(msp_proto.BOX_MSP_OVERRIDE)
         if self.arm_bit is None:
             raise RuntimeError("ARM is not assigned to a radio switch")
+        self.require_override = require_override
         self.override_seen_off = not require_override
+        # Silent-block guard: if OVERRIDE is required but not assigned in Betaflight, the gate can
+        # never open -- say so loudly instead of blocking forever with no explanation.
+        if require_override and self.override is None:
+            node.get_logger().warn(
+                "MSP OVERRIDE is required but NOT assigned to a radio switch in Betaflight -- "
+                "commands will NEVER be sent. Assign it in the Modes tab, or pass "
+                "require_override=False (bench, props off).")
+        self._last_reason = None
 
         self.rc = msp_proto.RcStream(self.msp, self.msp.rc_map(), rc_rate_hz,
                                      idle_throttle=throttle_min)
@@ -83,8 +92,20 @@ class CommandTopic:
                 roll, pitch, yaw_rate, throttle, self.max_tilt, self.max_yaw_rate,
                 throttle_min=self.throttle_min, throttle_max=self.throttle_max))
             self.rc.paused = False
+            reason = "SENDING sticks to the FC"
         else:
             self._release()
+            reason = ("radio link lost" if rx_lost else
+                      "not armed (arm from the radio)" if self.require_armed and not armed else
+                      "no recent command (is the control loop publishing cmd_attitude?)" if not fresh else
+                      "OVERRIDE switch off" if self.override is not None and not override_on else
+                      "OVERRIDE not re-armed since start (flip the switch off then on)"
+                      if not self.override_seen_off else "blocked")
+
+        # Log only when the reason changes -> shows the gate transitions without spamming.
+        if reason != self._last_reason:
+            self.node.get_logger().info("command gate: %s" % reason)
+            self._last_reason = reason
 
     def _release(self):
         self.rc.set_sticks(1500, 1500, 1500, self.throttle_min)

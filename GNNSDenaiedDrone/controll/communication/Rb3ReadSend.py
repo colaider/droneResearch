@@ -1,8 +1,3 @@
-"""Reader: subscribe to the RB3 IMU + barometer, and publish motor commands.
-
-In:  <ns>/imu (accel + gyro), <ns>/baro_altitude          -> read()/step() + getters
-Out: <ns>/cmd_attitude (roll, pitch, yaw rate, throttle)  -> send()
-"""
 import numpy as np
 import rclpy
 from geometry_msgs.msg import Twist
