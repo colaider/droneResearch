@@ -35,7 +35,6 @@ class ImuTopic:
         msg.angular_velocity.x, msg.angular_velocity.y, msg.angular_velocity.z = gv[0], gv[1], gv[2]
         if a is not None and len(a[2]) >= 3:
             av = a[2]
-            print(av)
             msg.linear_acceleration.x, msg.linear_acceleration.y, msg.linear_acceleration.z = av[0], av[1], av[2]
         else:
             msg.linear_acceleration_covariance[0] = -1.0   # no accel this cycle

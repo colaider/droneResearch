@@ -1,2 +1,0 @@
-# shell scripts must keep LF endings to run on the drone and in WSL
-* text=auto eol=lf
