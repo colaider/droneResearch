@@ -25,7 +25,7 @@ class Config:
     domain_id: int = int(_env("ROS_DOMAIN_ID", "42"))
     drone_ns: str = _env("DRONE_NS", "/drone")
     stereo_ns: str = _env("STEREO_NS", "/stereo")
-    # realCameraTest/testRB3Cameras.py publishes its estimator output here.
+    # Visual-odometry status namespace (a VO node publishes its estimator output here).
     vo_ns: str = _env("VO_NS", "/vo")
 
     # --- this GUI ----------------------------------------------------------
@@ -44,7 +44,6 @@ class Config:
     units: list = field(default_factory=lambda: [
         ("drone-control", "Flight controller bridge (MSP over USB + RB3 sensors)", True),
         ("drone-stereo", "Stereo camera node (/stereo topics)", True),
-        ("drone-vo", "Stereo visual odometry (/vo; stops drone-stereo, same cameras)", True),
         ("rb3-stereo-setup", "Camera kernel modules (camss combo + CAM0B)", False),
         ("rb3-usb-host", "Renesas USB host re-probe (brings up /dev/ttyACM0)", False),
         ("sscrpcd", "Qualcomm sensor core daemon (IMU/baro/mag)", False),

@@ -159,7 +159,6 @@ not packages, so name the modules):
 
 ```sh
 .venv-py313/bin/python -m unittest swarm.compVision.tests.test_large_features swarm.compVision.tests.test_dense_stereo swarm.compVision.tests.test_structure_map swarm.compVision.tests.test_frame
-.venv-py313/bin/python -m unittest realCameraTest.tests.test_real_cameras realCameraTest.tests.test_calibrate_stereo
 ```
 
 These are headless module/integration checks. No Genesis session or physical

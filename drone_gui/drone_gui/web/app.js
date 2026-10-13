@@ -168,7 +168,7 @@ function renderPosition(position) {
     voSource.classList.toggle('dead', !vo);
     voSource.textContent = vo
       ? ((vo.estimator_ms ? vo.estimator_ms + ' ms/frame · ' : '') + (vo.mode || ''))
-      : 'estimator not running (realCameraTest/testRB3Cameras.py)';
+      : 'estimator not running (no VO node publishing /vo)';
   }
 
   set('pos-alt-fc', position.fc_altitude_m, 2);

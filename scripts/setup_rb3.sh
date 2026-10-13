@@ -41,4 +41,4 @@ EOF
 else
   echo "already set up"
 fi
-echo "done. Camera node: $REPO/scripts/run_stereo.sh   VO test: cd $REPO && python3 realCameraTest/testRB3Cameras.py"
+echo "done. Camera node: $REPO/scripts/run_stereo.sh"
