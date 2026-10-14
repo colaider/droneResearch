@@ -2,7 +2,7 @@ import numpy as np
 
 
 class Controller:
-    def __init__(self, dt=0.01, hover_throttle=0.55, max_tilt_deg=15.0):
+    def __init__(self, dt=0.01, hover_throttle=0.55, max_tilt_deg=0.5):
         self.dt = dt
         self.hover_throttle = hover_throttle
         self.max_tilt = np.radians(max_tilt_deg)
@@ -61,8 +61,8 @@ class Controller:
 
         v = S_dd + self.kp_pos @ X_err + self.kd_pos @ X_err_d    
         U = np.linalg.inv(self.f1(yaw)) @ (v + self.f2(yaw) @ X_d_body)  # target vel [vx,vy,vz,yaw_rate]
-        U[:3] = np.clip(U[:3], -0.05, 0.05)                        
-        U[3] = np.clip(U[3], 0,  0.5)
+        # U[:3] = np.clip(U[:3], -0.05, 0.05)                        
+        # U[3] = np.clip(U[3], 0,  0.5)
         self._pr_setpoint = setpoint.copy()
         self._pr_dr_setpoint = S_d
         return self._velocity_to_cmd(U, X_d_body[:3])    # inner loop on BODY velocity
