@@ -31,6 +31,8 @@ class StereoFrame:
     sequence_id: int
     pixel_format: Literal['BGR', 'GRAY'] | None = None
     skip_preprocessing: bool = False
+    left_timestamp_ns: int | None = None
+    right_timestamp_ns: int | None = None
 
     def __post_init__(self):
         if self.pixel_format is None:
@@ -51,6 +53,17 @@ class StereoFrame:
             raise ValueError('StereoFrame images must have equal size')
         if not all(np.isfinite(t) for t in (self.left_timestamp, self.right_timestamp)):
             raise ValueError('Capture timestamps must be finite seconds')
+        for field_name in ("left_timestamp_ns", "right_timestamp_ns"):
+            timestamp = getattr(self, field_name)
+            if timestamp is None:
+                seconds_field = field_name.removesuffix("_ns")
+                timestamp = int(round(float(getattr(self, seconds_field)) * 1e9))
+                object.__setattr__(self, field_name, timestamp)
+            elif (isinstance(timestamp, (bool, np.bool_))
+                  or not isinstance(timestamp, (int, np.integer))):
+                raise ValueError(f'{field_name} must be an integer')
+            else:
+                object.__setattr__(self, field_name, int(timestamp))
         if (isinstance(self.sequence_id, (bool, np.bool_))
                 or not isinstance(self.sequence_id, (int, np.integer)) or self.sequence_id < 0):
             raise ValueError('sequence_id must be a nonnegative integer')
@@ -58,6 +71,10 @@ class StereoFrame:
     @property
     def timestamp(self):
         return float(self.left_timestamp)
+
+    @property
+    def timestamp_ns(self):
+        return int(self.left_timestamp_ns)
 
     @property
     def stereo_skew(self):
@@ -81,11 +98,18 @@ class Frame:
     idx: int = 0
     left_timestamp: float | None = None
     right_timestamp: float | None = None
+    left_timestamp_ns: int | None = None
+    right_timestamp_ns: int | None = None
 
     @property
     def timestamp(self):
         """Left exposure time, used for temporal tracking; None for legacy inputs."""
         return self.left_timestamp
+
+    @property
+    def timestamp_ns(self):
+        """Exact ROS nanosecond timestamp when sourced from a ROS image message."""
+        return self.left_timestamp_ns
 
     def display_copy(self):
         """Copy color images for overlays while retaining clean tracking inputs.
@@ -100,6 +124,8 @@ class Frame:
             idx=self.idx,
             left_timestamp=self.left_timestamp,
             right_timestamp=self.right_timestamp,
+            left_timestamp_ns=self.left_timestamp_ns,
+            right_timestamp_ns=self.right_timestamp_ns,
         )
 
 

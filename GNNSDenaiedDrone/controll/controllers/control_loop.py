@@ -41,7 +41,14 @@ class ControlLoop:
 
     def step(self, dt):
         self.reader.read()                                  # latch only; executor spins in background
-        self.sensors.update(self.reader.get_accel(), self.reader.get_gyro(), self.reader.get_baro(), dt)
+        self.sensors.update(
+            self.reader.get_accel(),
+            self.reader.get_gyro(),
+            self.reader.get_baro(),
+            dt,
+            imu_timestamp_ns=self.reader.get_imu_timestamp_ns(),
+            baro_timestamp_ns=self.reader.get_baro_timestamp_ns(),
+        )
         self.sm.step()                                      # WARMUP -> CALIBRATE -> HOVER
         self.estimates.publish(self.sensors, self.sm.stage)
 

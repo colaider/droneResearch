@@ -66,13 +66,6 @@ class VisulaEst(VisualVelocityEstimator):
         self.imu_att = np.zeros(3)
         self.previous_cmd_vel = np.zeros(4)
 
-        self.buf_ang_vel = deque(maxlen=20)
-        self.buf_att = deque(maxlen=20)
-        self.buf_pos = deque(maxlen=20)
-        self.avg_ang_vel = np.zeros(3)
-        self.avg_att = np.zeros(3)
-        self.avg_pos = np.zeros(3)
-
         self._init_velocity_estimator(self.frame_processor.pyramid_levels)
         self.depth_median = np.nan
         self.depth_valid_frac = 0.0
@@ -116,27 +109,8 @@ class VisulaEst(VisualVelocityEstimator):
         return self.frame_processor.preprocess(frame)
 
     def update_frame(self, frame, idx=None):
-        next_dt = None
-        if isinstance(frame, StereoFrame):
-            if frame.stereo_skew > self.max_stereo_skew_s:
-                raise ValueError('Stereo capture skew exceeds max_stereo_skew_s')
-            if self.buffer:
-                previous = self.buffer[-1]
-                if frame.sequence_id <= previous.idx:
-                    raise ValueError('Stereo sequence IDs must increase')
-                if previous.left_timestamp is not None:
-                    next_dt = frame.left_timestamp - previous.left_timestamp
-                    if next_dt <= 0 or frame.right_timestamp <= previous.right_timestamp:
-                        raise ValueError('Stereo capture timestamps must increase for both cameras')
         prepared = self.frame_processor.process(frame, idx)
         height, width = prepared.frames[0].shape[:2]
-        if (width, height) != self.resolution:
-            raise ValueError(
-                "Frame resolution differs from calibration; create a new estimator "
-                "for this output size"
-            )
-        if next_dt is not None:
-            self.set_dt(float(next_dt))
         self.frame_size = prepared.frames[0].shape
         self.buffer.append(prepared)
         self.current_frame = prepared.display_copy()
@@ -146,13 +120,12 @@ class VisulaEst(VisualVelocityEstimator):
         """Process StereoFrame, or legacy [left,right] plus idx.
 
         Sensor values may be supplied together to update the estimator and
-        buffer one sensor sample as part of this call. Existing callers may
-        continue buffering faster sensor samples with ``push_sensors()``.
+        use the latest sensor sample for this call.
         Returns the display Frame. Read camera_velocity ([vx, vy, vz, yaw_rate]),
         depth_points ([u, v, optical_depth]), depth_colors, and depth_sigma on
         this estimator. Capture metadata is on current_frame.
-        Typed inputs use left capture-time differences for dt. Legacy callers
-        retain their explicit set_dt() convention and have no invented timestamp.
+        Capture metadata is retained on current_frame. The estimator uses its
+        configured dt for both typed and legacy inputs.
         """
         sensor_values = (drone_pos, drone_vel, drone_ang_vel, imu_att)
         if any(value is not None for value in sensor_values):
@@ -164,7 +137,6 @@ class VisulaEst(VisualVelocityEstimator):
             self.drone_vel = np.asarray(drone_vel, dtype=float)
             self.drone_ang_vel = np.asarray(drone_ang_vel, dtype=float)
             self.imu_att = np.asarray(imu_att, dtype=float)
-            self.push_sensors()
 
         self.update_frame(frame, idx)
         self.aply_flow()
@@ -216,23 +188,5 @@ class VisulaEst(VisualVelocityEstimator):
         self.depth_valid_frac = result.valid_fraction
         self.depth_view = result.view
 
-    def push_sensors(self):
-        self.buf_ang_vel.append(np.array(self.drone_ang_vel, dtype=float))
-        self.buf_att.append(np.array(self.imu_att, dtype=float))
-        self.buf_pos.append(np.array(self.drone_pos, dtype=float))
-
-    def _take_sensor_window(self):
-        if self.buf_ang_vel:
-            self.avg_ang_vel = np.mean(np.array(self.buf_ang_vel), axis=0)
-            self.avg_att = np.mean(np.array(self.buf_att), axis=0)
-            self.avg_pos = np.mean(np.array(self.buf_pos), axis=0)
-        else:
-            self.avg_ang_vel = np.array(self.drone_ang_vel, dtype=float)
-            self.avg_att = np.array(self.imu_att, dtype=float)
-            self.avg_pos = np.array(self.drone_pos, dtype=float)
-        self.buf_ang_vel.clear()
-        self.buf_att.clear()
-        self.buf_pos.clear()
-
     def _current_height(self):
-        return float(self.avg_pos[2])
+        return float(self.drone_pos[2])

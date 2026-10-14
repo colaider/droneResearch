@@ -1,6 +1,7 @@
 import numpy as np
 
 from sensors.IMU.IMU import IMU
+from sensors.IMU.IMUBridge import IMUBridge
 from sensors.visual.config.cameraConfig import STEREO_CAM
 
 
@@ -24,12 +25,16 @@ class Sensors:
                 self.visual_frame_bridge = VisualFrameBridge(node)
 
         self.imu = IMU()                  # accel + gyro estimator
+        self.imu_bridge = IMUBridge(capacity=50)
 
         # barometer (kept here; it is not part of the IMU)
         self.baro_vel_ema = baro_vel_ema
         self._baro = 0.0
         self._baro_vel = 0.0
         self._prev_baro = None
+        self._prev_baro_timestamp_ns = None
+        self.baro_timestamp_ns = None
+        self._last_imu_timestamp_ns = None
         self.latest_camera_frame = None
         self._visual_position = None
         self._visual_velocity_world = None     # latest camera velocity in world frame (nan axis = no measurement)
@@ -45,30 +50,48 @@ class Sensors:
         )
 
     # ---------------- update ----------------
-    def update(self, accel, gyro, baro, dt):
-        was_calibrating = self.imu.is_calibrating()
-        self.imu.update(accel, gyro, dt)
-        if was_calibrating and not self.imu.is_calibrating():
-            self._visual_position = None
-            self._visual_velocity_world = None
-            self._last_visual_frame_idx = None
-        self._update_baro_velocity(float(baro), dt)
-        if not self.imu.is_calibrating():
+    def update(self, accel, gyro, baro, dt, *, imu_timestamp_ns=None,
+               baro_timestamp_ns=None):
+        imu_dt = float(dt)
+        imu_is_new = True
+        if imu_timestamp_ns is not None and self._last_imu_timestamp_ns is not None:
+            timestamp_delta_ns = int(imu_timestamp_ns) - self._last_imu_timestamp_ns
+            if timestamp_delta_ns <= 0:
+                imu_is_new = False
+            else:
+                imu_dt = timestamp_delta_ns * 1e-9
+
+        if imu_is_new:
+            was_calibrating = self.imu.is_calibrating()
+            self.imu.update(accel, gyro, imu_dt)
+            if imu_timestamp_ns is not None:
+                self._last_imu_timestamp_ns = int(imu_timestamp_ns)
+            if was_calibrating and not self.imu.is_calibrating():
+                self._visual_position = None
+                self._visual_velocity_world = None
+                self._last_visual_frame_idx = None
+
+        baro_is_new = self._update_baro_velocity(
+            float(baro), dt, baro_timestamp_ns
+        )
+        if baro_is_new and not self.imu.is_calibrating():
             self.imu.fuse_vertical_velocity(self._baro_vel, 0.9)   # vz = 0.9 accel + 0.1 baro
-        self._push_visual_sensor_sample()
+        if imu_is_new:
+            self.imu_bridge.capture(self.imu, imu_timestamp_ns)
+        self.baro_timestamp_ns = baro_timestamp_ns
+        self._update_visual_sensor_reading()
         if self.camera_receiver is not None:
             frame = self.camera_receiver.get_frame()
             if frame is not None:
                 self.latest_camera_frame = frame
                 self.process_visual_frame(frame)
 
-    def _push_visual_sensor_sample(self):
+    def _update_visual_sensor_reading(self):
         estimator = self.visual_estimator
         estimator.drone_pos = self.get_fused_position()
         estimator.drone_vel = self.get_acc_velocity()
         estimator.drone_ang_vel = self.get_angular_velocity()
         estimator.imu_att = self.get_attitude()
-        estimator.push_sensors()
 
     def process_visual_frame(self, frame, idx=None):
         """Process a stereo capture and integrate valid visual velocity into position."""
@@ -142,13 +165,23 @@ class Sensors:
             self.visual_frame_bridge.close()
             self.visual_frame_bridge = None
 
-    def _update_baro_velocity(self, baro, dt):
+    def _update_baro_velocity(self, baro, dt, timestamp_ns=None):
+        if timestamp_ns is not None and self._prev_baro_timestamp_ns is not None:
+            timestamp_delta_ns = int(timestamp_ns) - self._prev_baro_timestamp_ns
+            if timestamp_delta_ns <= 0:
+                return False
+            dt = timestamp_delta_ns * 1e-9
+
         self._baro = baro
         if self._prev_baro is not None and dt > 0:
             raw = (baro - self._prev_baro) / dt
             b = self.baro_vel_ema
             self._baro_vel = b * self._baro_vel + (1 - b) * raw
         self._prev_baro = baro
+        self._prev_baro_timestamp_ns = (
+            None if timestamp_ns is None else int(timestamp_ns)
+        )
+        return True
 
     # ---------------- calibration (forwarded to the IMU) ----------------
     def start_calibration(self, n=400):
