@@ -389,7 +389,7 @@ class VisualVelocityEstimator:
         residuals = np.clip(np.linalg.norm(new[:, :2] - predicted, axis=1), 0, 150)
         threshold = 1.5
         if residuals.sum() > 0:
-            threshold = np.min(residuals) + 0.15 * (np.max(residuals) - np.min(residuals))
+            threshold = np.min(residuals) + 0.99 * (np.max(residuals) - np.min(residuals))
         return residuals < threshold
 
     def set_dt(self, dt):
