@@ -61,8 +61,8 @@ class Controller:
 
         v = S_dd + self.kp_pos @ X_err + self.kd_pos @ X_err_d    
         U = np.linalg.inv(self.f1(yaw)) @ (v + self.f2(yaw) @ X_d_body)  # target vel [vx,vy,vz,yaw_rate]
-        U[:3] = np.clip(U, -0.05, 0.05)                        
-        u[:3] = np.clip(U, 0,  0.5)
+        U[:3] = np.clip(U[:3], -0.05, 0.05)                        
+        U[3] = np.clip(U[3], 0,  0.5)
         self._pr_setpoint = setpoint.copy()
         self._pr_dr_setpoint = S_d
         return self._velocity_to_cmd(U, X_d_body[:3])    # inner loop on BODY velocity
