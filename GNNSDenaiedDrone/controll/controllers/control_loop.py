@@ -41,7 +41,15 @@ class ControlLoop:
 
     def step(self, dt):
         self.reader.read()                                  # latch only; executor spins in background
-        self.sensors.update(self.reader.get_accel(), self.reader.get_gyro(), self.reader.get_baro(), dt)
+        command_velocity = (
+            self.controller.posCMD.copy()
+            if self.sm.stage == "HOVER" and self.sm.send
+            else np.zeros(4)
+        )
+        self.sensors.update(
+            self.reader.get_accel(), self.reader.get_gyro(),
+            self.reader.get_baro(), dt, command_velocity=command_velocity,
+        )
         self.sm.step()                                      # WARMUP -> CALIBRATE -> HOVER
         self.estimates.publish(self.sensors, self.sm.stage)
 

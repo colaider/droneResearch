@@ -52,6 +52,18 @@ class SensorsVisualEstimatorTests(unittest.TestCase):
         self.assertEqual(len(estimator.buf_ang_vel), 0)
         np.testing.assert_array_equal(sensors.get_visual_velocity(), np.zeros(4))
 
+    def test_sensor_window_propagates_average_command_velocity(self):
+        sensors = self.make_sensor()
+        estimator = sensors.visual_estimator
+        accel = np.array([0.0, 0.0, 9.81])
+        gyro = np.zeros(3)
+        sensors.update(accel, gyro, 0.0, 0.01, command_velocity=[1.0, 2.0, 3.0, 0.4])
+        sensors.update(accel, gyro, 0.0, 0.01, command_velocity=[3.0, 4.0, 5.0, 0.8])
+
+        estimator._take_sensor_window()
+
+        np.testing.assert_allclose(estimator.previous_cmd_vel, [2.0, 3.0, 4.0, 0.6])
+
     def test_sensor_constructs_visual_estimator_by_default(self):
         self.assertIsNotNone(self.make_sensor().visual_estimator)
 

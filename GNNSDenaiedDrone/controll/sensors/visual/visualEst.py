@@ -63,11 +63,13 @@ class VisulaEst(VisualVelocityEstimator):
         self.drone_vel = np.zeros(3)
         self.drone_ang_vel = np.zeros(3)
         self.imu_att = np.zeros(3)
+        self.drone_cmd_vel = np.zeros(4)
         self.previous_cmd_vel = np.zeros(4)
 
         self.buf_ang_vel = deque(maxlen=20)
         self.buf_att = deque(maxlen=20)
         self.buf_pos = deque(maxlen=20)
+        self.buf_cmd_vel = deque(maxlen=20)
         self._sensor_buffer_lock = threading.Lock()
         self.avg_ang_vel = np.zeros(3)
         self.avg_att = np.zeros(3)
@@ -211,6 +213,7 @@ class VisulaEst(VisualVelocityEstimator):
             self.buf_ang_vel.append(np.array(self.drone_ang_vel, dtype=float))
             self.buf_att.append(np.array(self.imu_att, dtype=float))
             self.buf_pos.append(np.array(self.drone_pos, dtype=float))
+            self.buf_cmd_vel.append(np.array(self.drone_cmd_vel, dtype=float))
 
     def _take_sensor_window(self):
         with self._sensor_buffer_lock:
@@ -218,13 +221,16 @@ class VisulaEst(VisualVelocityEstimator):
                 self.avg_ang_vel = np.mean(np.array(self.buf_ang_vel), axis=0)
                 self.avg_att = np.mean(np.array(self.buf_att), axis=0)
                 self.avg_pos = np.mean(np.array(self.buf_pos), axis=0)
+                self.previous_cmd_vel = np.mean(np.array(self.buf_cmd_vel), axis=0)
             else:
                 self.avg_ang_vel = np.array(self.drone_ang_vel, dtype=float)
                 self.avg_att = np.array(self.imu_att, dtype=float)
                 self.avg_pos = np.array(self.drone_pos, dtype=float)
+                self.previous_cmd_vel = np.array(self.drone_cmd_vel, dtype=float)
             self.buf_ang_vel.clear()
             self.buf_att.clear()
             self.buf_pos.clear()
+            self.buf_cmd_vel.clear()
 
     def _current_height(self):
         return float(self.avg_pos[2])

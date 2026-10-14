@@ -58,7 +58,7 @@ class Sensors:
             self._visual_worker.start()
 
     # ---------------- update ----------------
-    def update(self, accel, gyro, baro, dt):
+    def update(self, accel, gyro, baro, dt, command_velocity=None):
         was_calibrating = self.imu.is_calibrating()
         self.imu.update(accel, gyro, dt)
         if was_calibrating and not self.imu.is_calibrating():
@@ -69,7 +69,7 @@ class Sensors:
         self._update_baro_velocity(float(baro), dt)
         if not self.imu.is_calibrating():
             self.imu.fuse_vertical_velocity(self._baro_vel, 0.9)   # vz = 0.9 accel + 0.1 baro
-        self._push_visual_sensor_sample()
+        self._push_visual_sensor_sample(command_velocity)
         if self.camera_receiver is not None:
             frame = self.camera_receiver.get_frame()
             if frame is not None:
@@ -97,12 +97,17 @@ class Sensors:
                     f"Visual frame processing failed: {error}"
                 )
 
-    def _push_visual_sensor_sample(self):
+    def _push_visual_sensor_sample(self, command_velocity=None):
         estimator = self.visual_estimator
         estimator.drone_pos = self.get_fused_position()
         estimator.drone_vel = self.get_acc_velocity()
         estimator.drone_ang_vel = self.get_angular_velocity()
         estimator.imu_att = self.get_attitude()
+        estimator.drone_cmd_vel = (
+            np.zeros(4)
+            if command_velocity is None
+            else np.asarray(command_velocity, dtype=float).copy()
+        )
         estimator.push_sensors()
 
     def process_visual_frame(self, frame, idx=None):
