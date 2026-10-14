@@ -10,7 +10,7 @@ from controllers.controller import Controller
 from controllers.state_machine import StateMachine
 
 WARMUP_STEPS = 200      # ~2 s: let the attitude estimate settle BEFORE measuring bias
-CALIB_SAMPLES = 200     # ~2 s: average the resting accel+gyro bias
+CALIB_SAMPLES = 400     # ~4 s: longer resting average -> cleaner gyro bias (root of the drift)
 
 
 class ControlLoop:

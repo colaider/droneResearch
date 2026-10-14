@@ -19,6 +19,18 @@ class IMU:
 
         self.att_tau = 0.5
 
+        # ZUPT (zero-velocity update): while the body is detected stationary, snap velocity to 0
+        # and HOLD position, so at-rest accel/attitude noise and residual bias cannot integrate
+        # into a runaway. Detection: accel magnitude ~ g AND gyro ~ 0, sustained for a few samples
+        # (hysteresis against chatter). This re-zeros every time we are still -- adaptive, unlike
+        # subtracting a one-time measured drift. It does NOT remove the unobservability of x/y
+        # DURING motion; it only bounds drift while at rest.
+        self.zupt_acc_tol = 0.3          # |‖accel_c‖ - g| below this = no net acceleration [m/s^2]
+        self.zupt_gyro_tol = 0.05        # ‖gyro_c‖ below this = not rotating [rad/s] (~3 deg/s)
+        self.zupt_hold = 10              # consecutive still samples required (~0.1 s at 100 Hz)
+        self._zupt_count = 0
+        self._stationary = False
+
     # ---------------- update ----------------
     def update(self, accel, gyro, dt):
         accel = np.asarray(accel, dtype=float)
@@ -32,10 +44,24 @@ class IMU:
         accel_c = accel - self.accel_bias
         gyro_c = gyro - self.gyro_bias
         self._update_attitude(accel_c, gyro_c, dt)
-        self._update_vel_pos(accel_c, dt)
+
+        if self._detect_stationary(accel_c, gyro_c):
+            self._vel[:] = 0.0              # ZUPT: cancel velocity drift; hold position (no integrate)
+        else:
+            self._update_vel_pos(accel_c, dt)
+
+    def _detect_stationary(self, accel_c, gyro_c):
+        still = (abs(np.linalg.norm(accel_c) - G) < self.zupt_acc_tol
+                 and np.linalg.norm(gyro_c) < self.zupt_gyro_tol)
+        self._zupt_count = self._zupt_count + 1 if still else 0   # reset the instant we move
+        self._stationary = self._zupt_count >= self.zupt_hold
+        return self._stationary
+
+    def is_stationary(self):
+        return self._stationary
 
     # ---------------- calibration (accel + gyro) ----------------
-    def start_calibration(self, n=200):
+    def start_calibration(self, n=400):
         self.accel_bias = np.zeros(3)
         self.gyro_bias = np.zeros(3)
         self._calib = {"acc": np.zeros(3), "gyro": np.zeros(3), "count": 0, "n": int(n)}

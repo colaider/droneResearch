@@ -29,7 +29,7 @@ class Sensors:
         self._prev_baro = baro
 
     # ---------------- calibration (forwarded to the IMU) ----------------
-    def start_calibration(self, n=200):
+    def start_calibration(self, n=400):
         self.imu.start_calibration(n)
 
     def is_calibrating(self):
