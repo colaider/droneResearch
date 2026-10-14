@@ -43,9 +43,10 @@ class DronePositionCTRL(DroneCTRL):
         U = np.linalg.solve(self.f1(omega), v + self.f2(omega) @ X_d_body)
         
         self.prev_U = U
-        U[:3] = np.clip(U[:3], -.3, .3)
+        
         U = self.velocity_to_cmd(U)
           # velocity limits, m/s
+        U[:3] = np.clip(U[:3], -.5, .5)
         U[3] = np.clip(U[3], -0.2, 0.2)    # yaw-rate limit, rad/s
 
         self.pr_setpoint = setpoint.copy()
