@@ -26,7 +26,7 @@ class ControlLoop:
         rclpy.init()
         self.node = rclpy.create_node("control_loop")
         self.reader = ReaderSender(node=self.node, ns=ns)
-        self.sensors = Sensors(node=self.node)
+        self.sensors = Sensors(node=self.node, async_visual_processing=True)
         self.estimates = EstimatePublisher(self.node)     # /vo/status, for drone_gui
         self.controller = Controller(dt=dt)
         self.sm = StateMachine(self.sensors, self.controller, self.reader,
@@ -41,13 +41,14 @@ class ControlLoop:
 
     def step(self, dt):
         self.reader.read()                                  # latch only; executor spins in background
+        command_velocity = (
+            self.controller.posCMD.copy()
+            if self.sm.stage == "HOVER" and self.sm.send
+            else np.zeros(4)
+        )
         self.sensors.update(
-            self.reader.get_accel(),
-            self.reader.get_gyro(),
-            self.reader.get_baro(),
-            dt,
-            imu_timestamp_ns=self.reader.get_imu_timestamp_ns(),
-            baro_timestamp_ns=self.reader.get_baro_timestamp_ns(),
+            self.reader.get_accel(), self.reader.get_gyro(),
+            self.reader.get_baro(), dt, command_velocity=command_velocity,
         )
         self.sm.step()                                      # WARMUP -> CALIBRATE -> HOVER
         self.estimates.publish(self.sensors, self.sm.stage)
@@ -66,7 +67,7 @@ class ControlLoop:
                 self.step(dt)            # read -> sensors.update -> state machine
                 self._update_camera_view()
 
-                if i % 2 == 0:
+                if i % 50 == 0:
                     cmd = self.sm.last_cmd
                     visual_estimator = self.sensors.visual_estimator
                     stereo_depth = visual_estimator.depth_median
@@ -85,7 +86,8 @@ class ControlLoop:
                           f"visual_vel={np.round(self.sensors.get_visual_velocity(), 3)} "
                           f"stereo_depth={stereo_depth_text} "
                           f"depth_points={len(visual_estimator.depth_points)} "
-                          f"depth_valid={visual_estimator.depth_valid_frac:.0%}",
+                          f"depth_valid={visual_estimator.depth_valid_frac:.0%}"
+                          f"dt = {dt} ",
                           flush=True)
                 i += 1
 
@@ -110,6 +112,7 @@ class ControlLoop:
         if key in (ord("q"), 27):
             cv2.destroyWindow(self._camera_window_name)
             self._camera_window_open = False
+
 
     def close(self):
         # Neutral stop: make the last thing on the wire zero tilt / zero throttle, so a Ctrl-C

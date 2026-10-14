@@ -16,7 +16,7 @@ import numpy as np
 
 
 class StateMachine:
-    def __init__(self, sensors, controller, reader, altitude=1.0,
+    def __init__(self, sensors, controller, reader, altitude=0.0,
                  warmup_steps=200, calib_samples=200, send=False, find_hover=False,
                  hover_start=0.20, hover_ramp=0.03, hover_max=0.70,
                  lift_alt=0.08, lift_hold=15):
