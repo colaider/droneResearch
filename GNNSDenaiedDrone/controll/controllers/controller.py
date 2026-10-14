@@ -1,11 +1,20 @@
-"""Cascade position controller -- blueprint: swarm DronePositionCTRL, rewritten to read from Sensors.
+"""Feedback-linearization position controller -- ported from swarm DronePositionCTRL.
 
-Outer loop : position error            -> target body velocity
-Inner loop : velocity error (PID)      -> roll, pitch, throttle   (ported from velocity_to_cmd)
-Yaw        : yaw error                 -> yaw rate
-Output     : [roll, pitch, yaw_rate, throttle]  for ReaderSender.send()
+Outer loop (feedback linearization):
+    virtual world accel  v = S_dd + kp_pos . X_err + kd_pos . X_err_d
+    invert the f1/f2 model -> U = inv(f1) . (v + f2 . X_d_body)   = target velocity [vx,vy,vz,yaw_rate]
+Inner loop (velocity PID):
+    U[:3] - measured body velocity -> roll, pitch, throttle ; U[3] passes through as yaw rate.
+
+The f1/f2 inversion + the setpoint feedforward (S_d, S_dd) are what make this more precise than a
+plain cascade: it cancels the modelled dynamics and feeds the commanded trajectory forward instead
+of waiting for error to build.
 
 No ROS, no DroneStruct -- it only reads a Sensors object, so it is pure and testable.
+
+Frame note: the swarm code's state velocity (X_d_body) and get_lin_vel() are BODY frame, but our
+Sensors.get_acc_velocity() is WORLD frame (the IMU integrates after the yaw rotation). We rotate
+world->body (rot(-yaw) = R.T) at the input so the ported scheme stays exact.
 """
 import numpy as np
 
@@ -16,9 +25,11 @@ class Controller:
         self.hover_throttle = hover_throttle
         self.max_tilt = np.radians(max_tilt_deg)
 
-        # outer loop: position/yaw error -> target velocity / yaw rate
-        self.kp_pos = np.array([0.3, 0.3, 0.75])
-        self.kp_yaw = 0.3
+        # outer loop: feedback-linearization model + position/yaw PD (4-DOF: x, y, z, yaw)
+        self.k_f1 = np.array([0.5, 0.5, 0.5, 0.8])      # control effectiveness (inverted)
+        self.k_f2 = np.array([0.15, 0.15, 0.2, 0.2])    # modelled drift / damping (compensated)
+        self.kp_pos = np.diag([0.3, 0.3, 0.75, 0.06])
+        self.kd_pos = np.diag([0.02, 0.02, 0.005, 0.1])
 
         # inner loop: velocity error -> tilt/throttle (gains from the swarm blueprint)
         self.kp_vel = np.array([2.0, 2.0, 1.0])
@@ -27,35 +38,107 @@ class Controller:
         self._last_vel_err = np.zeros(3)
         self._vel_err_sum = np.zeros(3)
 
+        # anti-windup: cap each axis' integral so the I term alone cannot exceed that axis'
+        # output range (tilt limit for roll/pitch, headroom above/below hover for throttle).
+        out_range = np.array([self.max_tilt, self.max_tilt, 1.0 - self.hover_throttle])
+        self.i_limit = out_range / self.ki_vel
+
+        # setpoint-derivative feedforward state (filled on the first update)
+        self._pr_setpoint = None
+        self._pr_dr_setpoint = np.zeros(4)
+
     def reset(self):
         self._last_vel_err = np.zeros(3)
         self._vel_err_sum = np.zeros(3)
+        self._pr_setpoint = None
+        self._pr_dr_setpoint = np.zeros(4)
 
     def update(self, sensors, setpoint):
         """setpoint = [x, y, z, yaw]. Returns [roll, pitch, yaw_rate, throttle]."""
         setpoint = np.asarray(setpoint, dtype=float)
-        pos = sensors.get_fused_position()           # [x, y, z]
-        vel = sensors.get_acc_velocity()             # [vx, vy, vz]
+        pos = sensors.get_fused_position()               # world [x, y, z]
+        vel_world = sensors.get_acc_velocity()           # world [vx, vy, vz]
         yaw = sensors.get_attitude()[2]
+        yaw_rate = sensors.get_angular_velocity()[2]
 
-        # outer loop -> targets for the inner loop
-        target_vel = self.kp_pos * (setpoint[:3] - pos)
-        yaw_rate_target = self.kp_yaw * self._wrap(setpoint[3] - yaw)
+        if self._pr_setpoint is None:                    # first call: no feedforward yet
+            self._pr_setpoint = setpoint.copy()
+            self._pr_dr_setpoint = np.zeros(4)
 
-        return self._velocity_to_cmd(target_vel, vel, yaw_rate_target)
+        R = self.rot(yaw)
+        # scheme state: position/yaw in WORLD, velocity in BODY frame (X_d_body)
+        X_d = np.array([vel_world[0], vel_world[1], vel_world[2], yaw_rate])  # world velocity (aug.)
+        X_d_body = R.T @ X_d                             # rot(-yaw) @ X_d  (R orthonormal)
+        X_body = np.array([pos[0], pos[1], pos[2], yaw])
 
-    def _velocity_to_cmd(self, target_vel, measured_vel, yaw_rate_target):
-        err = np.asarray(target_vel, float) - np.asarray(measured_vel, float)
+        # setpoint feedforward: commanded velocity and acceleration
+        S_d = (setpoint - self._pr_setpoint) / self.dt
+        S_dd = (S_d - self._pr_dr_setpoint) / self.dt
+
+        X_err = setpoint - X_body
+        X_err[3] = self._wrap(X_err[3])                  # wrap yaw error (original did not)
+        X_err_d = S_d - X_d
+
+        v = S_dd + self.kp_pos @ X_err + self.kd_pos @ X_err_d          # virtual world accel
+        U = np.linalg.inv(self.f1(yaw)) @ (v + self.f2(yaw) @ X_d_body)  # target vel [vx,vy,vz,yaw_rate]
+        U = np.clip(U, -2.0, 2.0)                        # FIX: original discarded this clip
+
+        self._pr_setpoint = setpoint.copy()
+        self._pr_dr_setpoint = S_d
+        return self._velocity_to_cmd(U, X_d_body[:3])    # inner loop on BODY velocity
+
+    def _velocity_to_cmd(self, U, measured_vel):
+        target_vel = np.asarray(U[:3], float)
+        yaw_rate_target = float(U[3])
+        err = target_vel - np.asarray(measured_vel, float)
         P = self.kp_vel * err
         D = self.kd_vel * (err - self._last_vel_err) / self.dt
-        self._vel_err_sum += err * self.dt
-        I = self.ki_vel * self._vel_err_sum
         self._last_vel_err = err
 
-        pitch = float(np.clip(P[0] + I[0] + D[0], -self.max_tilt, self.max_tilt))
-        roll = float(np.clip(-(P[1] + I[1] + D[1]), -self.max_tilt, self.max_tilt))
-        throttle = float(np.clip(self.hover_throttle + P[2] + I[2] + D[2], 0.0, 1.0))
-        return np.array([roll, pitch, float(yaw_rate_target), throttle])
+        # per-axis output range in the P+I+D space (before the roll negation / hover offset)
+        hi = np.array([self.max_tilt, self.max_tilt, 1.0 - self.hover_throttle])
+        lo = -np.array([self.max_tilt, self.max_tilt, self.hover_throttle])
+
+        # provisional output with the EXISTING integral -> see which axes are already railed
+        out = P + self.ki_vel * self._vel_err_sum + D
+        self._vel_err_sum = self._anti_windup(
+            self._vel_err_sum, err, self.dt, out >= hi, out <= lo, self.i_limit)
+
+        # recompute with the (possibly frozen / clamped) integral
+        out = P + self.ki_vel * self._vel_err_sum + D
+        pitch = float(np.clip(out[0], -self.max_tilt, self.max_tilt))
+        roll = float(np.clip(-out[1], -self.max_tilt, self.max_tilt))
+        throttle = float(np.clip(self.hover_throttle + out[2], 0.0, 1.0))
+        return np.array([roll, pitch, yaw_rate_target, throttle])
+
+    # ---------------- feedback-linearization model ----------------
+    def f1(self, yaw):
+        return self.rot(yaw) * self.k_f1                 # R @ diag(k_f1) via column broadcast
+
+    def f2(self, yaw):
+        return self.rot(yaw) * self.k_f2
+
+    @staticmethod
+    def rot(yaw):
+        c, s = np.cos(yaw), np.sin(yaw)
+        return np.array([[c, -s, 0, 0],
+                         [s,  c, 0, 0],
+                         [0,  0, 1, 0],
+                         [0,  0, 0, 1]])
+
+    @staticmethod
+    def _anti_windup(i_sum, err, dt, at_hi, at_lo, i_limit):
+        """Conditional-integration anti-windup, per axis (numpy arrays).
+
+        Adds err*dt to i_sum, but DROPS the step on any axis whose output is already pinned
+        to a rail and whose error would push it further into that rail -- so the integrator
+        cannot keep winding up while saturated. The stored sum is then hard-clamped to
+        +/- i_limit as a backstop. Pure/static: no self, trivially testable.
+        """
+        step = err * dt
+        blocked = (at_hi & (err > 0)) | (at_lo & (err < 0))
+        i_sum = i_sum + np.where(blocked, 0.0, step)
+        return np.clip(i_sum, -i_limit, i_limit)
 
     @staticmethod
     def _wrap(angle):
