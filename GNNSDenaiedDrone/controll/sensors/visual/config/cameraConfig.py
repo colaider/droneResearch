@@ -27,7 +27,7 @@ class StereoCameraConfig:
     right_up: Tuple[float, float, float] = (0.0, 1.0, 0.0)
 
     # rig geometry (drone body frame)
-    baseline: float = 0.125                    # metres between optical centres
+    baseline: float = 0.060                    # metres between optical centres
     baseline_axis: str = 'x'
     mount_pos: Tuple[float, float, float] = (baseline / 2, 0.0, 0.0)
     look_dir: Tuple[float, float, float] = (0.0, 0.0, -1.0)   # looking down
