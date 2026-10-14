@@ -19,8 +19,8 @@ class StereoCameraConfig:
     far: float = 100.0
 
     # Simulation focal length in pixels (shared by both cameras)
-    left_focal: float = 1500
-    right_focal: float = 1500
+    left_focal: float = 316
+    right_focal: float = 316
 
     # Both cameras share the same image orientation.
     left_up: Tuple[float, float, float] = (0.0, 1.0, 0.0)
@@ -30,6 +30,7 @@ class StereoCameraConfig:
     baseline: float = 0.060                    # metres between optical centres
     baseline_axis: str = 'x'
     mount_pos: Tuple[float, float, float] = (baseline / 2, 0.0, 0.0)
+    camera_offset_from_yaw_center: Tuple[float, float] = (0.0, 0.0)  # (right, down), m
     look_dir: Tuple[float, float, float] = (0.0, 0.0, -1.0)   # looking down
     link_idx_local: int = 0
     epipolar_direction: Tuple[float, float] | None = None
@@ -37,6 +38,9 @@ class StereoCameraConfig:
     def __post_init__(self):
         if self.baseline_axis not in _AXES:
             raise ValueError(f"baseline_axis must be one of {list(_AXES)}, got {self.baseline_axis!r}")
+        offset = np.asarray(self.camera_offset_from_yaw_center, dtype=float)
+        if offset.shape != (2,) or not np.isfinite(offset).all():
+            raise ValueError("camera_offset_from_yaw_center must be a finite (right, down) pair")
 
     # ---------------- per-camera values ----------------
 
@@ -127,5 +131,6 @@ STEREO_CAM = StereoCameraConfig(
     right_focal=STEREO_CAM_FOCAL_PX,
     baseline=0.06107,
     mount_pos=(0.06107 / 2, 0.0, 0.0),
+    camera_offset_from_yaw_center=(0.02, 0.0),
     epipolar_direction=(1.0, 0.0),
 )

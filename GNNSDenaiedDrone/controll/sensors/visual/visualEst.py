@@ -41,6 +41,9 @@ class VisulaEst(VisualVelocityEstimator):
         self.foc_l = float(camera_config.focal_px)
         self.dt = 0.01
         self.camera_saperation = float(camera_config.baseline)
+        self.camera_offset_from_yaw_center = np.asarray(
+            camera_config.camera_offset_from_yaw_center, dtype=float
+        )
         self.disparity_direction = np.asarray(
             camera_config.disparity_direction(), dtype=float
         )

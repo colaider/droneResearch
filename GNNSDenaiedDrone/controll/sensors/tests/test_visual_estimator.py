@@ -6,21 +6,26 @@ import numpy as np
 
 from sensors.sensors import Sensors
 from sensors.visual import StereoCameraConfig, StereoFrame
+from sensors.visual.config.cameraConfig import STEREO_CAM
 
 
 class SensorsVisualEstimatorTests(unittest.TestCase):
-    def make_camera(self):
+    def make_camera(self, camera_offset_from_yaw_center=(0.0, 0.0)):
         return StereoCameraConfig(
             res=(64, 48),
             left_focal=50.0,
             right_focal=50.0,
             baseline=0.1,
+            camera_offset_from_yaw_center=camera_offset_from_yaw_center,
             epipolar_direction=(-1.0, 0.0),
         )
 
     def make_sensor(self, **kwargs):
+        camera_offset_from_yaw_center = kwargs.pop(
+            "camera_offset_from_yaw_center", (0.0, 0.0)
+        )
         return Sensors(
-            camera_config=self.make_camera(),
+            camera_config=self.make_camera(camera_offset_from_yaw_center),
             image_filters=(),
             convert_to_grayscale=True,
             filters_enabled=True,
@@ -48,6 +53,28 @@ class SensorsVisualEstimatorTests(unittest.TestCase):
 
     def test_sensor_constructs_visual_estimator_by_default(self):
         self.assertIsNotNone(self.make_sensor().visual_estimator)
+
+    def test_yaw_compensation_uses_configured_camera_offset(self):
+        estimator = self.make_sensor(
+            camera_offset_from_yaw_center=(0.02, 0.0)
+        ).visual_estimator
+        estimator.frame_size = (48, 64)
+        estimator.dt = 1.0
+        estimator.avg_ang_vel = np.zeros(3)
+        estimator.avg_att = np.zeros(3)
+        estimator.drone_vel = np.zeros(3)
+        points = np.array([[32.0, 24.0, 2.0], [32.0, 24.0, 2.0]])
+
+        with patch(
+            "sensors.visual.visualVelEst.np.linalg.lstsq",
+            return_value=(np.zeros(3), None, None, None),
+        ) as least_squares:
+            estimator.estimate_velocities(np.zeros((2, 2)), points)
+
+        matrix = least_squares.call_args.args[0]
+        self.assertAlmostEqual(matrix[1, 2], 0.0)
+        self.assertAlmostEqual(matrix[3, 2], 0.02)
+        np.testing.assert_array_equal(STEREO_CAM.camera_offset_from_yaw_center, (0.02, 0.0))
 
     def test_sensor_update_processes_new_topic_frame(self):
         image = np.zeros((48, 64, 3), dtype=np.uint8)

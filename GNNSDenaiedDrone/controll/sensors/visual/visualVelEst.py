@@ -351,7 +351,10 @@ class VisualVelocityEstimator:
         angular_velocity = ang_vel[[1, 0]] * np.array([1, 1])
         rotation_flow = z[:, None] / np.cos(att[[1, 0]]) ** 2 * angular_velocity
         target = visual_flow - rotation_flow
-        position = (z[:, None] / self.foc_l) * (points[:, :2] - center) + self.camera_saperation / 2
+        position = (
+            (z[:, None] / self.foc_l) * (points[:, :2] - center)
+            + self.camera_offset_from_yaw_center
+        )
         matrix = np.vstack([
             np.column_stack([np.ones(len(z)), np.zeros(len(z)), -position[:, 1]]),
             np.column_stack([np.zeros(len(z)), np.ones(len(z)), position[:, 0]]),
