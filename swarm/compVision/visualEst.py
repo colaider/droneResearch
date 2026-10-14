@@ -4,14 +4,17 @@ from collections import deque
 
 import numpy as np
 
-import swarm.config.cameraConfig as camConfig
-from swarm.compVision.frame import Frame, FrameProcessor, compose_layer_display
+from swarm.config.cameraConfig import StereoCameraConfig
+from swarm.compVision.frame import FrameProcessor
+from swarm.compVision.estimatorTypes import Frame, StereoFrame
 from swarm.compVision.smallFeatures import LAYER_COLORS
 from swarm.compVision.visualDepthEst import (
     SparseStereoDepth,
+    estimate_vertical_velocity,
     estimate_frame_depth,
 )
 from swarm.compVision.visualVelEst import VisualVelocityEstimator, VelocityKalmanFilter
+from swarm.visualization.display import compose_layer_display
 
 
 # Preserve the original public frame name.
@@ -19,18 +22,37 @@ EnumFrame = Frame
 
 
 class VisulaEst(VisualVelocityEstimator):
-    """Coordinate prepared frames with temporal visual velocity and stereo depth."""
+    """Visual-odometry estimator configured by a camera rig and frame options.
 
-    def __init__(self, res, fov):
-        self.fov = fov
-        self.foc_l = (res[1] / 2) / np.tan(np.deg2rad(fov) / 2)
+    After ``processing()``, read the latest ``camera_velocity``, ``depth_points``,
+    ``depth_colors`` and ``depth_sigma`` from this object.
+    """
+
+    def __init__(self, camera_config: StereoCameraConfig, *, image_filters: tuple[str, ...],
+                 convert_to_grayscale: bool, filters_enabled: bool,
+                 filter_kernel_size: int, pyramid_levels: int,
+                 max_stereo_skew_s: float):
+        if not np.isfinite(max_stereo_skew_s) or max_stereo_skew_s < 0:
+            raise ValueError('max_stereo_skew_s must be finite and nonnegative')
+
+        self.camera_config = camera_config
+        self.max_stereo_skew_s = float(max_stereo_skew_s)
+        self.fov = float(camera_config.fov)
+        self.foc_l = float(camera_config.focal_px)
         self.dt = 0.01
-        self.camera_saperation = camConfig.STEREO_CAM.baseline
+        self.camera_saperation = float(camera_config.baseline)
+        self.disparity_direction = np.asarray(
+            camera_config.disparity_direction(), dtype=float
+        )
 
         self.frame_processor = FrameProcessor(
-            pyramid_levels=2, image_filters=("clahe",), filter_kernel_size=3
+            image_filters=image_filters,
+            convert_to_grayscale=convert_to_grayscale,
+            filters_enabled=filters_enabled,
+            filter_kernel_size=filter_kernel_size,
+            pyramid_levels=pyramid_levels,
         )
-        self.resolution = tuple(res)
+        self.resolution = tuple(camera_config.res)
         self.use_stereo_depth = True
         self.current_frame = EnumFrame()
         self.buffer = deque(maxlen=100)
@@ -52,6 +74,9 @@ class VisulaEst(VisualVelocityEstimator):
         self.depth_median = np.nan
         self.depth_valid_frac = 0.0
         self.depth_points = np.empty((0, 3))
+        self.previous_depth = None
+        self.current_depth = None
+        self.depth_velocity_z = np.nan
         self.stereo = SparseStereoDepth()
         self.depth_by_layer = []
         self.depth_colors = np.empty((0, 3), np.uint8)
@@ -87,7 +112,19 @@ class VisulaEst(VisualVelocityEstimator):
         """Filter an already-normalized BGR image."""
         return self.frame_processor.preprocess(frame)
 
-    def update_frame(self, frame, idx):
+    def update_frame(self, frame, idx=None):
+        next_dt = None
+        if isinstance(frame, StereoFrame):
+            if frame.stereo_skew > self.max_stereo_skew_s:
+                raise ValueError('Stereo capture skew exceeds max_stereo_skew_s')
+            if self.buffer:
+                previous = self.buffer[-1]
+                if frame.sequence_id <= previous.idx:
+                    raise ValueError('Stereo sequence IDs must increase')
+                if previous.left_timestamp is not None:
+                    next_dt = frame.left_timestamp - previous.left_timestamp
+                    if next_dt <= 0 or frame.right_timestamp <= previous.right_timestamp:
+                        raise ValueError('Stereo capture timestamps must increase for both cameras')
         prepared = self.frame_processor.process(frame, idx)
         height, width = prepared.frames[0].shape[:2]
         if (width, height) != self.resolution:
@@ -95,19 +132,46 @@ class VisulaEst(VisualVelocityEstimator):
                 "Frame resolution differs from calibration; create a new estimator "
                 "for this output size"
             )
+        if next_dt is not None:
+            self.set_dt(float(next_dt))
         self.frame_size = prepared.frames[0].shape
         self.buffer.append(prepared)
         self.current_frame = prepared.display_copy()
 
-    def processing(self, frame, idx):
-        """Run frame preparation, left-camera tracking, velocity, then stereo depth."""
+    def processing(self, frame, idx=None, *, drone_pos=None, drone_vel=None,
+                   drone_ang_vel=None, imu_att=None):
+        """Process StereoFrame, or legacy [left,right] plus idx.
+
+        Sensor values may be supplied together to update the estimator and
+        buffer one sensor sample as part of this call. Existing callers may
+        continue buffering faster sensor samples with ``push_sensors()``.
+        Returns the display Frame. Read camera_velocity ([vx, vy, vz, yaw_rate]),
+        depth_points ([u, v, optical_depth]), depth_colors, and depth_sigma on
+        this estimator. Capture metadata is on current_frame.
+        Typed inputs use left capture-time differences for dt. Legacy callers
+        retain their explicit set_dt() convention and have no invented timestamp.
+        """
+        sensor_values = (drone_pos, drone_vel, drone_ang_vel, imu_att)
+        if any(value is not None for value in sensor_values):
+            if any(value is None for value in sensor_values):
+                raise ValueError(
+                    "Provide drone_pos, drone_vel, drone_ang_vel, and imu_att together"
+                )
+            self.drone_pos = np.asarray(drone_pos, dtype=float)
+            self.drone_vel = np.asarray(drone_vel, dtype=float)
+            self.drone_ang_vel = np.asarray(drone_ang_vel, dtype=float)
+            self.imu_att = np.asarray(imu_att, dtype=float)
+            self.push_sensors()
+
         self.update_frame(frame, idx)
         self.aply_flow()
-        self.estimate_velocities(
+        self.estimate_depth()
+        return_velocity = self.estimate_velocities(
             self.velocity_flows[self.velocity_point_mask],
             self.velocity_points[self.velocity_point_mask],
+            vertical_velocity=self.depth_velocity_z,
         )
-        self.estimate_depth()
+
         self.layer_views = [
             compose_layer_display(
                 gray,
@@ -118,14 +182,12 @@ class VisulaEst(VisualVelocityEstimator):
             )
             for layer, gray in enumerate(self.current_frame.pyramids[0])
         ]
+        self.camera_velocity = return_velocity
         return self.current_frame
 
     def estimate_depth(self):
         """Estimate current-frame left/right depth after the temporal velocity fit."""
         self.depth_frame_idx = self.current_frame.idx
-        direction = getattr(
-            self, "disparity_direction", camConfig.STEREO_CAM.disparity_direction()
-        )
         result = estimate_frame_depth(
             self.current_frame,
             self.all_points,
@@ -135,8 +197,13 @@ class VisulaEst(VisualVelocityEstimator):
             use_stereo_depth=self.use_stereo_depth,
             focal_px=self.foc_l,
             baseline=self.camera_saperation,
-            direction=direction,
+            direction=self.disparity_direction,
             cross_layer_min_distance=self.cross_layer_min_distance,
+        )
+        self.previous_depth = self.current_depth
+        self.current_depth = result
+        self.depth_velocity_z = estimate_vertical_velocity(
+            self.previous_depth, self.current_depth, self.dt
         )
         self.depth_by_layer = result.by_layer
         self.depth_points = result.points

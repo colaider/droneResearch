@@ -9,7 +9,12 @@ import numpy as np
 from swarm.compVision.frame import Frame
 from swarm.compVision.largeFeatures import LargeFeatures
 from swarm.compVision.smallFeatures import FeatureTracks
+<<<<<<< HEAD
 from swarm.compVision.visualEst import VisulaEst
+=======
+from swarm.compVision.visualEst import EnumFrame
+from swarm.compVision.tests.estimator_factory import make_estimator
+>>>>>>> origin/main
 
 
 def texture(seed=31, shape=(480, 640)):
@@ -25,11 +30,10 @@ def translate(image, dx, dy):
 
 
 def estimator():
-    est = VisulaEst((640, 480), 60)
-    est.image_filters = ()
-    est.foc_l = 500.0
-    est.camera_saperation = 0.12
-    est.disparity_direction = np.array([-1.0, 0.0])
+    est = make_estimator(
+        focal_px=500.0, baseline=0.12, disparity_direction=(-1.0, 0.0),
+        image_filters=(),
+    )
     est.drone_pos = np.array([0.0, 0.0, 15.0])
     est.drone_vel = np.array([0.0, 0.0, 0.75])
     est.set_dt(0.1)

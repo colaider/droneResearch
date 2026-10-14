@@ -9,7 +9,7 @@ from swarm.compVision.denseStereo import (DenseStereo, DepthMap, StereoRectifier
                                           estimate_disparity_direction, fill_quad_plane,
                                           map_points, sample_depth)
 from swarm.compVision.largeFeatures import LargeFeatureDetector, LargeFeatures
-from swarm.compVision.terrainMap import TerrainMap
+from swarm.mapping.terrainMap import TerrainMap
 
 F, B = 500.0, 0.12
 Z_GROUND, Z_BOX = 10.0, 6.0

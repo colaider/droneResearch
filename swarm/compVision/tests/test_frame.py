@@ -16,7 +16,10 @@ class FrameTests(unittest.TestCase):
 
     def test_default_preprocessing_preserves_existing_clahe_behavior(self):
         original = self.image.copy()
-        processor = FrameProcessor()
+        processor = FrameProcessor(
+            image_filters=("clahe",), filter_kernel_size=3, pyramid_levels=3,
+            convert_to_grayscale=True, filters_enabled=True,
+        )
         lab = cv2.cvtColor(original, cv2.COLOR_BGR2LAB)
         lab[:, :, 0] = processor.clahe.apply(lab[:, :, 0])
         expected = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
@@ -24,7 +27,10 @@ class FrameTests(unittest.TestCase):
         np.testing.assert_array_equal(self.image, original)
 
     def test_filter_order_and_runtime_configuration(self):
-        processor = FrameProcessor(image_filters=())
+        processor = FrameProcessor(
+            image_filters=(), filter_kernel_size=3, pyramid_levels=3,
+            convert_to_grayscale=True, filters_enabled=True,
+        )
         processor.image_filters = ("gaussian", "median")
         processor.filter_kernel_size = 5
         expected = cv2.medianBlur(cv2.GaussianBlur(self.image, (5, 5), 0), 5)
@@ -39,7 +45,10 @@ class FrameTests(unittest.TestCase):
 
     def test_pyramids_and_display_images_do_not_corrupt_inputs(self):
         original = self.image.copy()
-        prepared = FrameProcessor(image_filters=()).process([self.image, self.image], 7)
+        prepared = FrameProcessor(
+            image_filters=(), filter_kernel_size=3, pyramid_levels=3,
+            convert_to_grayscale=True, filters_enabled=True,
+        ).process([self.image, self.image], 7)
         self.assertEqual(prepared.idx, 7)
         self.assertEqual([p.shape for p in prepared.pyramids[0]], [(49, 65), (25, 33), (13, 17)])
         self.assertIs(prepared.pyramids[0][0], prepared.gray_frames[0])
@@ -53,7 +62,10 @@ class FrameTests(unittest.TestCase):
         np.testing.assert_array_equal(self.image, original)
 
     def test_invalid_stereo_inputs(self):
-        processor = FrameProcessor()
+        processor = FrameProcessor(
+            image_filters=("clahe",), filter_kernel_size=3, pyramid_levels=3,
+            convert_to_grayscale=True, filters_enabled=True,
+        )
         for frames in (
             [],
             [self.image],

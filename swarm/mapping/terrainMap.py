@@ -1,3 +1,5 @@
+"""World-frame map representations built from visual depth estimates."""
+
 import numpy as np
 
 

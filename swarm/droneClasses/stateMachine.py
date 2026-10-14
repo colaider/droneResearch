@@ -13,6 +13,7 @@ class StateMachine:
         self.minco = None
         self.traj_t_abs = 0.0
         self.traj_T_total = 0.0
+        self.figure_eight_center = None
 
     # ---------------- tick ----------------
 
@@ -45,6 +46,41 @@ class StateMachine:
             self.execute_trajectory()
         else:
             self.controller.position_ctrl_fused(self.target)
+
+    def build_figure_eight(self, center=None, radius=5.0, v_target=1.0, samples=16):
+        """Build one horizontal figure-eight loop around a [x, y, z, yaw] pose.
+
+        Radius is the horizontal half-width; the vertical half-height is half
+        the radius. ``build_trajectory`` closes the final segment to the start.
+        """
+        if not np.isfinite(radius) or radius <= 0:
+            raise ValueError("Figure-eight radius must be finite and positive")
+        if (isinstance(samples, (bool, np.bool_))
+                or not isinstance(samples, (int, np.integer)) or samples < 8):
+            raise ValueError("Figure-eight samples must be an integer of at least 8")
+        if not np.isfinite(v_target) or v_target <= 0:
+            raise ValueError("Figure-eight target speed must be finite and positive")
+        if center is None:
+            center = self.controller.cam_pos
+        center = np.asarray(center, dtype=float)
+        if center.shape != (4,) or not np.isfinite(center).all():
+            raise ValueError("Figure-eight center must be a finite [x, y, z, yaw] pose")
+
+        angles = np.linspace(0.0, 2 * np.pi, samples, endpoint=False)
+        waypoints = np.tile(center, (samples, 1))
+        waypoints[:, 0] += radius * np.sin(angles)
+        waypoints[:, 1] += (radius / 2) * np.sin(2 * angles)
+        self.build_trajectory(waypoints, v_target=v_target, close_loop=True)
+
+    def fly_figure_eight(self):
+        """Fly repeated figure-eight loops at the hover altitude."""
+        if self.figure_eight_center is None:
+            if self.target is None:
+                raise RuntimeError("Reach the hover target before starting the figure-eight")
+            self.figure_eight_center = self.target.copy()
+        if self.traj_t_abs >= self.traj_T_total:
+            self.build_figure_eight(center=self.figure_eight_center)
+        self.execute_trajectory()
 
     # ---------------- trajectory core ----------------
 
@@ -95,7 +131,10 @@ class StateMachine:
                 self.stage = 1
 
         elif self.stage == 1:
-            self.hower(5)
+            self.hower(11)
+            if self.target is not None and self.traj_t_abs >= self.traj_T_total:
+                self.figure_eight_center = self.target.copy()
+                self.stage = 2
 
-
-       
+        elif self.stage == 2:
+            self.fly_figure_eight()

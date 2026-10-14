@@ -123,7 +123,10 @@ def grass_with_box(box=(200, 120, 440, 330)):
 
 def frame_pyramid(gray, levels=4):
     bgr = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
-    processor = FrameProcessor(image_filters=(), pyramid_levels=levels)
+    processor = FrameProcessor(
+        image_filters=(), filter_kernel_size=3, pyramid_levels=levels,
+        convert_to_grayscale=True, filters_enabled=True,
+    )
     return processor.process([bgr, bgr], 0).pyramids[0]
 
 
