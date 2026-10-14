@@ -1,21 +1,3 @@
-"""Feedback-linearization position controller -- ported from swarm DronePositionCTRL.
-
-Outer loop (feedback linearization):
-    virtual world accel  v = S_dd + kp_pos . X_err + kd_pos . X_err_d
-    invert the f1/f2 model -> U = inv(f1) . (v + f2 . X_d_body)   = target velocity [vx,vy,vz,yaw_rate]
-Inner loop (velocity PID):
-    U[:3] - measured body velocity -> roll, pitch, throttle ; U[3] passes through as yaw rate.
-
-The f1/f2 inversion + the setpoint feedforward (S_d, S_dd) are what make this more precise than a
-plain cascade: it cancels the modelled dynamics and feeds the commanded trajectory forward instead
-of waiting for error to build.
-
-No ROS, no DroneStruct -- it only reads a Sensors object, so it is pure and testable.
-
-Frame note: the swarm code's state velocity (X_d_body) and get_lin_vel() are BODY frame, but our
-Sensors.get_acc_velocity() is WORLD frame (the IMU integrates after the yaw rotation). We rotate
-world->body (rot(-yaw) = R.T) at the input so the ported scheme stays exact.
-"""
 import numpy as np
 
 
@@ -38,14 +20,12 @@ class Controller:
         self._last_vel_err = np.zeros(3)
         self._vel_err_sum = np.zeros(3)
 
-        # anti-windup: cap each axis' integral so the I term alone cannot exceed that axis'
-        # output range (tilt limit for roll/pitch, headroom above/below hover for throttle).
         out_range = np.array([self.max_tilt, self.max_tilt, 1.0 - self.hover_throttle])
         self.i_limit = out_range / self.ki_vel
 
-        # setpoint-derivative feedforward state (filled on the first update)
         self._pr_setpoint = None
         self._pr_dr_setpoint = np.zeros(4)
+
 
     def reset(self):
         self._last_vel_err = np.zeros(3)
@@ -53,8 +33,8 @@ class Controller:
         self._pr_setpoint = None
         self._pr_dr_setpoint = np.zeros(4)
 
+
     def update(self, sensors, setpoint):
-        """setpoint = [x, y, z, yaw]. Returns [roll, pitch, yaw_rate, throttle]."""
         setpoint = np.asarray(setpoint, dtype=float)
         pos = sensors.get_fused_position()               # world [x, y, z]
         vel_world = sensors.get_acc_velocity()           # world [vx, vy, vz]
@@ -66,8 +46,8 @@ class Controller:
             self._pr_dr_setpoint = np.zeros(4)
 
         R = self.rot(yaw)
-        # scheme state: position/yaw in WORLD, velocity in BODY frame (X_d_body)
-        X_d = np.array([vel_world[0], vel_world[1], vel_world[2], yaw_rate])  # world velocity (aug.)
+        
+        X_d = np.array([vel_world[0], vel_world[1], vel_world[2], yaw_rate]) 
         X_d_body = R.T @ X_d                             # rot(-yaw) @ X_d  (R orthonormal)
         X_body = np.array([pos[0], pos[1], pos[2], yaw])
 
@@ -87,6 +67,7 @@ class Controller:
         self._pr_dr_setpoint = S_d
         return self._velocity_to_cmd(U, X_d_body[:3])    # inner loop on BODY velocity
 
+
     def _velocity_to_cmd(self, U, measured_vel):
         target_vel = np.asarray(U[:3], float)
         yaw_rate_target = float(U[3])
@@ -95,7 +76,6 @@ class Controller:
         D = self.kd_vel * (err - self._last_vel_err) / self.dt
         self._last_vel_err = err
 
-        # per-axis output range in the P+I+D space (before the roll negation / hover offset)
         hi = np.array([self.max_tilt, self.max_tilt, 1.0 - self.hover_throttle])
         lo = -np.array([self.max_tilt, self.max_tilt, self.hover_throttle])
 
@@ -110,6 +90,7 @@ class Controller:
         roll = float(np.clip(-out[1], -self.max_tilt, self.max_tilt))
         throttle = float(np.clip(self.hover_throttle + out[2], 0.0, 1.0))
         return np.array([roll, pitch, yaw_rate_target, throttle])
+
 
     # ---------------- feedback-linearization model ----------------
     def f1(self, yaw):
@@ -128,13 +109,6 @@ class Controller:
 
     @staticmethod
     def _anti_windup(i_sum, err, dt, at_hi, at_lo, i_limit):
-        """Conditional-integration anti-windup, per axis (numpy arrays).
-
-        Adds err*dt to i_sum, but DROPS the step on any axis whose output is already pinned
-        to a rail and whose error would push it further into that rail -- so the integrator
-        cannot keep winding up while saturated. The stored sum is then hard-clamped to
-        +/- i_limit as a backstop. Pure/static: no self, trivially testable.
-        """
         step = err * dt
         blocked = (at_hi & (err > 0)) | (at_lo & (err < 0))
         i_sum = i_sum + np.where(blocked, 0.0, step)
