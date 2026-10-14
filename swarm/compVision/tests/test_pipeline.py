@@ -6,12 +6,15 @@ from unittest.mock import patch
 import cv2
 import numpy as np
 
-from realCameraTest import testRealCameras as runner
 from swarm.compVision.frame import Frame
 from swarm.compVision.largeFeatures import LargeFeatures
 from swarm.compVision.smallFeatures import FeatureTracks
+<<<<<<< HEAD
+from swarm.compVision.visualEst import VisulaEst
+=======
 from swarm.compVision.visualEst import EnumFrame
 from swarm.compVision.tests.estimator_factory import make_estimator
+>>>>>>> origin/main
 
 
 def texture(seed=31, shape=(480, 640)):
@@ -214,23 +217,6 @@ class PipelineTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 est.set_dt(dt)
         self.assertEqual(est.dt, 0.1)
-
-    def test_real_camera_public_adapter_and_filter_settings(self):
-        self.assertIs(EnumFrame, Frame)
-        self.assertIs(runner.VisulaEst, VisulaEst)
-        est = runner.make_estimator(500.0, (640, 480), filters=('median',), kernel_size=5)
-        self.assertEqual(est.foc_l, 500.0)
-        self.assertEqual(est.camera_saperation, runner.BASELINE)
-        self.assertFalse(est.use_stereo_depth)
-        self.assertEqual(est.frame_processor.image_filters, ('median',))
-        self.assertEqual(est.frame_processor.filter_kernel_size, 5)
-        runner.zero_drone_inputs(est)
-        self.assertEqual(len(est.buf_ang_vel), 1)
-        image = texture()
-        out = est.processing([image, image], 0)
-        np.testing.assert_array_equal(out.frames[0], cv2.medianBlur(image, 5))
-        self.assertEqual(out.gray_frames[0].shape, (480, 640))
-        self.assertEqual(out.idx, 0)
 
 
 if __name__ == '__main__':

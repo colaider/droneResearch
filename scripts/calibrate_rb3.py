@@ -3,7 +3,7 @@
 
 Board: 9 x 7 squares of 29 mm (8 x 6 inner corners); other boards: --squares / --square-mm.
 
-On the drone, in a terminal with X forwarding (WSL or Linux: ssh -Y -C ubuntu@192.168.1.243):
+On the drone, in a terminal with X forwarding (WSL or Linux: ssh -Y -C ubuntu@192.168.0.172):
     python3 ~/droneResearch/scripts/calibrate_rb3.py
 Hold the board in front of both cameras and capture 20-30 pairs (SPACE, or A for automatic capture
 whenever the board is still and in a new place): near and far, tilted left/right/up/down, and in every
@@ -283,7 +283,7 @@ def run_camera(args, board):
     from rb3_stereo.stereo import AutoExposure, StereoCamera
     if not os.environ.get("DISPLAY"):
         sys.exit("No X display: log in with X forwarding and run it again\n"
-                 "  WSL / Linux:  ssh -Y -C ubuntu@192.168.1.243\n"
+                 "  WSL / Linux:  ssh -Y -C ubuntu@192.168.0.172\n"
                  "  Windows:      MobaXterm (has an X server), or VcXsrv + PuTTY with X11 forwarding\n"
                  "(--images DIR calibrates pairs saved earlier without a window)")
     if args.check and not Path(args.out).exists():

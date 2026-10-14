@@ -2,7 +2,7 @@
 
     source /opt/ros/jazzy/setup.bash
     python3 -m drone_gui                       # then open http://localhost:8080
-    python3 -m drone_gui --host 192.168.1.243 --port 8080
+    python3 -m drone_gui --host 192.168.0.172 --port 8080
 """
 from __future__ import annotations
 

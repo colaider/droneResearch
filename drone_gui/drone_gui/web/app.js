@@ -73,7 +73,7 @@ function render(state) {
     $('f' + i).textContent = flight.sticks_fc ? flight.sticks_fc[i] : '-';
   }
 
-  renderSensors(flight);
+  renderSensors(flight, link);
   renderPosition(state.position);
 
   // --- camera
@@ -168,47 +168,38 @@ function renderPosition(position) {
     voSource.classList.toggle('dead', !vo);
     voSource.textContent = vo
       ? ((vo.estimator_ms ? vo.estimator_ms + ' ms/frame · ' : '') + (vo.mode || ''))
-      : 'estimator not running (realCameraTest/testRB3Cameras.py)';
+      : 'estimator not running (no VO node publishing /vo)';
   }
 
   set('pos-alt-fc', position.fc_altitude_m, 2);
   set('pos-alt-baro', position.baro_altitude_m, 2);
 }
 
-function renderSensors(flight) {
+function renderSensors(flight, link) {
   const axes = (prefix, values, digits) => {
     ['x', 'y', 'z'].forEach((axis, i) => {
       const cell = $(prefix + '-' + axis);
       if (cell) cell.textContent = values ? fmt(values[i], digits) : '--';
     });
   };
-  axes('gyro', flight.gyro, 3);
   axes('accel', flight.accel, 2);
-  axes('mag', flight.mag_ut, 1);
+  axes('gyro', flight.gyro, 3);
 
   $('baro-p').textContent = fmt(flight.pressure_hpa, 2);
   $('baro-h').textContent = fmt(flight.baro_altitude_m, 2);
-  // Field magnitude is the quick sanity check on the magnetometer: Earth's field is
-  // 25-65 uT, and a much larger reading means something nearby is magnetising it.
-  const mag = flight.mag_ut;
-  $('mag-norm').textContent = mag
-    ? fmt(Math.hypot(mag[0], mag[1], mag[2]), 1) : '--';
 
-  const streams = flight.sensors || {};
-  ['gyro', 'accel', 'mag', 'pressure'].forEach((name) => {
-    const cell = $('stream-' + name);
+  // Update rate the panel measures itself (no dependency on /drone/status).
+  const rates = (link && link.rates) || {};
+  const label = (topic) => (rates[topic] ? rates[topic].toFixed(1) + ' Hz' : 'no data');
+  const setStream = (id, text) => {
+    const cell = $(id);
     if (!cell) return;
-    const info = streams[name];
-    if (!info) {
-      cell.textContent = 'not streaming';
-      cell.classList.add('dead');
-      return;
-    }
-    cell.classList.toggle('dead', !info.alive);
-    cell.textContent = (info.alive ? '' : 'STALLED · ') + info.rate_hz + ' Hz · '
-      + info.samples.toLocaleString() + ' samples'
-      + (info.restarts ? ' · ' + info.restarts + ' restarts' : '');
-  });
+    cell.textContent = text;
+    cell.classList.toggle('dead', text === 'no data');
+  };
+  setStream('stream-accel', label('imu'));
+  setStream('stream-gyro', label('imu'));
+  setStream('stream-pressure', rates.pressure ? label('pressure') : label('baro_altitude'));
 }
 
 function renderUnits(units) {

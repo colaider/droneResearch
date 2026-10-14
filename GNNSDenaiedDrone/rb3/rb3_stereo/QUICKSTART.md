@@ -1,7 +1,7 @@
 # rb3_stereo – quick start
 
 Synchronized OV9282 stereo camera (CAM0A + CAM0B) on the RB3 Gen 2 as a ROS 2 node.
-Board login: `ubuntu@192.168.1.243`, ROS 2 Jazzy, `ROS_DOMAIN_ID=42`.
+Board login: `ubuntu@192.168.0.172`, ROS 2 Jazzy, `ROS_DOMAIN_ID=42`.
 
 ## 1. Set up the drone (once)
 
@@ -97,7 +97,7 @@ Needs a printed checkerboard on a flat, rigid board: 9x7 squares of 29 mm (other
 through SSH X forwarding. From WSL (WSLg shows the window) or any Linux machine:
 
 ```bash
-ssh -Y -C ubuntu@192.168.1.243
+ssh -Y -C ubuntu@192.168.0.172
 ```
 ```bash
 python3 ~/droneResearch/scripts/calibrate_rb3.py

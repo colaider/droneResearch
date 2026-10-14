@@ -75,22 +75,17 @@
   </section>
 
   <section class="card span3" id="sensors-card">
-    <h2>RB3 sensors <span class="sub">ICM-42688-P &middot; ICP-10111 &middot; AKM, read through the sensor core</span></h2>
+    <h2>RB3 sensors <span class="sub">accelerometer, gyro and barometer from /drone/imu, /drone/baro_altitude</span></h2>
     <div class="sensor-grid">
       <div class="sensor">
-        <label>gyro <i>rad/s</i></label>
-        <div class="axes"><span><b>x</b><em id="gyro-x">--</em></span><span><b>y</b><em id="gyro-y">--</em></span><span><b>z</b><em id="gyro-z">--</em></span></div>
-        <div class="stream" id="stream-gyro">--</div>
-      </div>
-      <div class="sensor">
-        <label>accel <i>m/s&sup2;</i></label>
+        <label>accelerometer <i>m/s&sup2;</i></label>
         <div class="axes"><span><b>x</b><em id="accel-x">--</em></span><span><b>y</b><em id="accel-y">--</em></span><span><b>z</b><em id="accel-z">--</em></span></div>
         <div class="stream" id="stream-accel">--</div>
       </div>
       <div class="sensor">
-        <label>magnetometer <i>&micro;T</i></label>
-        <div class="axes"><span><b>x</b><em id="mag-x">--</em></span><span><b>y</b><em id="mag-y">--</em></span><span><b>z</b><em id="mag-z">--</em></span><span><b>|B|</b><em id="mag-norm">--</em></span></div>
-        <div class="stream" id="stream-mag">--</div>
+        <label>gyro <i>rad/s</i></label>
+        <div class="axes"><span><b>x</b><em id="gyro-x">--</em></span><span><b>y</b><em id="gyro-y">--</em></span><span><b>z</b><em id="gyro-z">--</em></span></div>
+        <div class="stream" id="stream-gyro">--</div>
       </div>
       <div class="sensor">
         <label>barometer</label>
