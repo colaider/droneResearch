@@ -13,6 +13,8 @@ import math
 import time
 
 from geometry_msgs.msg import Twist
+from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
+from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from std_msgs.msg import Bool
 
 from rb3_control import msp as msp_proto
@@ -58,8 +60,23 @@ class CommandTopic:
         self.command = None
         self.command_stamp = 0.0
         self.pub_armed = node.create_publisher(Bool, f"{ns}/armed", 10)
-        node.create_subscription(Twist, f"{ns}/cmd_attitude", self._on_cmd, 10)
-        self.timer = node.create_timer(1.0 / loop_hz, self._loop)
+
+        # The gate loop makes two BLOCKING MSP round-trips (status + RC, ~28 ms each). Put it in
+        # its own callback group so that, under the node's MultiThreadedExecutor, it runs
+        # concurrently with _on_cmd instead of starving it. Sharing one (default) group serialises
+        # them: while the gate is blocked on serial, commands queue and go stale, the freshness
+        # check trips, and the stream pauses then resumes -> motors pulse full/stop periodically.
+        self._serial_group = MutuallyExclusiveCallbackGroup()
+        self._cmd_group = MutuallyExclusiveCallbackGroup()
+
+        # Latest-command-wins: depth 1 so a stall never leaves a backlog of stale commands to
+        # flush after the control loop has already moved on (or stopped).
+        cmd_qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
+                             history=HistoryPolicy.KEEP_LAST)
+        node.create_subscription(Twist, f"{ns}/cmd_attitude", self._on_cmd, cmd_qos,
+                                 callback_group=self._cmd_group)
+        self.timer = node.create_timer(1.0 / loop_hz, self._loop,
+                                       callback_group=self._serial_group)
 
     def _on_cmd(self, m):
         self.command = (m.angular.x, m.angular.y, m.angular.z, m.linear.z)
