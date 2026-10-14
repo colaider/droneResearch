@@ -86,7 +86,13 @@ class CameraStreamReceiver:
                 right = image if side == "right" else other.pop(stamp_ns)
                 timestamp = stamp_ns / 1_000_000_000
                 self._latest_frame = StereoFrame(
-                    left, right, timestamp, timestamp, self._sequence_id
+                    left,
+                    right,
+                    timestamp,
+                    timestamp,
+                    self._sequence_id,
+                    left_timestamp_ns=stamp_ns,
+                    right_timestamp_ns=stamp_ns,
                 )
                 self._sequence_id += 1
                 pending.pop(stamp_ns, None)

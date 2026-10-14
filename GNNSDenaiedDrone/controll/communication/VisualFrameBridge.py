@@ -93,7 +93,11 @@ class VisualFrameBridge:
         message.format = "jpeg"
         message.data = encoded.tobytes()
         message.header.frame_id = "stereo_visual_return"
-        if frame.timestamp is not None:
+        if frame.timestamp_ns is not None:
+            message.header.stamp.sec, message.header.stamp.nanosec = divmod(
+                int(frame.timestamp_ns), 1_000_000_000
+            )
+        elif frame.timestamp is not None:
             seconds = int(frame.timestamp)
             message.header.stamp.sec = seconds
             message.header.stamp.nanosec = int(
