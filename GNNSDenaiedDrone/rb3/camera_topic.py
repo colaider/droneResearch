@@ -18,14 +18,17 @@ from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import CompressedImage, Image
 
 from rb3_stereo import camera_info
-from rb3_stereo.stereo import StereoCamera
+from rb3_stereo.stereo import AutoExposure, StereoCamera
 
 
 class CameraTopic:
     def __init__(self, node, ns="/stereo", resolution=(640, 400), fps=30,
-                 vfov_deg=85.0, baseline_m=0.05, calibration="auto"):
+                 vfov_deg=85.0, baseline_m=0.05, calibration="auto", auto_exposure=True,
+                 ae_target=100.0):
         """calibration: "auto" = config/stereo_calib.npz if it exists, "" = raw images, or a path.
-        vfov_deg / baseline_m: the nominal model, used only when no calibration is loaded."""
+        vfov_deg / baseline_m: the nominal model, used only when no calibration is loaded.
+        auto_exposure: steer the mean brightness to ae_target (0-255), as the rb3_stereo node
+        does - the raw sensor path has no ISP, so without it the exposure stays at 2 ms."""
         self.node = node
         w, h = resolution
         self.pub = {
@@ -34,6 +37,7 @@ class CameraTopic:
             for side in ("left", "right")}
 
         self.cam = StereoCamera(w, h, fps, calibration=calibration, log=node.get_logger().info).start()
+        self.ae = AutoExposure(target=ae_target) if auto_exposure else None
         rect = self.cam.rectifier                       # None: no calibration, raw images
         self.info = {side: camera_info.rectified(rect, side) if rect is not None
                      else camera_info.nominal(w, h, vfov_deg, baseline_m, right=(side == "right"))
@@ -67,6 +71,8 @@ class CameraTopic:
             pair = self.cam.read_pair(timeout=1.0)
             if pair is None:
                 continue
+            if self.ae is not None:
+                self.ae.update(self.cam, pair.left, pair.right)    # rate-limited to 10 Hz inside
             stamp = self.node.get_clock().now().to_msg()
             for side, frame in (("left", pair.left), ("right", pair.right)):
                 img_pub, info_pub = self.pub[side]
