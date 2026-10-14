@@ -22,7 +22,7 @@ if [ -e "$WS/src/rb3_stereo" ] && [ ! -L "$WS/src/rb3_stereo" ]; then
   echo "moving the old copy of the package out of the workspace: $backup"
   mv "$WS/src/rb3_stereo" "$backup"
 fi
-ln -sfn "$REPO/rb3_stereo" "$WS/src/rb3_stereo"
+ln -sfn "$REPO/GNNSDenaiedDrone/rb3/rb3_stereo" "$WS/src/rb3_stereo"
 # a build made without --symlink-install cannot be switched over in place
 rm -rf "$WS/build/rb3_stereo" "$WS/install/rb3_stereo"
 source /opt/ros/jazzy/setup.bash

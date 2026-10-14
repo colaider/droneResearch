@@ -33,7 +33,7 @@ os.environ.setdefault("QT_X11_NO_MITSHM", "1")       # Qt over ssh X forwarding:
 import cv2  # noqa: E402
 import numpy as np  # noqa: E402
 
-_PKG = str(Path(__file__).resolve().parents[1] / "rb3_stereo")
+_PKG = str(Path(__file__).resolve().parents[1] / "GNNSDenaiedDrone" / "rb3" / "rb3_stereo")
 if _PKG not in sys.path:
     sys.path.insert(0, _PKG)                          # rb3_stereo from this checkout, ROS not needed
 from rb3_stereo import calibration as cal  # noqa: E402

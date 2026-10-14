@@ -9,4 +9,4 @@
 | `view_stereo.ps1` | Windows | The same viewer with a native Windows ROS 2 install |
 | `record_cams.sh` | Raspberry Pi | Record two USB cameras to MKV (flight-test footage) |
 
-Details: `rb3_stereo/QUICKSTART.md`.
+Details: `GNNSDenaiedDrone/rb3/rb3_stereo/QUICKSTART.md`.

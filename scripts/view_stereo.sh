@@ -12,4 +12,4 @@ export ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-42}
 if ros2 pkg prefix rb3_stereo >/dev/null 2>&1; then
   exec ros2 run rb3_stereo viewer "$@"
 fi
-exec python3 "$(dirname "$(readlink -f "$0")")/../rb3_stereo/rb3_stereo/viewer.py" "$@"
+exec python3 "$(dirname "$(readlink -f "$0")")/../GNNSDenaiedDrone/rb3/rb3_stereo/rb3_stereo/viewer.py" "$@"

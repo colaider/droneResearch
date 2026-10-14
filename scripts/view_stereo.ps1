@@ -9,4 +9,4 @@ param(
 )
 . $RosSetup
 $env:ROS_DOMAIN_ID = "$Domain"
-python "$PSScriptRoot\..\rb3_stereo\rb3_stereo\viewer.py" --domain $Domain @Rest
+python "$PSScriptRoot\..\GNNSDenaiedDrone\rb3\rb3_stereo\rb3_stereo\viewer.py" --domain $Domain @Rest
