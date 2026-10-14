@@ -20,7 +20,7 @@ class StateMachine:
         self.send = send                    # False = compute only (safe); True = actually command
 
         self.stage = "WARMUP"
-        self.setpoint = 0.3
+        self.setpoint = 1.5
         self.last_cmd = None
         self._i = 0
 
