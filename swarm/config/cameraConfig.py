@@ -33,10 +33,17 @@ class StereoCameraConfig:
     look_dir: Tuple[float, float, float] = (0.0, 0.0, -1.0)   # looking down
     link_idx_local: int = 0
     epipolar_direction: Tuple[float, float] | None = None
+    camera_offset_from_yaw_center: Tuple[float, float] | None = None
 
     def __post_init__(self):
         if self.baseline_axis not in _AXES:
             raise ValueError(f"baseline_axis must be one of {list(_AXES)}, got {self.baseline_axis!r}")
+        if self.camera_offset_from_yaw_center is not None:
+            offset = np.asarray(self.camera_offset_from_yaw_center, dtype=float)
+            if offset.shape != (2,) or not np.isfinite(offset).all():
+                raise ValueError(
+                    "camera_offset_from_yaw_center must be a finite (right, down) pair"
+                )
 
     # ---------------- per-camera values ----------------
 

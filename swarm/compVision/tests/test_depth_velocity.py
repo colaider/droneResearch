@@ -46,8 +46,7 @@ class DepthVelocityTests(unittest.TestCase):
         estimator = make_estimator()
         estimator.drone_vel[2] = 0.75
         estimator.drone_ang_vel = np.zeros(3)
-        estimator.avg_ang_vel = np.zeros(3)
-        estimator.avg_att = np.zeros(3)
+        estimator.imu_att = np.zeros(3)
         estimator.frame_size = (480, 640, 3)
         estimator.foc_l = 500.0
         estimator.dt = 0.1

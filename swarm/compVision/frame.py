@@ -97,6 +97,7 @@ class FrameProcessor:
         stereo matching can keep using the original-resolution gray frames.
         """
         left_timestamp = right_timestamp = None
+        left_timestamp_ns = right_timestamp_ns = None
         skip_filters = False
         if isinstance(frames, StereoFrame):
             if idx is not None and idx != frames.sequence_id:
@@ -104,6 +105,8 @@ class FrameProcessor:
             idx = frames.sequence_id
             skip_filters = frames.skip_preprocessing
             left_timestamp, right_timestamp = frames.left_timestamp, frames.right_timestamp
+            left_timestamp_ns = frames.left_timestamp_ns
+            right_timestamp_ns = frames.right_timestamp_ns
             frames = [frames.left, frames.right]
         elif idx is None:
             raise ValueError('Legacy image lists require a frame index')
@@ -137,7 +140,9 @@ class FrameProcessor:
             pyramids.append(levels)
         return Frame(frames=prepared, gray_frames=gray_frames, pyramids=pyramids,
                      idx=idx, left_timestamp=left_timestamp,
-                     right_timestamp=right_timestamp)
+                     right_timestamp=right_timestamp,
+                     left_timestamp_ns=left_timestamp_ns,
+                     right_timestamp_ns=right_timestamp_ns)
 
 
 def prepare_camera_frame(image, *, color_order="BGR", rotation=None, resolution=None):

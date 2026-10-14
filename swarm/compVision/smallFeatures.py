@@ -34,7 +34,8 @@ def unique_point_mask(points, radius=5.0):
     return keep
 
 
-def replenish(gray, pts, cam, max_points=300, min_distance=100):
+def replenish(gray, pts, cam, max_points=300, min_distance=100, backend=None):
+    backend = backend or cv2
     pts = np.asarray(pts, np.float32).reshape(-1, 2)[:max_points]
     if len(pts) >= max_points:
         return pts.copy()
@@ -43,10 +44,15 @@ def replenish(gray, pts, cam, max_points=300, min_distance=100):
     for x, y in pts.astype(int):
         cv2.circle(mask, (x, y), max(1, int(np.ceil(min_distance))), 0, -1)
 
-    cand = cv2.goodFeaturesToTrack(gray, maxCorners=500, qualityLevel=0.005, minDistance=min_distance, blockSize=11, mask=mask)
+    cand = backend.goodFeaturesToTrack(
+        gray, maxCorners=500, qualityLevel=0.005, minDistance=min_distance,
+        blockSize=11, mask=mask,
+    )
     if cand is None: return pts
     cand = cand.reshape(-1, 2)
-    edges = cv2.dilate(cv2.Canny(gray, 50, 150), np.ones((5, 5), np.uint8))
+    edges = backend.dilate(
+        backend.Canny(gray, 50, 150), np.ones((5, 5), np.uint8)
+    )
 
     # Keep only corners that are near an edge
     xs = np.clip(cand[:, 0].astype(int), 0, w - 1)

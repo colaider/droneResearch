@@ -109,6 +109,21 @@ class StereoTests(unittest.TestCase):
             out = SparseStereoDepth().estimate(left, right, [], focal_px=400, baseline=.12, direction=[-1, 0])
         lk.assert_not_called(); self.assertEqual(out.depths.shape, (0,))
 
+    def test_matched_right_pixel_is_retained_when_depth_is_rejected(self):
+        matcher = SparseStereoDepth()
+        result = matcher._empty_result(1)
+        matcher._store_depths(
+            result,
+            np.array([[200.0, 180.0]], np.float32),
+            np.array([-1.0, 0.0]),
+            np.array([0]),
+            np.array([[199.0, 180.0]], np.float32),
+            fB=48.0,
+            pixel_scale=1.0,
+        )
+        self.assertFalse(result.valid[0])
+        np.testing.assert_array_equal(result.right_points[0], [199.0, 180.0])
+
     def test_failed_reverse_tracking_rejects_depth(self):
         left=texture(); right=translate(left,-8)
         real=cv2.calcOpticalFlowPyrLK; calls=[]

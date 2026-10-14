@@ -82,8 +82,6 @@ class DroneVisulaCTRL(DronePositionCTRL):
         fp.drone_ang_vel = self.get_ang_vel()
         fp.previous_cmd_vel = self.prev_U
         fp.drone_ang = self.get_attitude()[:2]
-        fp.push_sensors()
-
         if step % self.camera_step_period == 0:
             if self.last_frame_time is not None:
                 fp.set_dt(sim_time - self.last_frame_time)

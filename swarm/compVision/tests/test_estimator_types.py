@@ -43,7 +43,11 @@ class EstimatorTypesTests(unittest.TestCase):
                 self.pair(sequence=sequence)
 
     def test_preparation_preserves_capture_metadata_and_owns_images(self):
-        pair = self.pair(7, 2., 2.001)
+        pair = types.StereoFrame(
+            self.image, self.image.copy(), 2., 2.001, 7,
+            left_timestamp_ns=2_000_000_001,
+            right_timestamp_ns=2_001_000_002,
+        )
         processor = FrameProcessor(
             image_filters=(), filter_kernel_size=3, pyramid_levels=3,
             convert_to_grayscale=True, filters_enabled=True,
@@ -53,6 +57,8 @@ class EstimatorTypesTests(unittest.TestCase):
         self.assertEqual((prepared.idx, display.idx), (7, 7))
         self.assertEqual(display.timestamp, 2.)
         self.assertEqual(display.right_timestamp, 2.001)
+        self.assertEqual(display.timestamp_ns, 2_000_000_001)
+        self.assertEqual(display.right_timestamp_ns, 2_001_000_002)
         display.frames[0][:] = 255
         self.assertFalse(prepared.frames[0].any())
         prepared.frames[0][:] = 128
@@ -61,25 +67,19 @@ class EstimatorTypesTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             processor.process(pair, 8)
 
-    def test_invalid_order_skew_and_size_leave_previous_state_intact(self):
+    def test_capture_order_and_skew_are_metadata_but_resolution_remains_validated(self):
         estimator = make_estimator((160, 120), 60)
         estimator.processing(self.pair())
-        previous = estimator.current_frame
-        previous_depth = estimator.current_depth
-        previous_velocity = estimator.camera_velocity.copy()
-        for pair in (self.pair(0, 1.1), self.pair(1, 1.),
-                     self.pair(1, .9), self.pair(1, 1.1, 1.12),
-                     types.StereoFrame(self.image[:10], self.image[:10], 1.1, 1.1, 1)):
-            with self.subTest(pair=pair.sequence_id), self.assertRaises(ValueError):
-                estimator.processing(pair)
-            self.assertEqual(len(estimator.buffer), 1)
-            self.assertIs(estimator.current_frame, previous)
-            self.assertIs(estimator.current_depth, previous_depth)
-            np.testing.assert_array_equal(estimator.camera_velocity, previous_velocity)
-        # Left time increased, but right exposure moved backwards within allowed skew.
-        estimator.processing(self.pair(1, 1.1, 1.104))
+        estimator.set_dt(.125)
+        estimator.processing(self.pair(0, 1.1, 1.12))
+        estimator.processing(self.pair(0, .9, 1.1))
+        self.assertEqual(len(estimator.buffer), 3)
+        self.assertEqual(estimator.dt, .125)
         with self.assertRaises(ValueError):
-            estimator.processing(self.pair(2, 1.101, 1.103))
+            estimator.processing(
+                types.StereoFrame(self.image[:10], self.image[:10], 1.1, 1.1, 1)
+            )
+        self.assertEqual(len(estimator.buffer), 3)
 
     def test_timestamped_pipeline_matches_legacy_and_exposes_state(self):
         size = (321, 241)
@@ -92,13 +92,13 @@ class EstimatorTypesTests(unittest.TestCase):
             est.drone_pos[2] = 10
             est.disparity_direction = np.array([0., 1.])
             est.feature_min_distance = 15
+        typed.set_dt(.125)
+        legacy.set_dt(.125)
         for index, timestamp in enumerate((1., 1.125, 1.375)):
             def shift(x, y):
                 return cv2.warpAffine(image, np.float32([[1, 0, x], [0, 1, y]]), size,
                                       borderMode=cv2.BORDER_REFLECT)
             images = [shift(2 * index, 0), shift(2 * index, 4)]
-            if index:
-                legacy.set_dt((.125, .25)[index - 1])
             typed.processing(types.StereoFrame(*images, timestamp, timestamp, index))
             legacy.processing(images, index)
             np.testing.assert_allclose(typed.camera_velocity, legacy.camera_velocity)
@@ -113,7 +113,7 @@ class EstimatorTypesTests(unittest.TestCase):
             if index == 1:
                 self.assertAlmostEqual(typed.dt, .125)
                 self.assertGreater(len(typed.depth_points), 5)
-        self.assertAlmostEqual(typed.dt, .25)
+        self.assertAlmostEqual(typed.dt, .125)
 
     def test_processing_accepts_sensor_sample_with_frame(self):
         estimator = make_estimator((160, 120), 60)
@@ -132,11 +132,10 @@ class EstimatorTypesTests(unittest.TestCase):
             imu_att=attitude,
         )
 
-        np.testing.assert_array_equal(estimator.avg_pos, position)
-        np.testing.assert_array_equal(estimator.avg_ang_vel, angular_velocity)
-        np.testing.assert_array_equal(estimator.avg_att, attitude)
-        np.testing.assert_array_equal(estimator.camera_velocity, [0.1, 0.2, 0.3, 0.03])
-        self.assertEqual(len(estimator.buf_ang_vel), 0)
+        np.testing.assert_array_equal(estimator.drone_pos, position)
+        np.testing.assert_array_equal(estimator.drone_ang_vel, angular_velocity)
+        np.testing.assert_array_equal(estimator.imu_att, attitude)
+        np.testing.assert_array_equal(estimator.camera_velocity, [0., 0., 0.3, 0.])
 
     def test_processing_rejects_partial_sensor_sample(self):
         estimator = make_estimator((160, 120), 60)
@@ -144,7 +143,7 @@ class EstimatorTypesTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Provide drone_pos"):
             estimator.processing([image, image], 0, drone_ang_vel=np.zeros(3))
 
-    def test_drone_passes_simulation_time_and_sequence_to_real_estimator(self):
+    def test_drone_passes_capture_time_without_changing_configured_dt(self):
         from swarm.droneClasses.droneStruct import DroneStruct
         drone = DroneStruct.__new__(DroneStruct)
         sim = SimpleNamespace(get_time=Mock(side_effect=[np.array([3.]), np.array([3.2])]))
@@ -156,6 +155,7 @@ class EstimatorTypesTests(unittest.TestCase):
         drone.right_cam = SimpleNamespace(read=lambda: SimpleNamespace(rgb=rgb[None]))
         drone.steps_cam = 0
         drone.frame_processor = make_estimator((160, 120), 60)
+        drone.frame_processor.set_dt(.125)
         drone.point_map = Mock()
         with patch('swarm.droneClasses.droneStruct.tensor_to_array', side_effect=np.asarray):
             legacy = drone.get_two_frames()
@@ -170,7 +170,7 @@ class EstimatorTypesTests(unittest.TestCase):
             self.assertEqual([pair.sequence_id for pair in pairs], [0, 1])
             self.assertEqual([pair.timestamp for pair in pairs], [3., 3.2])
             self.assertTrue(all(pair.stereo_skew == 0 for pair in pairs))
-            self.assertAlmostEqual(drone.frame_processor.dt, .2)
+            self.assertAlmostEqual(drone.frame_processor.dt, .125)
             self.assertEqual(drone.frame_processor.current_frame.idx, 1)
             self.assertEqual(drone.point_map.add.call_args.kwargs['frame_idx'], 1)
             explicit = drone.get_stereo_frame(timestamp=4.)

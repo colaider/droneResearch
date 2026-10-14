@@ -1,5 +1,6 @@
 """Stereo point-depth calculations, independent of tracking and estimator state."""
 from swarm.compVision.estimatorTypes import StereoDepth, FrameDepth
+from swarm.compVision.gpuVision import VisionBackend
 
 import cv2
 import numpy as np
@@ -80,8 +81,12 @@ def estimate_frame_depth(frame, all_points, point_colors, layer_tracks, stereo, 
                     LAYER_COLORS[layer % len(LAYER_COLORS)],
                     1,
                 )
-        for x, y in result.right_points[valid].astype(int):
-            cv2.circle(right, (x, y), 2, LAYER_COLORS[layer % len(LAYER_COLORS)], -1)
+        matched = np.flatnonzero(np.isfinite(result.right_points).all(axis=1))
+        for index in matched:
+            color = (LAYER_COLORS[layer % len(LAYER_COLORS)]
+                     if valid[index] else (128, 128, 128))
+            x, y = result.right_points[index].astype(int)
+            cv2.circle(right, (x, y), 2, color, -1)
 
     total = sum(map(len, all_points))
     depth_valid_frac = valid_count / total if total else 0.0
@@ -115,12 +120,14 @@ class SparseStereoDepth:
     """
     def __init__(self, patch_size=15, min_score=.80, uniqueness=.06,
                  max_disparity=512.0, min_depth=.25, max_depth=30.0,
-                 max_fb_error=1.0, max_epipolar_error=1.0):
+                 max_fb_error=1.0, max_epipolar_error=1.0,
+                 backend: VisionBackend | None = None):
         self.patch_size = patch_size
         self.min_score, self.uniqueness = min_score, uniqueness
         self.max_disparity = max_disparity
         self.min_depth, self.max_depth = min_depth, max_depth
         self.max_fb_error, self.max_epipolar_error = max_fb_error, max_epipolar_error
+        self.backend = backend if backend is not None else VisionBackend("cpu")
 
     @staticmethod
     def _empty_result(point_count):
@@ -202,7 +209,7 @@ class SparseStereoDepth:
             flags=cv2.OPTFLOW_USE_INITIAL_FLOW,
             criteria=(cv2.TERM_CRITERIA_COUNT | cv2.TERM_CRITERIA_EPS, 30, .001),
         )
-        matched, status, _ = cv2.calcOpticalFlowPyrLK(
+        matched, status, _ = self.backend.calcOpticalFlowPyrLK(
             left, right, old, seeds.copy(), **lk
         )
         if matched is None or status is None:
@@ -215,7 +222,7 @@ class SparseStereoDepth:
         rows, old, matched = rows[good], old[good], matched[good]
         if not len(rows):
             return None
-        back, status, _ = cv2.calcOpticalFlowPyrLK(
+        back, status, _ = self.backend.calcOpticalFlowPyrLK(
             right, left, matched[:, None].copy(), old.copy(), **lk
         )
         if back is None or status is None:
@@ -238,8 +245,8 @@ class SparseStereoDepth:
                 & (epipolar < self.max_epipolar_error) & np.isfinite(depth)
                 & (depth >= self.min_depth) & (depth <= self.max_depth)
                 & (sigma / depth < .15))
+        result.right_points[rows] = matched
         rows = rows[good]
-        result.right_points[rows] = matched[good]
         result.depths[rows] = depth[good]
         result.sigma_depth[rows] = sigma[good]
         result.valid[rows] = True
