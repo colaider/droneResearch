@@ -1,4 +1,5 @@
 import unittest
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import numpy as np
@@ -65,6 +66,55 @@ class SensorsVisualEstimatorTests(unittest.TestCase):
         self.assertEqual(sensors.visual_estimator.current_frame.idx, 0)
         self.assertIs(sensors.latest_camera_frame, frame)
         receiver.get_frame.assert_called_once_with()
+
+    def test_fused_position_integrates_visual_velocity_at_ten_percent(self):
+        sensors = self.make_sensor()
+        estimator = sensors.visual_estimator
+        estimator.velocity_point_mask = np.array([True, True])
+        estimator.camera_velocity = np.array([2.0, 0.0, 0.0, 0.0])
+        estimator.depth_velocity_z = np.nan
+        estimator.dt = 0.5
+        estimator.processing = Mock(
+            side_effect=lambda frame, idx: SimpleNamespace(
+                idx=frame.sequence_id if idx is None else idx
+            )
+        )
+        image = np.zeros((48, 64, 3), dtype=np.uint8)
+
+        sensors.process_visual_frame(
+            StereoFrame(image, image.copy(), 1.0, 1.0, 0)
+        )
+        np.testing.assert_allclose(sensors.get_visual_position(), [1.0, 0.0, 0.0])
+        np.testing.assert_allclose(sensors.get_fused_position(), [0.1, 0.0, 0.0])
+
+        sensors.imu._pos[0] = 2.0
+        next_image = image.copy()
+        sensors.process_visual_frame(
+            StereoFrame(next_image, next_image.copy(), 1.5, 1.5, 1)
+        )
+        np.testing.assert_allclose(sensors.get_visual_position(), [2.0, 0.0, 0.0])
+        np.testing.assert_allclose(sensors.get_fused_position(), [2.0, 0.0, 0.0])
+
+    def test_fused_position_ignores_visual_fallback_without_valid_tracks(self):
+        sensors = self.make_sensor()
+        estimator = sensors.visual_estimator
+        estimator.velocity_point_mask = np.zeros(0, dtype=bool)
+        estimator.camera_velocity = np.array([5.0, 4.0, 3.0, 2.0])
+        estimator.dt = 0.5
+        estimator.processing = Mock(
+            side_effect=lambda frame, idx: SimpleNamespace(
+                idx=frame.sequence_id if idx is None else idx
+            )
+        )
+        image = np.zeros((48, 64, 3), dtype=np.uint8)
+        sensors.imu._pos[:] = [3.0, 4.0, 5.0]
+
+        sensors.process_visual_frame(
+            StereoFrame(image, image.copy(), 1.0, 1.0, 0)
+        )
+
+        self.assertIsNone(sensors.get_visual_position())
+        np.testing.assert_array_equal(sensors.get_fused_position(), [3.0, 4.0, 5.0])
 
 
 if __name__ == "__main__":

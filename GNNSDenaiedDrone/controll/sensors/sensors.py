@@ -26,6 +26,8 @@ class Sensors:
         self._baro_vel = 0.0
         self._prev_baro = None
         self.latest_camera_frame = None
+        self._visual_position = None
+        self._last_visual_frame_idx = None
         self.visual_estimator = VisulaEst(
             STEREO_CAM if camera_config is None else camera_config,
             image_filters=image_filters,
@@ -38,7 +40,11 @@ class Sensors:
 
     # ---------------- update ----------------
     def update(self, accel, gyro, baro, dt):
+        was_calibrating = self.imu.is_calibrating()
         self.imu.update(accel, gyro, dt)
+        if was_calibrating and not self.imu.is_calibrating():
+            self._visual_position = None
+            self._last_visual_frame_idx = None
         self._update_baro_velocity(float(baro), dt)
         if not self.imu.is_calibrating():
             self.imu.fuse_vertical_velocity(self._baro_vel, 0.9)   # vz = 0.9 accel + 0.1 baro
@@ -58,12 +64,54 @@ class Sensors:
         estimator.push_sensors()
 
     def process_visual_frame(self, frame, idx=None):
-        """Process a stereo capture using sensor samples buffered since the prior pair."""
-        return self.visual_estimator.processing(frame, idx)
+        """Process a stereo capture and integrate valid visual velocity into position."""
+        processed = self.visual_estimator.processing(frame, idx)
+        frame_idx = processed.idx
+        if frame_idx == self._last_visual_frame_idx:
+            return processed
+        self._last_visual_frame_idx = frame_idx
+
+        estimator = self.visual_estimator
+        if (np.count_nonzero(estimator.velocity_point_mask) < 2
+                or not np.isfinite(estimator.camera_velocity[:3]).all()):
+            return processed
+
+        imu_position = self.get_acc_position()
+        dt = float(estimator.dt)
+        if not np.isfinite(dt) or dt <= 0:
+            return processed
+
+        if self._visual_position is None:
+            self._visual_position = imu_position.copy()
+
+        roll, pitch, yaw = self.get_attitude()
+        cr, sr = np.cos(roll), np.sin(roll)
+        cp, sp = np.cos(pitch), np.sin(pitch)
+        cy, sy = np.cos(yaw), np.sin(yaw)
+        body_to_world = np.array([
+            [cy * cp, cy * sp * sr - sy * cr, cy * sp * cr + sy * sr],
+            [sy * cp, sy * sp * sr + cy * cr, sy * sp * cr - cy * sr],
+            [-sp, cp * sr, cp * cr],
+        ])
+        has_visual_vertical_velocity = np.isfinite(estimator.depth_velocity_z)
+        visual_velocity = estimator.camera_velocity[:3].copy()
+        if not has_visual_vertical_velocity:
+            visual_velocity[2] = 0.0
+        visual_velocity_world = body_to_world @ visual_velocity
+        if not has_visual_vertical_velocity:
+            visual_velocity_world[2] = 0.0
+        self._visual_position += visual_velocity_world * dt
+        if not has_visual_vertical_velocity:
+            self._visual_position[2] = imu_position[2]
+        return processed
 
     def get_visual_velocity(self):
         """Return latest camera velocity [vx, vy, vz, yaw_rate]."""
         return self.visual_estimator.camera_velocity.copy()
+
+    def get_visual_position(self):
+        """Return integrated visual position, or None until visual tracks are usable."""
+        return None if self._visual_position is None else self._visual_position.copy()
 
     def close(self):
         """Release optional camera-topic subscriptions."""
@@ -81,6 +129,8 @@ class Sensors:
 
     # ---------------- calibration (forwarded to the IMU) ----------------
     def start_calibration(self, n=400):
+        self._visual_position = None
+        self._last_visual_frame_idx = None
         self.imu.start_calibration(n)
 
     def is_calibrating(self):
@@ -111,5 +161,7 @@ class Sensors:
 
     # ---------------- fused ----------------
     def get_fused_position(self):
-        # For now just the IMU position. Later: fuse the visual estimator / baro here.
-        return self.imu.get_position()
+        imu_position = self.get_acc_position()
+        if self._visual_position is None:
+            return imu_position
+        return 0.9 * imu_position + 0.1 * self._visual_position
