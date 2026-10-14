@@ -6,6 +6,7 @@ import numpy as np
 
 from communication.VisualFrameBridge import VisualFrameBridge, render_visual_frame
 from sensors.visual import Frame
+from sensors.visual.visualDepthEst import SparseStereoDepth
 
 
 class VisualFrameBridgeTests(unittest.TestCase):
@@ -31,6 +32,40 @@ class VisualFrameBridgeTests(unittest.TestCase):
         self.assertEqual(rendered.shape, (20, 48, 3))
         np.testing.assert_array_equal(rendered[5, 5], [255, 0, 0])
         np.testing.assert_array_equal(rendered[5, 24 + 7], [255, 0, 0])
+
+    def test_renders_right_matches_even_when_depth_is_invalid(self):
+        gray = np.zeros((20, 24), dtype=np.uint8)
+        points = np.array([[5, 5]], dtype=np.float32)
+        tracks = SimpleNamespace(
+            new_points=points,
+            triangles=np.empty((0, 3), dtype=int),
+        )
+        depth = SimpleNamespace(
+            right_points=np.array([[8, 5]], dtype=np.float32),
+            valid=np.array([False]),
+        )
+        frame = Frame(gray_frames=[gray, gray.copy()])
+
+        rendered = render_visual_frame(frame, {0: tracks}, [depth])
+
+        np.testing.assert_array_equal(rendered[5, 24 + 8], [255, 0, 0])
+
+    def test_stereo_estimator_keeps_matched_coordinates_for_display(self):
+        estimator = SparseStereoDepth()
+        result = estimator._empty_result(1)
+
+        estimator._store_depths(
+            result,
+            np.array([[10, 10]], dtype=np.float32),
+            np.array([1.0, 0.0]),
+            np.array([0]),
+            np.array([[10.1, 10]], dtype=np.float32),
+            fB=10.0,
+            pixel_scale=1.0,
+        )
+
+        np.testing.assert_allclose(result.right_points[0], [10.1, 10])
+        self.assertFalse(result.valid[0])
 
     def test_publishes_visualization_with_frame_timestamp(self):
         class CompressedImage:

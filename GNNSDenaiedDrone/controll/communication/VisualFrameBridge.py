@@ -49,16 +49,15 @@ def render_visual_frame(frame, layer_tracks, depth_by_layer):
             continue
         stereo = depth_by_layer[layer]
         right_points = np.asarray(stereo.right_points, dtype=np.float32).reshape(-1, 2)
-        valid = np.asarray(stereo.valid, dtype=bool).reshape(-1)
-        count = min(len(points), len(right_points), len(valid))
-        valid = valid[:count] & np.isfinite(right_points[:count]).all(axis=1)
+        count = min(len(points), len(right_points))
+        matched = np.isfinite(right_points[:count]).all(axis=1)
 
         for triangle in triangles:
             if (np.all((triangle >= 0) & (triangle < count))
-                    and valid[triangle].all()):
+                    and matched[triangle].all()):
                 polygon = np.rint(right_points[triangle]).astype(np.int32)
                 cv2.polylines(right, [polygon], True, color, 1, cv2.LINE_AA)
-        for point in right_points[:count][valid]:
+        for point in right_points[:count][matched]:
             cv2.circle(right, tuple(np.rint(point).astype(int)), 2, color, -1)
 
     cv2.putText(left, "Left: tracked feature mesh", (8, 20),

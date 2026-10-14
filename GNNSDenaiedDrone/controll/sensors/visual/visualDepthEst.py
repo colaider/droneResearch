@@ -114,7 +114,7 @@ class SparseStereoDepth:
     No pose, altitude, temporal flow or simulator depth is used to infer depth.
     """
     def __init__(self, patch_size=15, min_score=.80, uniqueness=.06,
-                 max_disparity=512.0, min_depth=.25, max_depth=30.0,
+                 max_disparity=512.0, min_depth=.1, max_depth=30.0,
                  max_fb_error=1.0, max_epipolar_error=1.0):
         self.patch_size = patch_size
         self.min_score, self.uniqueness = min_score, uniqueness
@@ -228,6 +228,7 @@ class SparseStereoDepth:
     def _store_depths(self, result, points, direction, matched_rows,
                       matched_points, fB, pixel_scale):
         rows, matched = matched_rows, matched_points
+        result.right_points[rows] = matched
         delta = matched - points[rows]
         disparity = delta @ direction
         epipolar = abs(delta @ np.array([-direction[1], direction[0]]))
@@ -239,7 +240,6 @@ class SparseStereoDepth:
                 & (depth >= self.min_depth) & (depth <= self.max_depth)
                 & (sigma / depth < .15))
         rows = rows[good]
-        result.right_points[rows] = matched[good]
         result.depths[rows] = depth[good]
         result.sigma_depth[rows] = sigma[good]
         result.valid[rows] = True
