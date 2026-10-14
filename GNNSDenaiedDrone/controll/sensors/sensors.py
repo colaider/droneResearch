@@ -1,4 +1,5 @@
 import numpy as np
+import threading
 
 from sensors.IMU.IMU import IMU
 from sensors.visual.config.cameraConfig import STEREO_CAM
@@ -6,7 +7,7 @@ from sensors.visual.config.cameraConfig import STEREO_CAM
 
 class Sensors:
     def __init__(self, baro_vel_ema=0.8, *, node=None, camera_ns="/stereo",
-                 publish_processed_camera=True,
+                 publish_processed_camera=True, async_visual_processing=False,
                  camera_config=None, image_filters=("clahe",),
                  convert_to_grayscale=True, filters_enabled=True,
                  filter_kernel_size=3, pyramid_levels=2,
@@ -34,6 +35,11 @@ class Sensors:
         self._visual_position = None
         self._visual_velocity_world = None     # latest camera velocity in world frame (nan axis = no measurement)
         self._last_visual_frame_idx = None
+        self._visual_state_lock = threading.Lock()
+        self._visual_condition = threading.Condition()
+        self._pending_visual_frame = None
+        self._stop_visual_worker = False
+        self._visual_worker = None
         self.visual_estimator = VisulaEst(
             STEREO_CAM if camera_config is None else camera_config,
             image_filters=image_filters,
@@ -43,15 +49,23 @@ class Sensors:
             pyramid_levels=pyramid_levels,
             max_stereo_skew_s=max_stereo_skew_s,
         )
+        if async_visual_processing and self.camera_receiver is not None:
+            self._visual_worker = threading.Thread(
+                target=self._visual_worker_loop,
+                name="visual-estimator",
+                daemon=True,
+            )
+            self._visual_worker.start()
 
     # ---------------- update ----------------
     def update(self, accel, gyro, baro, dt):
         was_calibrating = self.imu.is_calibrating()
         self.imu.update(accel, gyro, dt)
         if was_calibrating and not self.imu.is_calibrating():
-            self._visual_position = None
-            self._visual_velocity_world = None
-            self._last_visual_frame_idx = None
+            with self._visual_state_lock:
+                self._visual_position = None
+                self._visual_velocity_world = None
+                self._last_visual_frame_idx = None
         self._update_baro_velocity(float(baro), dt)
         if not self.imu.is_calibrating():
             self.imu.fuse_vertical_velocity(self._baro_vel, 0.9)   # vz = 0.9 accel + 0.1 baro
@@ -60,7 +74,28 @@ class Sensors:
             frame = self.camera_receiver.get_frame()
             if frame is not None:
                 self.latest_camera_frame = frame
+                if self._visual_worker is None:
+                    self.process_visual_frame(frame)
+                else:
+                    with self._visual_condition:
+                        self._pending_visual_frame = frame
+                        self._visual_condition.notify()
+
+    def _visual_worker_loop(self):
+        while True:
+            with self._visual_condition:
+                while self._pending_visual_frame is None and not self._stop_visual_worker:
+                    self._visual_condition.wait()
+                if self._stop_visual_worker:
+                    return
+                frame = self._pending_visual_frame
+                self._pending_visual_frame = None
+            try:
                 self.process_visual_frame(frame)
+            except Exception as error:
+                self.camera_receiver.node.get_logger().error(
+                    f"Visual frame processing failed: {error}"
+                )
 
     def _push_visual_sensor_sample(self):
         estimator = self.visual_estimator
@@ -80,9 +115,10 @@ class Sensors:
                 self.visual_estimator.depth_by_layer,
             )
         frame_idx = processed.idx
-        if frame_idx == self._last_visual_frame_idx:
-            return processed
-        self._last_visual_frame_idx = frame_idx
+        with self._visual_state_lock:
+            if frame_idx == self._last_visual_frame_idx:
+                return processed
+            self._last_visual_frame_idx = frame_idx
 
         estimator = self.visual_estimator
         if (np.count_nonzero(estimator.velocity_point_mask) < 2
@@ -93,9 +129,6 @@ class Sensors:
         dt = float(estimator.dt)
         if not np.isfinite(dt) or dt <= 0:
             return processed
-
-        if self._visual_position is None:
-            self._visual_position = imu_position.copy()
 
         roll, pitch, yaw = self.get_attitude()
         cr, sr = np.cos(roll), np.sin(roll)
@@ -113,16 +146,22 @@ class Sensors:
         visual_velocity_world = body_to_world @ visual_velocity
         if not has_visual_vertical_velocity:
             visual_velocity_world[2] = 0.0
-        self._visual_position += visual_velocity_world * dt
-        if not has_visual_vertical_velocity:
-            self._visual_position[2] = imu_position[2]
-
         # keep the latest world-frame visual velocity for get_fused_velocity(); nan on z when
         # the camera gave no depth velocity, so the fuse leaves vz to the IMU/baro.
         held = visual_velocity_world.copy()
         if not has_visual_vertical_velocity:
             held[2] = np.nan
-        self._visual_velocity_world = held
+        with self._visual_state_lock:
+            visual_position = (
+                imu_position.copy()
+                if self._visual_position is None
+                else self._visual_position.copy()
+            )
+            visual_position += visual_velocity_world * dt
+            if not has_visual_vertical_velocity:
+                visual_position[2] = imu_position[2]
+            self._visual_position = visual_position
+            self._visual_velocity_world = held
         return processed
 
     def get_visual_velocity(self):
@@ -131,10 +170,18 @@ class Sensors:
 
     def get_visual_position(self):
         """Return integrated visual position, or None until visual tracks are usable."""
-        return None if self._visual_position is None else self._visual_position.copy()
+        with self._visual_state_lock:
+            return None if self._visual_position is None else self._visual_position.copy()
 
     def close(self):
         """Release optional camera-topic subscriptions."""
+        if self._visual_worker is not None:
+            with self._visual_condition:
+                self._stop_visual_worker = True
+                self._pending_visual_frame = None
+                self._visual_condition.notify_all()
+            self._visual_worker.join()
+            self._visual_worker = None
         if self.camera_receiver is not None:
             self.camera_receiver.close()
             self.camera_receiver = None
@@ -152,9 +199,10 @@ class Sensors:
 
     # ---------------- calibration (forwarded to the IMU) ----------------
     def start_calibration(self, n=400):
-        self._visual_position = None
-        self._visual_velocity_world = None
-        self._last_visual_frame_idx = None
+        with self._visual_state_lock:
+            self._visual_position = None
+            self._visual_velocity_world = None
+            self._last_visual_frame_idx = None
         self.imu.start_calibration(n)
 
     def is_calibrating(self):
@@ -186,13 +234,18 @@ class Sensors:
     # ---------------- fused ----------------
     def get_fused_position(self):
         imu_position = self.get_acc_position()
-        if self._visual_position is None:
-            return imu_position
-        return 0.9 * imu_position + 0.1 * self._visual_position
+        with self._visual_state_lock:
+            if self._visual_position is None:
+                return imu_position
+            return 0.9 * imu_position + 0.1 * self._visual_position
 
     def get_fused_velocity(self):
         imu_velocity = self.get_acc_velocity()
-        visual = self._visual_velocity_world
+        with self._visual_state_lock:
+            visual = (
+                None if self._visual_velocity_world is None
+                else self._visual_velocity_world.copy()
+            )
         if visual is None:
             return imu_velocity
         fused = imu_velocity.copy()

@@ -37,7 +37,6 @@ class VisualVelocityEstimator:
         self.velocity_points = np.empty((0, 3), np.float32)
         self.velocity_point_mask = np.empty(0, bool)
         self.estimated_height = np.nan
-        self.layer_views = []
         self.vkfs = {}
         self.camera_velocity = np.zeros(4)
 
@@ -336,8 +335,7 @@ class VisualVelocityEstimator:
         )
         if len(points) < 2:
             self.estimated_height = np.nan
-            self.camera_velocity = self._fallback_velocity()
-            self.camera_velocity[2] = vz
+            self.camera_velocity = np.zeros(4)   # no usable tracks -> report zero velocity
             return self.camera_velocity.copy()
 
         ang_vel, att = self.avg_ang_vel, self.avg_att
@@ -396,14 +394,6 @@ class VisualVelocityEstimator:
     def set_dt(self, dt):
         """Set the elapsed time used to convert image displacement into velocity."""
         self.dt = dt
-
-    def _fallback_velocity(self):
-        """Return supplied drone/IMU velocity when visual tracks are insufficient."""
-        print("fallback velocity used")
-        return np.array([
-            self.drone_vel[0], self.drone_vel[1],
-            self.drone_vel[2], self.drone_ang_vel[2],
-        ])
 
 
 class VelocityKalmanFilter:

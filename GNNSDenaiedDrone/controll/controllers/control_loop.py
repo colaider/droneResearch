@@ -26,7 +26,7 @@ class ControlLoop:
         rclpy.init()
         self.node = rclpy.create_node("control_loop")
         self.reader = ReaderSender(node=self.node, ns=ns)
-        self.sensors = Sensors(node=self.node)
+        self.sensors = Sensors(node=self.node, async_visual_processing=True)
         self.estimates = EstimatePublisher(self.node)     # /vo/status, for drone_gui
         self.controller = Controller(dt=dt)
         self.sm = StateMachine(self.sensors, self.controller, self.reader,
@@ -103,6 +103,7 @@ class ControlLoop:
         if key in (ord("q"), 27):
             cv2.destroyWindow(self._camera_window_name)
             self._camera_window_open = False
+
 
     def close(self):
         # Neutral stop: make the last thing on the wire zero tilt / zero throttle, so a Ctrl-C

@@ -1,4 +1,5 @@
 import unittest
+import threading
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
@@ -103,6 +104,38 @@ class SensorsVisualEstimatorTests(unittest.TestCase):
             sensors.visual_estimator.layer_tracks,
             sensors.visual_estimator.depth_by_layer,
         )
+
+    def test_async_camera_processing_runs_off_update_thread(self):
+        image = np.zeros((48, 64, 3), dtype=np.uint8)
+        frame = StereoFrame(image, image.copy(), 1.0, 1.0, 0)
+        receiver = Mock()
+        receiver.get_frame.return_value = frame
+        node = object()
+        started = threading.Event()
+        processing_threads = []
+        with patch(
+            "communication.CameraStreamReceiver.CameraStreamReceiver",
+            return_value=receiver,
+        ), patch(
+            "communication.VisualFrameBridge.VisualFrameBridge",
+            return_value=Mock(),
+        ):
+            sensors = self.make_sensor(
+                node=node, async_visual_processing=True
+            )
+            sensors.process_visual_frame = Mock(
+                side_effect=lambda queued_frame: (
+                    processing_threads.append(threading.get_ident()),
+                    started.set(),
+                )
+            )
+            try:
+                sensors.update(np.array([0.0, 0.0, 9.81]), np.zeros(3), 0.0, 0.01)
+                self.assertTrue(started.wait(timeout=1.0))
+                self.assertIs(sensors.latest_camera_frame, frame)
+                self.assertNotEqual(processing_threads[0], threading.get_ident())
+            finally:
+                sensors.close()
 
     def test_fused_position_integrates_visual_velocity_at_ten_percent(self):
         sensors = self.make_sensor()

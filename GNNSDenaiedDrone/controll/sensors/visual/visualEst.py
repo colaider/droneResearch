@@ -1,5 +1,6 @@
 """Coordinate frame preparation, temporal tracking, and stereo depth estimation."""
 
+import threading
 from collections import deque
 
 import numpy as np
@@ -7,14 +8,12 @@ import numpy as np
 from .config.cameraConfig import StereoCameraConfig
 from .frame import FrameProcessor
 from .estimatorTypes import Frame, StereoFrame
-from .smallFeatures import LAYER_COLORS
 from .visualDepthEst import (
     SparseStereoDepth,
     estimate_vertical_velocity,
     estimate_frame_depth,
 )
 from .visualVelEst import VisualVelocityEstimator, VelocityKalmanFilter
-from visualization.display import compose_layer_display
 
 
 # Preserve the original public frame name.
@@ -69,6 +68,7 @@ class VisulaEst(VisualVelocityEstimator):
         self.buf_ang_vel = deque(maxlen=20)
         self.buf_att = deque(maxlen=20)
         self.buf_pos = deque(maxlen=20)
+        self._sensor_buffer_lock = threading.Lock()
         self.avg_ang_vel = np.zeros(3)
         self.avg_att = np.zeros(3)
         self.avg_pos = np.zeros(3)
@@ -175,16 +175,6 @@ class VisulaEst(VisualVelocityEstimator):
             vertical_velocity=self.depth_velocity_z,
         )
 
-        self.layer_views = [
-            compose_layer_display(
-                gray,
-                self.all_points[layer] / (2 ** layer),
-                self.layer_tracks[layer].links,
-                layer,
-                LAYER_COLORS[layer % len(LAYER_COLORS)],
-            )
-            for layer, gray in enumerate(self.current_frame.pyramids[0])
-        ]
         self.camera_velocity = return_velocity
         return self.current_frame
 
@@ -217,22 +207,24 @@ class VisulaEst(VisualVelocityEstimator):
         self.depth_view = result.view
 
     def push_sensors(self):
-        self.buf_ang_vel.append(np.array(self.drone_ang_vel, dtype=float))
-        self.buf_att.append(np.array(self.imu_att, dtype=float))
-        self.buf_pos.append(np.array(self.drone_pos, dtype=float))
+        with self._sensor_buffer_lock:
+            self.buf_ang_vel.append(np.array(self.drone_ang_vel, dtype=float))
+            self.buf_att.append(np.array(self.imu_att, dtype=float))
+            self.buf_pos.append(np.array(self.drone_pos, dtype=float))
 
     def _take_sensor_window(self):
-        if self.buf_ang_vel:
-            self.avg_ang_vel = np.mean(np.array(self.buf_ang_vel), axis=0)
-            self.avg_att = np.mean(np.array(self.buf_att), axis=0)
-            self.avg_pos = np.mean(np.array(self.buf_pos), axis=0)
-        else:
-            self.avg_ang_vel = np.array(self.drone_ang_vel, dtype=float)
-            self.avg_att = np.array(self.imu_att, dtype=float)
-            self.avg_pos = np.array(self.drone_pos, dtype=float)
-        self.buf_ang_vel.clear()
-        self.buf_att.clear()
-        self.buf_pos.clear()
+        with self._sensor_buffer_lock:
+            if self.buf_ang_vel:
+                self.avg_ang_vel = np.mean(np.array(self.buf_ang_vel), axis=0)
+                self.avg_att = np.mean(np.array(self.buf_att), axis=0)
+                self.avg_pos = np.mean(np.array(self.buf_pos), axis=0)
+            else:
+                self.avg_ang_vel = np.array(self.drone_ang_vel, dtype=float)
+                self.avg_att = np.array(self.imu_att, dtype=float)
+                self.avg_pos = np.array(self.drone_pos, dtype=float)
+            self.buf_ang_vel.clear()
+            self.buf_att.clear()
+            self.buf_pos.clear()
 
     def _current_height(self):
         return float(self.avg_pos[2])
