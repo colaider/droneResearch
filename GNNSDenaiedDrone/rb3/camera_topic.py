@@ -1,7 +1,12 @@
 """Camera topic: the OV9282 stereo pair, published as left/right mono8 images + camera_info.
 
-Reuses rb3_stereo's StereoCamera driver and nominal camera model. A background thread reads
-pairs and publishes them on <ns>/left|right/image_raw and <ns>/left|right/camera_info.
+Reuses rb3_stereo's StereoCamera driver. A background thread reads pairs and publishes them on
+<ns>/left|right/image_raw and <ns>/left|right/camera_info.
+
+Calibration: with the stereo calibration (rb3/rb3_stereo/config/stereo_calib.npz, or
+$RB3_STEREO_CALIBRATION) every pair is undistorted and rectified before it is published, and
+camera_info is the rectified model (no distortion, rows aligned). Without it: raw images and the
+nominal pinhole model.
 """
 import array
 import threading
@@ -18,14 +23,20 @@ from rb3_stereo.stereo import StereoCamera
 
 class CameraTopic:
     def __init__(self, node, ns="/stereo", resolution=(640, 400), fps=30,
-                 vfov_deg=85.0, baseline_m=0.05):
+                 vfov_deg=85.0, baseline_m=0.05, calibration="auto"):
+        """calibration: "auto" = config/stereo_calib.npz if it exists, "" = raw images, or a path.
+        vfov_deg / baseline_m: the nominal model, used only when no calibration is loaded."""
         self.node = node
         w, h = resolution
         self.pub = {
             side: (node.create_publisher(Image, f"{ns}/{side}/image_raw", qos_profile_sensor_data),
                    node.create_publisher(camera_info.CameraInfo, f"{ns}/{side}/camera_info", qos_profile_sensor_data))
             for side in ("left", "right")}
-        self.info = {side: camera_info.nominal(w, h, vfov_deg, baseline_m, right=(side == "right"))
+
+        self.cam = StereoCamera(w, h, fps, calibration=calibration, log=node.get_logger().info).start()
+        rect = self.cam.rectifier                       # None: no calibration, raw images
+        self.info = {side: camera_info.rectified(rect, side) if rect is not None
+                     else camera_info.nominal(w, h, vfov_deg, baseline_m, right=(side == "right"))
                      for side in ("left", "right")}
         for side in ("left", "right"):
             self.info[side].header.frame_id = f"stereo_{side}_optical_frame"
@@ -39,7 +50,6 @@ class CameraTopic:
         self.preview_scale = 0.5
         self._t_prev = 0.0
 
-        self.cam = StereoCamera(w, h, fps, calibration="").start()   # raw (unrectified) images
         self._stop = False
         self._thread = threading.Thread(target=self._loop, daemon=True, name="rb3-camera")
         self._thread.start()
@@ -81,7 +91,8 @@ class CameraTopic:
     def process(self, left, right):
         """Return the image to publish on <ns>/processed/compressed, or None to skip.
 
-        Replace this with your real processing (runs on the full-res raw frames). For now it
+        Replace this with your real processing (runs on the full-res frames, rectified when a
+        calibration is loaded). For now it
         just returns the left frame so the topic has something to show.
         """
         return left
