@@ -5,7 +5,7 @@ import cv2
 import numpy as np
 
 from .smallFeatures import LAYER_COLORS, unique_point_mask
-from .display import compose_depth_display
+from visualization.display import compose_depth_display
 
 
 def estimate_vertical_velocity(previous, current, dt):

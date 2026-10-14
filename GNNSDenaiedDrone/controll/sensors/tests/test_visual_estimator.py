@@ -58,14 +58,24 @@ class SensorsVisualEstimatorTests(unittest.TestCase):
         with patch(
             "communication.CameraStreamReceiver.CameraStreamReceiver",
             return_value=receiver,
-        ) as receiver_type:
+        ) as receiver_type, patch(
+            "communication.VisualFrameBridge.VisualFrameBridge",
+            return_value=Mock(),
+        ) as bridge_type:
             sensors = self.make_sensor(node=node, camera_ns="/stereo")
             receiver_type.assert_called_once_with(node, ns="/stereo")
+            bridge = sensors.visual_frame_bridge
+            bridge_type.assert_called_once_with(node)
             sensors.update(np.array([0.0, 0.0, 9.81]), np.zeros(3), 0.0, 0.01)
 
         self.assertEqual(sensors.visual_estimator.current_frame.idx, 0)
         self.assertIs(sensors.latest_camera_frame, frame)
         receiver.get_frame.assert_called_once_with()
+        bridge.publish.assert_called_once_with(
+            sensors.visual_estimator.current_frame,
+            sensors.visual_estimator.layer_tracks,
+            sensors.visual_estimator.depth_by_layer,
+        )
 
     def test_fused_position_integrates_visual_velocity_at_ten_percent(self):
         sensors = self.make_sensor()

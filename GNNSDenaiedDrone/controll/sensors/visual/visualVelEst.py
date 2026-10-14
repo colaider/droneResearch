@@ -2,7 +2,7 @@
 
 import cv2
 import numpy as np
-from .display import draw_tracks
+from visualization.display import draw_tracks
 
 from .smallFeatures import (
     LAYER_COLORS,

@@ -20,6 +20,8 @@ class CameraStreamReceiver:
         from sensor_msgs.msg import Image
 
         self.node = node
+        self._input_ns = self._normalize_namespace(ns)
+
         self._lock = Lock()
         self._left_by_stamp = {}
         self._right_by_stamp = {}
@@ -28,12 +30,19 @@ class CameraStreamReceiver:
         self._max_pending = 8
         self._subscriptions = (
             node.create_subscription(
-                Image, f"{ns}/left/image_raw", self._on_left, qos_profile_sensor_data
+                Image, f"{self._input_ns}/left/image_raw", self._on_left,
+                qos_profile_sensor_data
             ),
             node.create_subscription(
-                Image, f"{ns}/right/image_raw", self._on_right, qos_profile_sensor_data
+                Image, f"{self._input_ns}/right/image_raw", self._on_right,
+                qos_profile_sensor_data
             ),
         )
+
+    @staticmethod
+    def _normalize_namespace(namespace):
+        normalized = "/" + namespace.strip("/")
+        return normalized.rstrip("/") or "/"
 
     @staticmethod
     def _stamp_ns(message):

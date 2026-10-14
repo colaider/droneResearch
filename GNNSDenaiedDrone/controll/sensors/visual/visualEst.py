@@ -14,7 +14,7 @@ from .visualDepthEst import (
     estimate_frame_depth,
 )
 from .visualVelEst import VisualVelocityEstimator, VelocityKalmanFilter
-from .display import compose_layer_display
+from visualization.display import compose_layer_display
 
 
 # Preserve the original public frame name.

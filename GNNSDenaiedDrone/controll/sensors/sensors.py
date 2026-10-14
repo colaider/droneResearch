@@ -6,6 +6,7 @@ from sensors.visual.config.cameraConfig import STEREO_CAM
 
 class Sensors:
     def __init__(self, baro_vel_ema=0.8, *, node=None, camera_ns="/stereo",
+                 publish_processed_camera=True,
                  camera_config=None, image_filters=("clahe",),
                  convert_to_grayscale=True, filters_enabled=True,
                  filter_kernel_size=3, pyramid_levels=2,
@@ -13,10 +14,14 @@ class Sensors:
         from sensors.visual import VisulaEst
 
         self.camera_receiver = None
+        self.visual_frame_bridge = None
         if node is not None:
             from communication.CameraStreamReceiver import CameraStreamReceiver
+            from communication.VisualFrameBridge import VisualFrameBridge
 
             self.camera_receiver = CameraStreamReceiver(node, ns=camera_ns)
+            if publish_processed_camera:
+                self.visual_frame_bridge = VisualFrameBridge(node)
 
         self.imu = IMU()                  # accel + gyro estimator
 
@@ -68,6 +73,12 @@ class Sensors:
     def process_visual_frame(self, frame, idx=None):
         """Process a stereo capture and integrate valid visual velocity into position."""
         processed = self.visual_estimator.processing(frame, idx)
+        if self.visual_frame_bridge is not None:
+            self.visual_frame_bridge.publish(
+                processed,
+                self.visual_estimator.layer_tracks,
+                self.visual_estimator.depth_by_layer,
+            )
         frame_idx = processed.idx
         if frame_idx == self._last_visual_frame_idx:
             return processed
@@ -127,6 +138,9 @@ class Sensors:
         if self.camera_receiver is not None:
             self.camera_receiver.close()
             self.camera_receiver = None
+        if self.visual_frame_bridge is not None:
+            self.visual_frame_bridge.close()
+            self.visual_frame_bridge = None
 
     def _update_baro_velocity(self, baro, dt):
         self._baro = baro
