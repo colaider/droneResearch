@@ -59,7 +59,7 @@ class ControlLoop:
                 self.step(dt)            # read -> sensors.update -> state machine
                 self._update_camera_view()
 
-                if i % 2 == 0:
+                if i % 50 == 0:
                     cmd = self.sm.last_cmd
                     visual_estimator = self.sensors.visual_estimator
                     stereo_depth = visual_estimator.depth_median
@@ -78,7 +78,8 @@ class ControlLoop:
                           f"visual_vel={np.round(self.sensors.get_visual_velocity(), 3)} "
                           f"stereo_depth={stereo_depth_text} "
                           f"depth_points={len(visual_estimator.depth_points)} "
-                          f"depth_valid={visual_estimator.depth_valid_frac:.0%}",
+                          f"depth_valid={visual_estimator.depth_valid_frac:.0%}"
+                          f"dt = {dt} ",
                           flush=True)
                 i += 1
 
