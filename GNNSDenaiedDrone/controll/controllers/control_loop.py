@@ -14,7 +14,7 @@ CALIB_SAMPLES = 400     # ~4 s: longer resting average -> cleaner gyro bias (roo
 
 
 class ControlLoop:
-    def __init__(self, dt=0.01, ns="/drone", altitude=1.0, send=True):
+    def __init__(self, dt=0.01, ns="/drone", altitude=1.0, send=True, find_hover=False):
         self.dt = dt
         rclpy.init()
         self.node = rclpy.create_node("control_loop")
@@ -23,7 +23,7 @@ class ControlLoop:
         self.controller = Controller(dt=dt)
         self.sm = StateMachine(self.sensors, self.controller, self.reader,
                                altitude=altitude, warmup_steps=WARMUP_STEPS,
-                               calib_samples=CALIB_SAMPLES, send=send)
+                               calib_samples=CALIB_SAMPLES, send=send, find_hover=find_hover)
 
         self._executor = SingleThreadedExecutor()
         self._executor.add_node(self.node)
