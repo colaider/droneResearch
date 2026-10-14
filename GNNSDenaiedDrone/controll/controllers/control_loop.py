@@ -19,7 +19,7 @@ class ControlLoop:
         rclpy.init()
         self.node = rclpy.create_node("control_loop")
         self.reader = ReaderSender(node=self.node, ns=ns)
-        self.sensors = Sensors()
+        self.sensors = Sensors(node=self.node)
         self.controller = Controller(dt=dt)
         self.sm = StateMachine(self.sensors, self.controller, self.reader,
                                altitude=altitude, warmup_steps=WARMUP_STEPS,
@@ -57,7 +57,9 @@ class ControlLoop:
                           f"cmd={None if cmd is None else np.round(cmd,3)}"
                           f"pos={self.sensors.get_acc_position()}", 
                           f"cmd pos = {self.controller.posCMD}"
-                          f"acc={ self.sensors.get_acceleration()}", flush=True)
+                          f"acc={self.sensors.get_acceleration()} "
+                          f"visual_vel={np.round(self.sensors.get_visual_velocity(), 3)}",
+                          flush=True)
                 i += 1
 
                 next_t += self.dt
@@ -77,7 +79,7 @@ class ControlLoop:
             pass
         self._executor.shutdown()
         self._spin.join(timeout=1.0)
+        self.sensors.close()
         if rclpy.ok():
             self.node.destroy_node()
             rclpy.shutdown()
-
