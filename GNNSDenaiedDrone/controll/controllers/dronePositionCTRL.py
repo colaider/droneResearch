@@ -75,7 +75,7 @@ class DronePositionCTRL(DroneCTRL):
         self.last_vel_err = vel_err
         self.vel_err_sum += vel_err * self.dt
 
-        return np.array([target_roll, target_pitch, yaw_rate_target, throttle])
+        return np.array([0, 0, 0, throttle])
         
 
     def f1(self, omega:float):
