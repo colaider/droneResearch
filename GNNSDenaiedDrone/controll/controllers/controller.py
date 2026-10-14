@@ -88,7 +88,7 @@ class Controller:
         out = P + self.ki_vel * self._vel_err_sum + D
         pitch = float(np.clip(out[0], -self.max_tilt, self.max_tilt))
         roll = float(np.clip(-out[1], -self.max_tilt, self.max_tilt))
-        throttle = float(np.clip(self.hover_throttle + out[2], 0.0, .3))
+        throttle = float(np.clip(self.hover_throttle + out[2], 0.0, .45))
         return np.array([roll, pitch, yaw_rate_target, throttle])
 
 
