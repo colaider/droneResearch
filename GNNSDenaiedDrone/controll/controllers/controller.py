@@ -39,7 +39,7 @@ class Controller:
     def update(self, sensors, setpoint):
         setpoint = np.asarray(setpoint, dtype=float)
         pos = sensors.get_fused_position()               # world [x, y, z]
-        vel_world = sensors.get_acc_velocity()           # world [vx, vy, vz]
+        vel_world = sensors.get_fused_velocity()         # world [vx, vy, vz]
         yaw = sensors.get_attitude()[2]
         yaw_rate = sensors.get_angular_velocity()[2]
 

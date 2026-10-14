@@ -27,6 +27,7 @@ class Sensors:
         self._prev_baro = None
         self.latest_camera_frame = None
         self._visual_position = None
+        self._visual_velocity_world = None     # latest camera velocity in world frame (nan axis = no measurement)
         self._last_visual_frame_idx = None
         self.visual_estimator = VisulaEst(
             STEREO_CAM if camera_config is None else camera_config,
@@ -44,6 +45,7 @@ class Sensors:
         self.imu.update(accel, gyro, dt)
         if was_calibrating and not self.imu.is_calibrating():
             self._visual_position = None
+            self._visual_velocity_world = None
             self._last_visual_frame_idx = None
         self._update_baro_velocity(float(baro), dt)
         if not self.imu.is_calibrating():
@@ -103,6 +105,13 @@ class Sensors:
         self._visual_position += visual_velocity_world * dt
         if not has_visual_vertical_velocity:
             self._visual_position[2] = imu_position[2]
+
+        # keep the latest world-frame visual velocity for get_fused_velocity(); nan on z when
+        # the camera gave no depth velocity, so the fuse leaves vz to the IMU/baro.
+        held = visual_velocity_world.copy()
+        if not has_visual_vertical_velocity:
+            held[2] = np.nan
+        self._visual_velocity_world = held
         return processed
 
     def get_visual_velocity(self):
@@ -130,6 +139,7 @@ class Sensors:
     # ---------------- calibration (forwarded to the IMU) ----------------
     def start_calibration(self, n=400):
         self._visual_position = None
+        self._visual_velocity_world = None
         self._last_visual_frame_idx = None
         self.imu.start_calibration(n)
 
@@ -165,3 +175,13 @@ class Sensors:
         if self._visual_position is None:
             return imu_position
         return 0.9 * imu_position + 0.1 * self._visual_position
+
+    def get_fused_velocity(self):
+        imu_velocity = self.get_acc_velocity()
+        visual = self._visual_velocity_world
+        if visual is None:
+            return imu_velocity
+        fused = imu_velocity.copy()
+        usable = np.isfinite(visual)
+        fused[usable] = 0.9 * imu_velocity[usable] + 0.1 * visual[usable]
+        return fused
