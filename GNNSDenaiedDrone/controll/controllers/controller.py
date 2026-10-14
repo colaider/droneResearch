@@ -10,7 +10,7 @@ class Controller:
         # outer loop: feedback-linearization model + position/yaw PD (4-DOF: x, y, z, yaw)
         self.k_f1 = np.array([0.5, 0.5, 0.5, 0.8])      # control effectiveness (inverted)
         self.k_f2 = np.array([0.15, 0.15, 0.2, 0.2])    # modelled drift / damping (compensated)
-        self.kp_pos = np.diag([0.03, 0.03, 0.55, 0.06])
+        self.kp_pos = np.diag([0.03, 0.03, 0.25, 0.06])
         self.kd_pos = np.diag([0.02, 0.02, 0.005, 0.1])
 
         # inner loop: velocity error -> tilt/throttle (gains from the swarm blueprint)
@@ -91,7 +91,7 @@ class Controller:
         out = P + self.ki_vel * self._vel_err_sum + D
         pitch = float(np.clip(out[0], -self.max_tilt, self.max_tilt))
         roll = float(np.clip(-out[1], -self.max_tilt, self.max_tilt))
-        throttle = float(np.clip(self.hover_throttle + out[2], 0.0, .7))
+        throttle = float(np.clip(self.hover_throttle + out[2], 0.0, 0.63))
         return np.array([roll, pitch, yaw_rate_target, throttle])
 
 
