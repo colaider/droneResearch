@@ -14,9 +14,9 @@ class Controller:
         self.kd_pos = np.diag([0.02, 0.02, 0.005, 0.1])
 
         # inner loop: velocity error -> tilt/throttle (gains from the swarm blueprint)
-        self.kp_vel = np.array([2.0, 2.0, 1.0])
+        self.kp_vel = np.array([2.0, 2.0, 1.3])
         self.ki_vel = np.array([0.4, 0.04, 0.8])
-        self.kd_vel = np.array([0.01, 0.01, 0.05])
+        self.kd_vel = np.array([0.05, 0.05, 0.05])
         self._last_vel_err = np.zeros(3)
         self._vel_err_sum = np.zeros(3)
 
