@@ -57,11 +57,11 @@ class StateMachine:
         elif self.stage == "CALIBRATE":
             if not self.sensors.is_calibrating():       # bias locked, world frame set
                 self.controller.reset()
-                # if self.find_hover:
-                #     self.stage = "FIND_HOVER"
-                # else:
-                #     self.setpoint = np.array([0.0, 0.0, self.altitude, 0.0])   # hover at origin
-                #     self.stage = "HOVER"
+                if self.find_hover:
+                    self.stage = "FIND_HOVER"
+                else:
+                    self.setpoint = np.array([0.0, 0.0, self.altitude, 0.0])   # hover at origin
+                    self.stage = "HOVER"
 
         elif self.stage == "FIND_HOVER":
             self._step_find_hover()
