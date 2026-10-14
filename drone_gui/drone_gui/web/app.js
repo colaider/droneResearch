@@ -285,21 +285,25 @@ function renderPosition(position) {
     if (cell) cell.textContent = (value === null || value === undefined) ? '--' : fmt(value, digits);
   };
 
-  set('pos-x', odom ? odom.position[0] : null, 2);
-  set('pos-y', odom ? odom.position[1] : null, 2);
-  set('pos-z', odom ? odom.position[2] : (position.fc_altitude_m ?? null), 2);
+  // Odometry wins; otherwise the control loop's own estimate (controll/main.py publishes the
+  // fused IMU + visual position and velocity it flies by on /vo/status).
+  const voPosition = vo && Array.isArray(vo.position) ? vo.position : null;
+  const pos = odom ? odom.position : voPosition;
+  set('pos-x', pos ? pos[0] : null, 2);
+  set('pos-y', pos ? pos[1] : null, 2);
+  set('pos-z', pos ? pos[2] : (position.fc_altitude_m ?? null), 2);
   const posSource = $('pos-source');
   if (posSource) {
-    const missing = !odom;
-    posSource.classList.toggle('dead', missing);
+    posSource.classList.toggle('dead', !pos);
     posSource.textContent = odom
       ? ('odom' + (odom.frame ? ' · frame ' + odom.frame : ''))
+      : voPosition ? 'control loop, fused IMU + visual' + (vo.mode ? ' · ' + vo.mode : '')
       : 'no X/Y — nothing publishes odometry yet (z is the FC height)';
   }
 
-  // The estimator reports velocity, not position: /vo/status carries vx, vy and yaw rate.
+  const voVelocity = vo && Array.isArray(vo.velocity) ? vo.velocity : null;
   const velocity = odom ? odom.velocity
-    : (vo ? [vo.vx, vo.vy, null] : null);
+    : voVelocity || (vo ? [vo.vx, vo.vy, null] : null);
   set('vel-x', velocity ? velocity[0] : null, 2);
   set('vel-y', velocity ? velocity[1] : null, 2);
   set('vel-z', velocity ? velocity[2] : null, 2);
@@ -307,6 +311,7 @@ function renderPosition(position) {
   if (velSource) {
     velSource.classList.toggle('dead', !velocity);
     velSource.textContent = odom ? 'odom twist'
+      : voVelocity ? 'control loop, fused · visual vx ' + fmt(vo.vx, 2) + ', vy ' + fmt(vo.vy, 2)
       : vo ? 'stereo estimator (vx, vy only)'
       : 'no velocity source';
   }
@@ -318,7 +323,9 @@ function renderPosition(position) {
   if (voSource) {
     voSource.classList.toggle('dead', !vo);
     voSource.textContent = vo
-      ? ((vo.estimator_ms ? vo.estimator_ms + ' ms/frame · ' : '') + (vo.mode || ''))
+      ? ((vo.estimator_ms ? vo.estimator_ms + ' ms/frame · ' : '') +
+         (typeof vo.depth_valid === 'number' ? 'depth valid ' + Math.round(vo.depth_valid * 100) + '% · ' : '') +
+         (vo.mode || ''))
       : 'estimator not running (no VO node publishing /vo)';
   }
 
