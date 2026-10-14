@@ -58,6 +58,13 @@ class ControlLoop:
 
                 if i % 2 == 0:
                     cmd = self.sm.last_cmd
+                    visual_estimator = self.sensors.visual_estimator
+                    stereo_depth = visual_estimator.depth_median
+                    stereo_depth_text = (
+                        f"{stereo_depth:.2f}m"
+                        if np.isfinite(stereo_depth)
+                        else "unavailable"
+                    )
                     print(f"[{i}] {self.sm.stage:9s} dt={dt*1e3:4.1f}ms "
                           f"att={np.round(self.sensors.get_attitude(),3)} "
                           f"baro={self.sensors.get_baro_position():+.2f}m "
@@ -65,7 +72,10 @@ class ControlLoop:
                           f"pos={self.sensors.get_acc_position()}", 
                           f"cmd pos = {self.controller.posCMD}"
                           f"acc={self.sensors.get_acceleration()} "
-                          f"visual_vel={np.round(self.sensors.get_visual_velocity(), 3)}",
+                          f"visual_vel={np.round(self.sensors.get_visual_velocity(), 3)} "
+                          f"stereo_depth={stereo_depth_text} "
+                          f"depth_points={len(visual_estimator.depth_points)} "
+                          f"depth_valid={visual_estimator.depth_valid_frac:.0%}",
                           flush=True)
                 i += 1
 
