@@ -25,6 +25,7 @@ class Sensors:
         self._baro = 0.0
         self._baro_vel = 0.0
         self._prev_baro = None
+        self.latest_camera_frame = None
         self.visual_estimator = VisulaEst(
             STEREO_CAM if camera_config is None else camera_config,
             image_filters=image_filters,
@@ -45,6 +46,7 @@ class Sensors:
         if self.camera_receiver is not None:
             frame = self.camera_receiver.get_frame()
             if frame is not None:
+                self.latest_camera_frame = frame
                 self.process_visual_frame(frame)
 
     def _push_visual_sensor_sample(self):

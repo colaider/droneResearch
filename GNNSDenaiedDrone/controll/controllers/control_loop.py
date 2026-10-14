@@ -1,5 +1,6 @@
 import threading
 import time
+import cv2
 import numpy as np
 import rclpy
 from rclpy.executors import SingleThreadedExecutor
@@ -14,8 +15,13 @@ CALIB_SAMPLES = 400     # ~4 s: longer resting average -> cleaner gyro bias (roo
 
 
 class ControlLoop:
-    def __init__(self, dt=0.01, ns="/drone", altitude=1.0, send=True):
+    def __init__(self, dt=0.01, ns="/drone", altitude=1.0, send=True,
+                 show_camera=False):
         self.dt = dt
+        self.show_camera = show_camera
+        self._camera_window_open = show_camera
+        self._last_camera_sequence = None
+        self._camera_window_name = "Drone stereo camera"
         rclpy.init()
         self.node = rclpy.create_node("control_loop")
         self.reader = ReaderSender(node=self.node, ns=ns)
@@ -48,6 +54,7 @@ class ControlLoop:
                 last = now
 
                 self.step(dt)            # read -> sensors.update -> state machine
+                self._update_camera_view()
 
                 if i % 2 == 0:
                     cmd = self.sm.last_cmd
@@ -69,6 +76,21 @@ class ControlLoop:
         finally:
             self.close()
 
+    def _update_camera_view(self):
+        if not self._camera_window_open:
+            return
+
+        frame = self.sensors.latest_camera_frame
+        if frame is not None and frame.sequence_id != self._last_camera_sequence:
+            preview = cv2.hconcat([frame.left, frame.right])
+            cv2.imshow(self._camera_window_name, preview)
+            self._last_camera_sequence = frame.sequence_id
+
+        key = cv2.waitKey(1) & 0xFF
+        if key in (ord("q"), 27):
+            cv2.destroyWindow(self._camera_window_name)
+            self._camera_window_open = False
+
     def close(self):
         # Neutral stop: make the last thing on the wire zero tilt / zero throttle, so a Ctrl-C
         # does not leave the FC holding a non-zero command for the command_timeout window.
@@ -80,6 +102,8 @@ class ControlLoop:
         self._executor.shutdown()
         self._spin.join(timeout=1.0)
         self.sensors.close()
+        if self.show_camera:
+            cv2.destroyAllWindows()
         if rclpy.ok():
             self.node.destroy_node()
             rclpy.shutdown()

@@ -63,6 +63,7 @@ class SensorsVisualEstimatorTests(unittest.TestCase):
             sensors.update(np.array([0.0, 0.0, 9.81]), np.zeros(3), 0.0, 0.01)
 
         self.assertEqual(sensors.visual_estimator.current_frame.idx, 0)
+        self.assertIs(sensors.latest_camera_frame, frame)
         receiver.get_frame.assert_called_once_with()
 
 
