@@ -14,7 +14,6 @@ import time
 
 from geometry_msgs.msg import Twist
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
-from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from std_msgs.msg import Bool
 
 from rb3_control import msp as msp_proto
@@ -69,11 +68,9 @@ class CommandTopic:
         self._serial_group = MutuallyExclusiveCallbackGroup()
         self._cmd_group = MutuallyExclusiveCallbackGroup()
 
-        # Latest-command-wins: depth 1 so a stall never leaves a backlog of stale commands to
-        # flush after the control loop has already moved on (or stopped).
-        cmd_qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
-                             history=HistoryPolicy.KEEP_LAST)
-        node.create_subscription(Twist, f"{ns}/cmd_attitude", self._on_cmd, cmd_qos,
+        # Keep the depth-10 default QoS (matches the publisher; proven working). The callback-group
+        # split below -- not the QoS -- is what fixes the full/stop pulsing.
+        node.create_subscription(Twist, f"{ns}/cmd_attitude", self._on_cmd, 10,
                                  callback_group=self._cmd_group)
         self.timer = node.create_timer(1.0 / loop_hz, self._loop,
                                        callback_group=self._serial_group)
