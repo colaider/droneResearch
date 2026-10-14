@@ -39,12 +39,15 @@
     </table>
   </section>
 
-  <section class="card" id="camera-card">
-    <h2>Stereo preview <span class="sub" id="camera-sub"></span></h2>
-    <div class="camera-wrap">
-      <img id="camera" alt="stereo preview">
-      <div class="camera-placeholder" id="camera-placeholder">no frames &mdash; is drone-stereo running?</div>
-    </div>
+  <section class="card">
+    <h2>Board</h2>
+    <dl class="kv" id="board-kv"></dl>
+  </section>
+
+  <section class="card span3" id="camera-card">
+    <h2>Cameras <span class="sub" id="camera-sub"></span>
+      <button class="h2-action" id="camera-add">+ add view</button></h2>
+    <div class="camera-grid" id="camera-grid"></div>
   </section>
 
 
@@ -107,7 +110,7 @@
     </div>
   </section>
 
-  <section class="card span2">
+  <section class="card span3">
     <h2>Processes <span class="sub">systemd on the board</span></h2>
     <table class="units">
       <thead><tr><th>unit</th><th>state</th><th>boot</th><th class="right">actions</th></tr></thead>
@@ -117,11 +120,6 @@
       <button class="danger" id="reboot">Reboot board</button>
       <span class="hint" id="action-hint"></span>
     </div>
-  </section>
-
-  <section class="card">
-    <h2>Board</h2>
-    <dl class="kv" id="board-kv"></dl>
   </section>
 
   <section class="card span3">

@@ -15,6 +15,7 @@ import os
 import threading
 import time
 
+from .agent import DISCOVER_SECONDS, FRAME_HZ, camera_topics, raw_to_jpeg
 from .store import Store
 
 
@@ -27,15 +28,22 @@ class RosLink:
         self.executor = None
         self.thread = None
         self.connected = False
+        self._cameras = {}                  # topic -> "jpeg" | "raw", from the graph
+        self._camera_subs = {}              # topic -> subscription, for watched topics only
+        self._raw_sent = {}                 # topic -> when a raw frame was last encoded
+        self._camera_lock = threading.Lock()
+        self._msg_types = None
 
     def start(self):
         import rclpy
         from geometry_msgs.msg import Vector3Stamped
         from rclpy.node import Node
         from rclpy.qos import qos_profile_sensor_data
-        from sensor_msgs.msg import (BatteryState, CompressedImage, FluidPressure, Imu,
+        from sensor_msgs.msg import (BatteryState, CompressedImage, FluidPressure, Image, Imu,
                                      MagneticField)
         from std_msgs.msg import Bool, Float32, String
+        self._msg_types = {"jpeg": CompressedImage, "raw": Image}
+        self._qos = qos_profile_sensor_data
 
         os.environ.setdefault("ROS_DOMAIN_ID", str(self.cfg.domain_id))
         rclpy.init(args=None)
@@ -73,8 +81,7 @@ class RosLink:
             lambda m: apply("pressure", m.fluid_pressure / 100.0), qos_profile_sensor_data)
         sub(String, stereo + "/status",
             lambda m: apply("stereo_status", json_or_none(m.data)), 10)
-        sub(CompressedImage, stereo + "/preview/compressed",
-            lambda m: self.store.apply_frame(bytes(m.data)), qos_profile_sensor_data)
+        self.node.create_timer(DISCOVER_SECONDS, self._discover_cameras)
 
         self.executor = rclpy.executors.SingleThreadedExecutor()
         self.executor.add_node(self.node)
@@ -87,6 +94,58 @@ class RosLink:
             self.executor.spin()
         except Exception:                   # noqa: BLE001 - the panel must outlive it
             pass
+
+    # --- cameras: subscribed only while a page shows them -------------------
+    def _discover_cameras(self):
+        cameras = camera_topics(self.node)
+        stats = self.store.frame_stats()
+        self.store.apply({"camera_topics": [
+            {"topic": topic, "kind": kind, "publishers": self.node.count_publishers(topic),
+             "hz": round(stats[topic]["fps"], 1) if topic in stats else None}
+            for topic, kind in sorted(cameras.items())]})
+        with self._camera_lock:
+            self._cameras = cameras
+        self._update_camera_subscriptions()
+
+    def _on_image(self, topic, kind, msg):
+        if kind == "jpeg":
+            self.store.apply_frame(topic, bytes(msg.data))
+            return
+        # Encoding costs CPU: only as often as the agent would send it.
+        now = time.monotonic()
+        if now - self._raw_sent.get(topic, 0.0) < 1.0 / FRAME_HZ:
+            return
+        self._raw_sent[topic] = now
+        try:
+            jpeg = raw_to_jpeg(msg)
+        except ImportError:
+            jpeg = None
+        if jpeg is not None:
+            self.store.apply_frame(topic, jpeg)
+
+    def _update_camera_subscriptions(self):
+        if self.node is None:
+            return
+        wanted = set(self.store.watched())
+        with self._camera_lock:
+            for topic in list(self._camera_subs):
+                if topic not in wanted or topic not in self._cameras:
+                    self.node.destroy_subscription(self._camera_subs.pop(topic))
+            for topic in wanted - set(self._camera_subs):
+                kind = self._cameras.get(topic)
+                if kind is None:
+                    continue                # not in the graph yet: retried on discovery
+                self._camera_subs[topic] = self.node.create_subscription(
+                    self._msg_types[kind], topic,
+                    lambda m, t=topic, k=kind: self._on_image(t, k, m), self._qos)
+
+    def watch(self, topic):
+        if self.store.watch(topic):
+            self._update_camera_subscriptions()
+
+    def unwatch(self, topic):
+        if self.store.unwatch(topic):
+            self._update_camera_subscriptions()
 
     def stop(self):
         import rclpy
@@ -107,15 +166,11 @@ class RosLink:
     def rates(self):
         return self.store.rates()
 
-    def latest_frame(self, max_age=5.0):
-        return self.store.latest_frame(max_age)
+    def latest_frame(self, topic, max_age=5.0):
+        return self.store.latest_frame(topic, max_age)
 
-    def frame_age(self):
-        return self.store.frame_age()
-
-    @property
-    def frame_count(self):
-        return self.store.frame_count
+    def frame_stats(self):
+        return self.store.frame_stats()
 
     def plot(self, *names):
         return self.store.plot(*names)

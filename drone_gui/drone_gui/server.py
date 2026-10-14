@@ -5,9 +5,11 @@ Three kinds of traffic, each matched to a plain-HTTP mechanism that needs no fra
   GET  /api/stream          Server-Sent Events, one JSON state object per tick. One-way push
                             is all a dashboard needs, and unlike WebSocket it is a few lines
                             of stdlib and reconnects on its own.
-  GET  /camera/stream       multipart/x-mixed-replace MJPEG, built from the JPEG frames
-                            /stereo/preview/compressed already publishes - the browser does
-                            the decoding, so no image library here either.
+  GET  /camera/stream?topic=/stereo/preview/compressed
+                            multipart/x-mixed-replace MJPEG of one camera topic, built from
+                            JPEG frames - the browser does the decoding, so no image library
+                            here either. While a stream is open its topic is "watched": only
+                            watched topics are subscribed on the board and sent over the link.
   POST /api/unit/...        process control, forwarded to systemd on the board over SSH.
 
 Board polling runs in its own thread, so an SSH call that hangs slows the health panel down
@@ -18,10 +20,13 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
+import select
 import socket
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs, urlsplit
 
 WEB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web")
 STREAM_HZ = 5.0
@@ -30,10 +35,30 @@ MJPEG_HZ = 12.0
 CONTENT_TYPES = {".html": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8",
                  ".js": "application/javascript; charset=utf-8", ".svg": "image/svg+xml",
                  ".ico": "image/x-icon"}
+TOPIC = re.compile(r"^(/[A-Za-z_][A-Za-z0-9_]*)+$")       # a fully qualified ROS topic name
 
 
 def _degrees(value):
     return None if value is None else math.degrees(value)
+
+
+def _cameras(config, ros):
+    """Every camera topic the board has, merged with what this panel has received of it."""
+    listed = {entry["topic"]: entry for entry in (ros.get("camera_topics", 10.0) or [])}
+    stats = ros.frame_stats()
+    topics = []
+    for topic in sorted(set(listed) | set(stats)):
+        entry, stat = listed.get(topic, {}), stats.get(topic)
+        topics.append({
+            "topic": topic,
+            "kind": entry.get("kind"),
+            "publishers": entry.get("publishers"),
+            "source_hz": entry.get("hz"),           # as published, measured on the board
+            "fps": round(stat["fps"], 1) if stat else None,    # as received here
+            "age": round(stat["age"], 1) if stat else None,
+            "frames": stat["frames"] if stat else 0,
+        })
+    return {"topics": topics, "default": config.stereo_ns.rstrip("/") + "/preview/compressed"}
 
 
 class State:
@@ -140,11 +165,7 @@ class State:
                 "fc_altitude_m": ros.get("altitude", 2.0),
                 "baro_altitude_m": ros.get("baro_altitude", 2.0),
             },
-            "camera": {
-                "age": round(ros.frame_age(), 1) if ros.frame_age() is not None else None,
-                "frames": ros.frame_count,
-                "stereo": ros.get("stereo_status", 30.0),
-            },
+            "cameras": _cameras(self.cfg, ros),
             "board": {
                 "online": health.online,
                 "reason": health.reason,
@@ -206,9 +227,26 @@ class Handler(BaseHTTPRequestHandler):
             body = handle.read()
         self._send(200, body, CONTENT_TYPES.get(extension, "application/octet-stream"))
 
+    def _topic(self, query):
+        """The ?topic= of a camera request (default: the stereo preview), or None if invalid."""
+        topic = (parse_qs(query).get("topic") or [""])[0] \
+            or self.state.cfg.stereo_ns.rstrip("/") + "/preview/compressed"
+        return topic if TOPIC.match(topic) else None
+
+    def _client_gone(self):
+        """True once the browser has closed the connection. A stream on a topic that sends
+        nothing never writes, so it would never find out from a failed write - and the topic
+        would stay watched, and keep coming over the link, for good."""
+        try:
+            readable, _, _ = select.select([self.connection], [], [], 0)
+            return bool(readable) and not self.connection.recv(1, socket.MSG_PEEK)
+        except (OSError, ValueError):
+            return True
+
     # --- routes -----------------------------------------------------------
     def do_GET(self):                                  # noqa: N802 - BaseHTTPRequestHandler API
-        path = self.path.split("?")[0]
+        url = urlsplit(self.path)
+        path = url.path
         if path in ("/", "/index.html"):
             return self._static("index.html")
         if path in ("/app.css", "/app.js"):
@@ -217,12 +255,15 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(self.state.snapshot())
         if path == "/api/stream":
             return self._sse()
-        if path == "/camera/stream":
-            return self._mjpeg()
-        if path == "/camera/frame.jpg":
-            frame = self.state.ros.latest_frame()
+        if path in ("/camera/stream", "/camera/frame.jpg"):
+            topic = self._topic(url.query)
+            if topic is None:
+                return self._send(400, b"topic must be a ROS topic name like /stereo/preview/compressed")
+            if path == "/camera/stream":
+                return self._mjpeg(topic)
+            frame = self.state.ros.latest_frame(topic)
             if frame is None:
-                return self._send(503, b"no frame")
+                return self._send(503, b"no frame (only topics an open stream shows are received)")
             return self._send(200, frame, "image/jpeg")
         if path.startswith("/api/journal/"):
             unit = path.rsplit("/", 1)[-1]
@@ -289,7 +330,7 @@ class Handler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError, socket.timeout):
             pass        # the tab was closed or reloaded
 
-    def _mjpeg(self):
+    def _mjpeg(self, topic):
         boundary = "dronegui"
         self.send_response(200)
         self.send_header("Content-Type",
@@ -298,11 +339,13 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         period = 1.0 / MJPEG_HZ
         last = None
+        ros = self.state.ros
+        ros.watch(topic)
         try:
-            while True:
-                frame = self.state.ros.latest_frame()
-                # Only push when the frame actually changed: the preview is published at
-                # 10 Hz and resending the same bytes faster buys nothing.
+            while not self._client_gone():
+                frame = ros.latest_frame(topic)
+                # Only push when the frame actually changed: frames arrive at most at the
+                # agent's 10 Hz and resending the same bytes faster buys nothing.
                 if frame is not None and frame is not last:
                     self.wfile.write(("--%s\r\n" % boundary).encode())
                     self.wfile.write(b"Content-Type: image/jpeg\r\n")
@@ -312,8 +355,11 @@ class Handler(BaseHTTPRequestHandler):
                     self.wfile.flush()
                     last = frame
                 time.sleep(period)
-        except (BrokenPipeError, ConnectionResetError, socket.timeout):
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, socket.timeout):
             pass
+        finally:
+            ros.unwatch(topic)
+            self.close_connection = True
 
 
 class Server(ThreadingHTTPServer):
