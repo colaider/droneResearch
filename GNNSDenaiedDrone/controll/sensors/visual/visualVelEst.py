@@ -332,7 +332,8 @@ class VisualVelocityEstimator:
             float(vertical_velocity)
             if np.isfinite(vertical_velocity)
             else float(self.drone_vel[2])
-        )
+        ) 
+        print(f"points propagated{len(points)}")
         if len(points) < 2:
             self.estimated_height = np.nan
             self.camera_velocity = np.zeros(4)   # no usable tracks -> report zero velocity
