@@ -10,7 +10,7 @@ class Sensors:
                  publish_processed_camera=True,
                  camera_config=None, image_filters=("clahe",),
                  convert_to_grayscale=True, filters_enabled=True,
-                 filter_kernel_size=3, pyramid_levels=2,
+                 filter_kernel_size=3, pyramid_levels=1,
                  max_stereo_skew_s=0.005):
         from sensors.visual import VisulaEst
 

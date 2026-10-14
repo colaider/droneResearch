@@ -27,7 +27,7 @@ class VisualVelocityEstimator:
         self.tracked_points = self.tracked_points_by_layer[0]
         self.layer_tracks = {}
         self._layer_frame_idx = {}
-        self.max_feature_points = 1500
+        self.max_feature_points = 500
         self.feature_min_distance = 30.0
         self.cross_layer_min_distance = 5.0
         self.all_points = [np.empty((0, 2), np.float32) for _ in range(pyramid_levels)]
