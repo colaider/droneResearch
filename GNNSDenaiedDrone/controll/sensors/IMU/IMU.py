@@ -1,8 +1,3 @@
-"""IMU estimator: accelerometer + gyroscope -> attitude, velocity, position, with bias calibration.
-
-Pure numpy, no ROS, no barometer. Fed raw body accel + gyro + dt each tick. Owned and forwarded
-by sensors.Sensors.
-"""
 import numpy as np
 
 G = 9.81
@@ -22,9 +17,6 @@ class IMU:
         self.gyro_bias = np.zeros(3)     # mean(gyro)
         self._calib = None
 
-        # attitude complementary-filter time constant [s]: how long the accelerometer takes to
-        # correct the gyro. Using a time constant (not a fixed weight) makes the filter behave the
-        # same regardless of dt.  (tau=0.5 s reproduces the old 0.98 weight at dt=0.01.)
         self.att_tau = 0.5
 
     # ---------------- update ----------------

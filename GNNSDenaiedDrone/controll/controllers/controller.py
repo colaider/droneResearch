@@ -59,9 +59,9 @@ class Controller:
         X_err[3] = self._wrap(X_err[3])                  # wrap yaw error (original did not)
         X_err_d = S_d - X_d
 
-        v = S_dd + self.kp_pos @ X_err + self.kd_pos @ X_err_d          # virtual world accel
+        v = S_dd + self.kp_pos @ X_err + self.kd_pos @ X_err_d    
         U = np.linalg.inv(self.f1(yaw)) @ (v + self.f2(yaw) @ X_d_body)  # target vel [vx,vy,vz,yaw_rate]
-        U = np.clip(U, -2.0, 2.0)                        # FIX: original discarded this clip
+        U = np.clip(U, -2.0, 2.0)                        
 
         self._pr_setpoint = setpoint.copy()
         self._pr_dr_setpoint = S_d
