@@ -2,7 +2,7 @@ import numpy as np
 
 
 class Controller:
-    def __init__(self, dt=0.01, hover_throttle=0.55, max_tilt_deg=0.5):
+    def __init__(self, dt=0.01, hover_throttle=0.55, max_tilt_deg=2.5):
         self.dt = dt
         self.hover_throttle = hover_throttle
         self.max_tilt = np.radians(max_tilt_deg)
