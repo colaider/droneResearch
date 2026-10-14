@@ -11,7 +11,7 @@ class Sensors:
                  camera_config=None, image_filters=("clahe",),
                  convert_to_grayscale=True, filters_enabled=True,
                  filter_kernel_size=3, pyramid_levels=1,
-                 max_stereo_skew_s=0.005):
+                 max_stereo_skew_s=0.005, vision_backend=None):
         from sensors.visual import VisulaEst
 
         self.camera_receiver = None
@@ -47,6 +47,7 @@ class Sensors:
             filter_kernel_size=filter_kernel_size,
             pyramid_levels=pyramid_levels,
             max_stereo_skew_s=max_stereo_skew_s,
+            vision_backend=vision_backend,
         )
 
     # ---------------- update ----------------

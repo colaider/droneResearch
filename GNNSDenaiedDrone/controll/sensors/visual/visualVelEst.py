@@ -4,6 +4,8 @@ import cv2
 import numpy as np
 from visualization.display import draw_tracks
 
+from .gpuVision import VisionBackend
+
 from .smallFeatures import (
     LAYER_COLORS,
     LayerTracks,
@@ -21,8 +23,9 @@ class VisualVelocityEstimator:
     latest sensor reading, plus a ``_current_height`` helper.
     """
 
-    def _init_velocity_estimator(self, pyramid_levels):
+    def _init_velocity_estimator(self, pyramid_levels, *, vision_backend=None):
         """Initialize tracking histories, budgets, per-frame flow, and velocity state."""
+        self.vision_backend = VisionBackend(vision_backend)
         self.tracked_points_by_layer = {0: {}}
         self.tracked_points = self.tracked_points_by_layer[0]
         self.layer_tracks = {}
@@ -216,7 +219,7 @@ class VisualVelocityEstimator:
                                 width, height, lk):
         """Run forward/backward LK and return valid full-resolution pairs or None."""
         old = seeds.reshape(-1, 1, 2).astype(np.float32)
-        new, status_forward, _ = cv2.calcOpticalFlowPyrLK(
+        new, status_forward, _ = self.vision_backend.calcOpticalFlowPyrLK(
             gray_prev, gray_curr, old, None, **lk)
         if new is None or status_forward is None:
             return None
@@ -227,7 +230,7 @@ class VisualVelocityEstimator:
         if not valid.any():
             return None
         old, new = old[valid], new[valid]
-        back, status_backward, _ = cv2.calcOpticalFlowPyrLK(
+        back, status_backward, _ = self.vision_backend.calcOpticalFlowPyrLK(
             gray_curr, gray_prev, new, None, **lk)
         if back is None or status_backward is None:
             return None
@@ -290,7 +293,8 @@ class VisualVelocityEstimator:
     def _replenish(self, gray, pts, cam, max_points=300, *, pixel_scale=1.0):
         """Scale configured full-resolution feature spacing to the selected layer."""
         min_distance = max(1.0, self.feature_min_distance / pixel_scale)
-        return replenish(gray, pts, cam, max_points, min_distance=min_distance)
+        return replenish(gray, pts, cam, max_points, min_distance=min_distance,
+                         backend=self.vision_backend)
 
     def compensate_vertical(self, good_old, good_new, triangles, min_area=4.0):
         """Estimate and remove radial expansion from the tracked mesh flow."""

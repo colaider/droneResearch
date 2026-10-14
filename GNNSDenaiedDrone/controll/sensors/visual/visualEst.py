@@ -31,7 +31,7 @@ class VisulaEst(VisualVelocityEstimator):
     def __init__(self, camera_config: StereoCameraConfig, *, image_filters: tuple[str, ...],
                  convert_to_grayscale: bool, filters_enabled: bool,
                  filter_kernel_size: int, pyramid_levels: int,
-                 max_stereo_skew_s: float):
+                 max_stereo_skew_s: float, vision_backend=None):
         if not np.isfinite(max_stereo_skew_s) or max_stereo_skew_s < 0:
             raise ValueError('max_stereo_skew_s must be finite and nonnegative')
 
@@ -66,14 +66,15 @@ class VisulaEst(VisualVelocityEstimator):
         self.imu_att = np.zeros(3)
         self.previous_cmd_vel = np.zeros(4)
 
-        self._init_velocity_estimator(self.frame_processor.pyramid_levels)
+        self._init_velocity_estimator(
+            self.frame_processor.pyramid_levels, vision_backend=vision_backend)
         self.depth_median = np.nan
         self.depth_valid_frac = 0.0
         self.depth_points = np.empty((0, 3))
         self.previous_depth = None
         self.current_depth = None
         self.depth_velocity_z = np.nan
-        self.stereo = SparseStereoDepth()
+        self.stereo = SparseStereoDepth(backend=self.vision_backend)
         self.depth_by_layer = []
         self.depth_colors = np.empty((0, 3), np.uint8)
         self.depth_sigma = np.empty(0)
@@ -112,6 +113,7 @@ class VisulaEst(VisualVelocityEstimator):
         prepared = self.frame_processor.process(frame, idx)
         height, width = prepared.frames[0].shape[:2]
         self.frame_size = prepared.frames[0].shape
+        self.vision_backend.begin_frame(prepared)
         self.buffer.append(prepared)
         self.current_frame = prepared.display_copy()
 
