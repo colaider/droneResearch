@@ -10,12 +10,12 @@ class Controller:
         # outer loop: feedback-linearization model + position/yaw PD (4-DOF: x, y, z, yaw)
         self.k_f1 = np.array([0.5, 0.5, 0.5, 0.8])      # control effectiveness (inverted)
         self.k_f2 = np.array([0.15, 0.15, 0.2, 0.2])    # modelled drift / damping (compensated)
-        self.kp_pos = np.diag([0.03, 0.03, 0.25, 0.06])
+        self.kp_pos = np.diag([0.03, 0.03, 0.55, 0.06])
         self.kd_pos = np.diag([0.02, 0.02, 0.005, 0.1])
 
         # inner loop: velocity error -> tilt/throttle (gains from the swarm blueprint)
         self.kp_vel = np.array([2.0, 2.0, 1.0])
-        self.ki_vel = np.array([0.4, 0.04, 0.4])
+        self.ki_vel = np.array([0.4, 0.04, 0.8])
         self.kd_vel = np.array([0.01, 0.01, 0.01])
         self._last_vel_err = np.zeros(3)
         self._vel_err_sum = np.zeros(3)
@@ -25,6 +25,8 @@ class Controller:
 
         self._pr_setpoint = None
         self._pr_dr_setpoint = np.zeros(4)
+
+        self.posCMD = np.zeros(4)
 
 
     def reset(self):
@@ -63,6 +65,7 @@ class Controller:
         U = np.linalg.inv(self.f1(yaw)) @ (v + self.f2(yaw) @ X_d_body)  # target vel [vx,vy,vz,yaw_rate]
         # U[:3] = np.clip(U[:3], -0.05, 0.05)                        
         # U[3] = np.clip(U[3], 0,  0.5)
+        self.posCMD = U
         self._pr_setpoint = setpoint.copy()
         self._pr_dr_setpoint = S_d
         return self._velocity_to_cmd(U, X_d_body[:3])    # inner loop on BODY velocity
@@ -88,7 +91,7 @@ class Controller:
         out = P + self.ki_vel * self._vel_err_sum + D
         pitch = float(np.clip(out[0], -self.max_tilt, self.max_tilt))
         roll = float(np.clip(-out[1], -self.max_tilt, self.max_tilt))
-        throttle = float(np.clip(self.hover_throttle + out[2], 0.0, .45))
+        throttle = float(np.clip(self.hover_throttle + out[2], 0.0, .5))
         return np.array([roll, pitch, yaw_rate_target, throttle])
 
 
