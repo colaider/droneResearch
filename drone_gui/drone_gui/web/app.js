@@ -3,7 +3,6 @@
 // One SSE connection carries the whole state object at 5 Hz. EventSource reconnects by
 // itself, so a restart of the server (or of the drone) just resumes the page.
 let lastState = null;
-let cameraStarted = false;
 // The state arrives at 5 Hz, but rebuilding a table that often destroys the buttons under
 // the pointer mid-click and makes the list flicker. Both lists are rebuilt only when their
 // content actually changed.
@@ -76,24 +75,7 @@ function render(state) {
   renderSensors(flight, link);
   renderPosition(state.position);
 
-  // --- camera
-  const sub = $('camera-sub');
-  const stereo = state.camera.stereo;
-  sub.textContent = state.camera.age === null ? ''
-    : '· ' + state.camera.frames + ' frames' + (stereo && stereo.fps ? ', ' + fmt(stereo.fps, 1) + ' fps' : '');
-  const haveFrames = state.camera.age !== null && state.camera.age < 5;
-  $('camera').classList.toggle('live', haveFrames);
-  $('camera-placeholder').style.display = haveFrames ? 'none' : 'block';
-  if (haveFrames && !cameraStarted) {
-    // Start the MJPEG stream only once there is something to show, so the <img> does not
-    // sit on a dead connection from page load.
-    $('camera').src = '/camera/stream?t=' + Date.now();
-    cameraStarted = true;
-  }
-  if (!haveFrames && cameraStarted && state.camera.age === null) {
-    $('camera').removeAttribute('src');
-    cameraStarted = false;
-  }
+  renderCameras(state.cameras);
 
   // --- board facts
   const kv = $('board-kv');
@@ -118,6 +100,175 @@ function render(state) {
   if (label) label.textContent = 'last ' + Math.round((state.window_seconds || 120) / 60 * 10) / 10 + ' minutes';
 }
 
+// --- cameras: one view per tile, each an MJPEG stream of the topic picked in its menu.
+// The server only receives a topic from the board while some stream shows it, so a view
+// is what makes its frames cross the link. Browsers allow 6 connections per site and the
+// state stream takes one, hence the cap.
+const MAX_VIEWS = 4;
+const VIEWS_KEY = 'drone_gui.cameraViews';
+let views = null;                 // [{topic, wide, ...elements}], built on the first state
+let cameraTopics = [];
+let topicsSignature = '';
+
+function saveViews() {
+  try {
+    localStorage.setItem(VIEWS_KEY, JSON.stringify(views.map((v) => ({topic: v.topic, wide: v.wide}))));
+  } catch (error) { /* private window or blocked storage: the layout just is not kept */ }
+}
+
+function loadViews(defaultTopic) {
+  try {
+    const saved = JSON.parse(localStorage.getItem(VIEWS_KEY) || 'null');
+    if (Array.isArray(saved) && saved.length) {
+      return saved.slice(0, MAX_VIEWS).filter((v) => v && typeof v.topic === 'string');
+    }
+  } catch (error) { /* fall through to the default */ }
+  return [{topic: defaultTopic, wide: false}];
+}
+
+function startStream(view) {
+  view.img.src = '/camera/stream?topic=' + encodeURIComponent(view.topic) + '&t=' + Date.now();
+}
+
+function addView(topic, wide) {
+  const view = {topic, wide: !!wide, removed: false};
+  view.el = document.createElement('div');
+  view.el.className = 'view';
+  view.el.innerHTML =
+    '<div class="view-bar"><select></select><span class="view-info"></span>' +
+    '<button class="icon" title="full width">&#x2922;</button>' +
+    '<button class="icon danger" title="remove this view">&times;</button></div>' +
+    '<div class="camera-wrap"><img alt=""><div class="camera-placeholder"></div></div>';
+  view.select = view.el.querySelector('select');
+  view.info = view.el.querySelector('.view-info');
+  view.img = view.el.querySelector('img');
+  view.placeholder = view.el.querySelector('.camera-placeholder');
+  const [wideButton, removeButton] = view.el.querySelectorAll('button');
+
+  view.select.onchange = () => {
+    view.topic = view.select.value;
+    view.img.classList.remove('live');
+    startStream(view);
+    saveViews();
+    updateView(view);
+  };
+  wideButton.onclick = () => {
+    view.wide = !view.wide;
+    view.el.classList.toggle('wide', view.wide);
+    saveViews();
+  };
+  removeButton.onclick = () => {
+    view.removed = true;
+    view.img.removeAttribute('src');          // closes the stream, so the topic is unwatched
+    view.el.remove();
+    views = views.filter((v) => v !== view);
+    saveViews();
+    updateAddButton();
+  };
+  // A stream that drops (panel restarted, network blip) is reopened.
+  view.img.onerror = () => {
+    if (!view.removed && view.img.getAttribute('src')) setTimeout(() => { if (!view.removed) startStream(view); }, 2000);
+  };
+  view.el.classList.toggle('wide', view.wide);
+  $('camera-grid').appendChild(view.el);
+  views.push(view);
+  fillTopicMenu(view, true);
+  startStream(view);
+  updateView(view);
+  updateAddButton();
+  return view;
+}
+
+function updateAddButton() {
+  const button = $('camera-add');
+  button.disabled = views.length >= MAX_VIEWS;
+  button.title = button.disabled
+    ? 'at most ' + MAX_VIEWS + ' views: browsers open only 6 connections to the panel'
+    : 'show another camera topic';
+}
+
+function topicLabel(entry) {
+  return entry.topic + (entry.kind === 'raw' ? '  (raw)' : '') +
+    (entry.publishers === 0 ? '  - no publisher' : '');
+}
+
+// Rebuilt only when the topic list changes, and never while the menu is open.
+function fillTopicMenu(view, force) {
+  if (!force && document.activeElement === view.select) return;
+  const entries = cameraTopics.slice();
+  if (!entries.some((e) => e.topic === view.topic)) {
+    entries.unshift({topic: view.topic, kind: null, publishers: null, missing: true});
+  }
+  view.select.innerHTML = '';
+  entries.forEach((entry) => {
+    const option = document.createElement('option');
+    option.value = entry.topic;
+    option.textContent = entry.missing ? entry.topic + '  - not on the board' : topicLabel(entry);
+    view.select.appendChild(option);
+  });
+  view.select.value = view.topic;
+}
+
+function updateView(view) {
+  const entry = cameraTopics.find((e) => e.topic === view.topic);
+  const live = !!entry && entry.age !== null && entry.age < 3;
+  view.img.classList.toggle('live', live);
+  view.placeholder.style.display = live ? 'none' : 'block';
+
+  let info, dead = false;
+  if (!entry) {
+    info = 'not on the board';
+    dead = true;
+  } else if (live) {
+    info = fmt(entry.fps, 1) + ' fps' +
+      (entry.source_hz ? ' of ' + fmt(entry.source_hz, 1) + ' published' : '') +
+      (entry.kind === 'raw' ? ' · JPEG made on the board' : '');
+  } else if (entry.publishers === 0) {
+    info = 'no publisher';
+    dead = true;
+  } else {
+    info = 'waiting for frames';
+  }
+  view.info.textContent = info;
+  view.info.classList.toggle('dead', dead);
+  view.placeholder.textContent = !entry
+    ? view.topic + ' is not in the board\'s ROS graph - is its node running?'
+    : entry.publishers === 0 ? 'nothing publishes ' + view.topic + ' right now'
+    : 'waiting for frames from ' + view.topic;
+}
+
+function renderCameras(cameras) {
+  cameraTopics = cameras.topics || [];
+  if (views === null) {
+    views = [];
+    loadViews(cameras.default).forEach((v) => addView(v.topic, v.wide));
+  }
+
+  const signature = JSON.stringify(cameraTopics.map((e) => [e.topic, e.kind, e.publishers === 0]));
+  const changed = signature !== topicsSignature;
+  if (changed) topicsSignature = signature;
+  views.forEach((view) => {
+    if (changed || view.select.options.length === 0) fillTopicMenu(view, false);
+    updateView(view);
+  });
+
+  const published = cameraTopics.filter((e) => e.publishers > 0).length;
+  $('camera-sub').textContent = cameraTopics.length
+    ? '· ' + published + ' of ' + cameraTopics.length + ' image topics publishing'
+    : '· no image topics on the board';
+}
+
+$('camera-add').onclick = () => {
+  if (views === null || views.length >= MAX_VIEWS) return;
+  // Prefer a publishing topic that no view shows yet.
+  const shown = new Set(views.map((v) => v.topic));
+  const next = cameraTopics.find((e) => e.publishers > 0 && !shown.has(e.topic))
+    || cameraTopics.find((e) => !shown.has(e.topic))
+    || cameraTopics[0];
+  addView(next ? next.topic : (lastState ? lastState.cameras.default : '/stereo/preview/compressed'), false);
+  saveViews();
+};
+
 // The RB3's own IMU, barometer and magnetometer. The sensors themselves are on the sensor
 // core and owe nothing to the flight controller, but they are PUBLISHED by the rb3_control
 // node, so they stop with it. Hence "not streaming" here whenever drone-control is down,
@@ -134,21 +285,25 @@ function renderPosition(position) {
     if (cell) cell.textContent = (value === null || value === undefined) ? '--' : fmt(value, digits);
   };
 
-  set('pos-x', odom ? odom.position[0] : null, 2);
-  set('pos-y', odom ? odom.position[1] : null, 2);
-  set('pos-z', odom ? odom.position[2] : (position.fc_altitude_m ?? null), 2);
+  // Odometry wins; otherwise the control loop's own estimate (controll/main.py publishes the
+  // fused IMU + visual position and velocity it flies by on /vo/status).
+  const voPosition = vo && Array.isArray(vo.position) ? vo.position : null;
+  const pos = odom ? odom.position : voPosition;
+  set('pos-x', pos ? pos[0] : null, 2);
+  set('pos-y', pos ? pos[1] : null, 2);
+  set('pos-z', pos ? pos[2] : (position.fc_altitude_m ?? null), 2);
   const posSource = $('pos-source');
   if (posSource) {
-    const missing = !odom;
-    posSource.classList.toggle('dead', missing);
+    posSource.classList.toggle('dead', !pos);
     posSource.textContent = odom
       ? ('odom' + (odom.frame ? ' · frame ' + odom.frame : ''))
+      : voPosition ? 'control loop, fused IMU + visual' + (vo.mode ? ' · ' + vo.mode : '')
       : 'no X/Y — nothing publishes odometry yet (z is the FC height)';
   }
 
-  // The estimator reports velocity, not position: /vo/status carries vx, vy and yaw rate.
+  const voVelocity = vo && Array.isArray(vo.velocity) ? vo.velocity : null;
   const velocity = odom ? odom.velocity
-    : (vo ? [vo.vx, vo.vy, null] : null);
+    : voVelocity || (vo ? [vo.vx, vo.vy, null] : null);
   set('vel-x', velocity ? velocity[0] : null, 2);
   set('vel-y', velocity ? velocity[1] : null, 2);
   set('vel-z', velocity ? velocity[2] : null, 2);
@@ -156,6 +311,7 @@ function renderPosition(position) {
   if (velSource) {
     velSource.classList.toggle('dead', !velocity);
     velSource.textContent = odom ? 'odom twist'
+      : voVelocity ? 'control loop, fused · visual vx ' + fmt(vo.vx, 2) + ', vy ' + fmt(vo.vy, 2)
       : vo ? 'stereo estimator (vx, vy only)'
       : 'no velocity source';
   }
@@ -167,7 +323,9 @@ function renderPosition(position) {
   if (voSource) {
     voSource.classList.toggle('dead', !vo);
     voSource.textContent = vo
-      ? ((vo.estimator_ms ? vo.estimator_ms + ' ms/frame · ' : '') + (vo.mode || ''))
+      ? ((vo.estimator_ms ? vo.estimator_ms + ' ms/frame · ' : '') +
+         (typeof vo.depth_valid === 'number' ? 'depth valid ' + Math.round(vo.depth_valid * 100) + '% · ' : '') +
+         (vo.mode || ''))
       : 'estimator not running (no VO node publishing /vo)';
   }
 
@@ -383,8 +541,16 @@ $('reboot').onclick = async () => {
   await fetch('/api/reboot', {method: 'POST'});
 };
 
+let reconnecting = false;
+
 function connect() {
   const source = new EventSource('/api/stream');
+  source.onopen = () => {
+    // The panel came back: an MJPEG stream from before keeps showing its last frame
+    // instead of failing, so reopen them all.
+    if (reconnecting && views) views.forEach(startStream);
+    reconnecting = false;
+  };
   source.onmessage = (event) => {
     document.body.classList.remove('stale');
     try { render(JSON.parse(event.data)); } catch (error) { /* ignore a torn frame */ }
@@ -392,6 +558,7 @@ function connect() {
   source.onerror = () => {
     document.body.classList.add('stale');
     source.close();
+    reconnecting = true;
     setTimeout(connect, 2000);        // the server may be restarting
   };
 }

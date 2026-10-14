@@ -112,13 +112,20 @@ class StereoCameraConfig:
         return d / np.linalg.norm(d)
 
 
-# RB3 nominal model published by rb3/camera_topic.py: 640x400, 85-degree
-# vertical FOV, 50 mm baseline, with horizontal left-to-right disparity.
+# The RB3 stereo pair as rb3/camera_topic.py publishes it: 640x400, rectified with
+# rb3/rb3_stereo/config/stereo_calib.npz (both images share one pinhole model, rows aligned).
+# From that calibration's Rectifier at 640x400 (64.6 deg vertical FOV). Recalibrating, or running
+# the cameras at 1280x800 (focal x2), means updating these:
+#   python3 -c "from rb3_stereo import calibration as c; r = c.Rectifier(c.load(c.default_path()),
+#               (640, 400)); print(r.focal_px, r.baseline, r.disparity_direction)"
+# The disparity runs +x (left -> right image): cam0a, the "left" camera, sits on the image's
+# +x side of cam0b.
+STEREO_CAM_FOCAL_PX = 316.31
 STEREO_CAM = StereoCameraConfig(
     res=(640, 400),
-    left_focal=400 / (2 * np.tan(np.radians(85.0) / 2)),
-    right_focal=400 / (2 * np.tan(np.radians(85.0) / 2)),
-    baseline=0.05,
-    mount_pos=(0.025, 0.0, 0.0),
-    epipolar_direction=(-1.0, 0.0),
+    left_focal=STEREO_CAM_FOCAL_PX,
+    right_focal=STEREO_CAM_FOCAL_PX,
+    baseline=0.06107,
+    mount_pos=(0.06107 / 2, 0.0, 0.0),
+    epipolar_direction=(1.0, 0.0),
 )

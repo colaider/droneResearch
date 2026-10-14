@@ -90,7 +90,7 @@ Environment variables work too (`DRONE_HOST`, `DRONE_GUI_PORT`, `DRONE_GUI_BIND`
 | Flight controller | who has control (radio or RB3), armed state, arming flags, roll/pitch/yaw, both altitudes, battery, and the sticks the RB3 sent next to the ones the FC used |
 | RB3 sensors | the board's own IMU, barometer and magnetometer: gyro, accel, mag with field magnitude, pressure and baro altitude, each with its stream rate, sample count and restart count. The sensors are on the sensor core, but `rb3_control` publishes them, so they read "not streaming" while `drone-control` is down |
 | Position | x/y/z and velocity, each labelled with where it came from. The flight controller supplies height only - Betaflight has no X/Y without GPS and none is fitted - so x/y has to come from the stereo estimator |
-| Stereo preview | the `/stereo/preview/compressed` JPEG stream as MJPEG |
+| Cameras | up to 4 views, each showing any image topic on the board (`CompressedImage` as published, raw `Image` encoded to JPEG on the board), e.g. `/stereo/preview/compressed` next to `/stereoVisualReturn/processed/compressed`. Only topics a view shows are subscribed and sent over the link |
 | History | 2 minutes of altitude, attitude and battery |
 | Processes | every unit's state, with start / stop / restart and a journal viewer |
 | Board | uptime, load, temperature, memory, disk, whether `/dev/ttyACM0` exists and **which PID holds it**, and how many of the 4 sensor-core streams are alive |

@@ -124,14 +124,39 @@ button + button { margin-left: 5px; }
 .row-actions { display: flex; align-items: center; gap: 12px; margin-top: 12px; }
 .hint { font-size: 12px; color: var(--muted); }
 
+.card h2 .h2-action {
+  float: right; margin-top: -4px; text-transform: none; letter-spacing: 0;
+}
+
+.camera-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(340px, 100%), 1fr)); gap: 12px; }
+.view { min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.view.wide { grid-column: 1 / -1; }
+.view-bar { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.view-bar select {
+  flex: 0 1 auto; min-width: 0; max-width: 60%;
+  font: 500 12px var(--mono); color: var(--text);
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px; padding: 4px 6px;
+}
+.view-bar select:focus { outline: none; border-color: var(--accent); }
+.view-info {
+  flex: 1 1 auto; min-width: 0; font: 500 11px var(--mono); color: var(--muted);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.view-info.dead { color: var(--bad); }
+button.icon { padding: 3px 8px; font-size: 14px; line-height: 1; flex: 0 0 auto; }
+.view-bar button + button { margin-left: 0; }
+
 .camera-wrap {
   position: relative; background: #000; border: 1px solid var(--line);
   border-radius: 8px; overflow: hidden; min-height: 140px;
   display: flex; align-items: center; justify-content: center;
 }
-#camera { width: 100%; display: none; }
-#camera.live { display: block; }
-.camera-placeholder { color: var(--muted); font-size: 12px; padding: 30px 10px; text-align: center; }
+.camera-wrap img { width: 100%; display: none; }
+.camera-wrap img.live { display: block; }
+.camera-placeholder {
+  color: var(--muted); font-size: 12px; padding: 30px 10px; text-align: center;
+  overflow-wrap: anywhere;
+}
 
 .plots { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; }
 figure { margin: 0; }

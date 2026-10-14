@@ -1,8 +1,9 @@
 """Telemetry over SSH: run agent.py on the board, read its JSON lines.
 
 This is the default transport. It needs no DDS reachability (which WSL does not have) and
-nothing installed on the board - agent.py is piped into `python3 -u -` each time the link
-comes up, so it cannot drift from this repo.
+nothing installed on the board - agent.py is piped into python3 each time the link comes up,
+so it cannot drift from this repo. Its stdin stays open afterwards: that is how the agent
+learns which camera topics the open pages are showing.
 
 The link reconnects on its own with a backoff, which is what makes "monitor the drone even if
 it has been restarted" work: a reboot of the board, or of the flight controller node, just
@@ -11,6 +12,7 @@ shows up as a gap and then data again.
 from __future__ import annotations
 
 import base64
+import io
 import json
 import os
 import subprocess
@@ -20,8 +22,12 @@ import time
 from .store import Store
 
 AGENT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "agent.py")
+# Reads the agent's source (its length in bytes on the first line, then the source) and runs
+# it, leaving the rest of stdin for commands. `python3 -` would read stdin to EOF first.
+BOOTSTRAP = ('import sys;b=sys.stdin.buffer;'
+             'exec(compile(b.read(int(b.readline())),"agent.py","exec"))')
 RECONNECT_DELAY = 3.0
-MAX_LINE = 4 * 1024 * 1024          # a preview frame in base64 is well under this
+MAX_LINE = 8 * 1024 * 1024          # a full-resolution colour frame in base64 fits
 
 
 class SshLink:
@@ -38,6 +44,7 @@ class SshLink:
         self._stop = threading.Event()
         self.thread = threading.Thread(target=self._run, daemon=True, name="ssh-link")
         self.process = None
+        self._stdin_lock = threading.Lock()
 
     # --- lifecycle --------------------------------------------------------
     def start(self):
@@ -53,9 +60,9 @@ class SshLink:
     def command(self):
         remote = ("source /opt/ros/jazzy/setup.bash && "
                   "source ~/ros2_ws/install/setup.bash 2>/dev/null; "
-                  "export ROS_DOMAIN_ID=%d && exec python3 -u - %s %s %s"
-                  % (self.cfg.domain_id, self.cfg.drone_ns, self.cfg.stereo_ns,
-                     self.cfg.vo_ns))
+                  "export ROS_DOMAIN_ID=%d && exec python3 -u -c %s %s %s %s"
+                  % (self.cfg.domain_id, _quote(BOOTSTRAP), self.cfg.drone_ns,
+                     self.cfg.stereo_ns, self.cfg.vo_ns))
         return [
             "ssh", "-i", self.cfg.ssh_key,
             "-o", "BatchMode=yes",
@@ -72,14 +79,24 @@ class SshLink:
             self.attempts += 1
             try:
                 with open(AGENT, "rb") as script:
-                    self.process = subprocess.Popen(
-                        self.command, stdin=script, stdout=subprocess.PIPE,
-                        stderr=subprocess.PIPE, bufsize=1, text=True)
+                    source = script.read()
+                # Binary pipes: a text-mode stdin on Windows would turn \n into \r\n and the
+                # byte count in the header would no longer match.
+                self.process = subprocess.Popen(
+                    self.command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE)
             except FileNotFoundError as exc:
                 self.last_error = "ssh not available: %s" % exc
                 self.on_event(self.last_error, "error")
                 return
 
+            with self._stdin_lock:
+                try:
+                    self.process.stdin.write(b"%d\n" % len(source) + source)
+                    self.process.stdin.flush()
+                except OSError:
+                    pass                    # ssh already died; _read collects why
+            self._send_watch()
             self._read(self.process)
 
             if self._stop.is_set():
@@ -90,8 +107,22 @@ class SshLink:
                               % (": " + self.last_error if self.last_error else ""), "warning")
             self._stop.wait(RECONNECT_DELAY)
 
+    def _send_watch(self):
+        """Tell the running agent which camera topics to subscribe to and send."""
+        process = self.process
+        if process is None or process.poll() is not None:
+            return                          # the next agent gets the list when it starts
+        line = json.dumps({"type": "watch", "topics": self.store.watched()}) + "\n"
+        with self._stdin_lock:
+            try:
+                process.stdin.write(line.encode("utf-8"))
+                process.stdin.flush()
+            except OSError:
+                pass
+
     def _read(self, process):
-        for line in process.stdout:
+        stdout = io.TextIOWrapper(process.stdout, encoding="utf-8", errors="replace")
+        for line in stdout:
             if self._stop.is_set():
                 return
             line = line.strip()
@@ -107,7 +138,7 @@ class SshLink:
                 self.store.apply(message.get("values") or {})
             elif kind == "frame":
                 try:
-                    self.store.apply_frame(base64.b64decode(message["jpeg"]))
+                    self.store.apply_frame(message["topic"], base64.b64decode(message["jpeg"]))
                 except (KeyError, ValueError):
                     pass
             elif kind == "hello":
@@ -122,7 +153,8 @@ class SshLink:
             self.last_line = time.monotonic()
 
         # stdout closed: collect why, so the panel can show something useful.
-        stderr = (process.stderr.read() or "").strip() if process.stderr else ""
+        stderr = (process.stderr.read() or b"").decode("utf-8", "replace").strip() \
+            if process.stderr else ""
         if stderr:
             self.last_error = stderr.splitlines()[-1][:200]
         process.wait()
@@ -137,15 +169,19 @@ class SshLink:
     def rates(self):
         return self.store.rates()
 
-    def latest_frame(self, max_age=5.0):
-        return self.store.latest_frame(max_age)
+    def latest_frame(self, topic, max_age=5.0):
+        return self.store.latest_frame(topic, max_age)
 
-    def frame_age(self):
-        return self.store.frame_age()
+    def frame_stats(self):
+        return self.store.frame_stats()
 
-    @property
-    def frame_count(self):
-        return self.store.frame_count
+    def watch(self, topic):
+        if self.store.watch(topic):
+            self._send_watch()
+
+    def unwatch(self, topic):
+        if self.store.unwatch(topic):
+            self._send_watch()
 
     def plot(self, *names):
         return self.store.plot(*names)

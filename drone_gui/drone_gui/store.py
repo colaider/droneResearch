@@ -44,15 +44,24 @@ class Series:
         return ([round(t - origin, 2) for t, _ in self.points], [v for _, v in self.points])
 
 
+class Frame:
+    """The latest JPEG of one camera topic."""
+
+    def __init__(self):
+        self.jpeg = None
+        self.stamp = 0.0
+        self.count = 0
+        self.arrivals = collections.deque(maxlen=20)
+
+
 class Store:
     def __init__(self, history_seconds=120.0, on_event=None):
         self.lock = threading.Lock()
         self.on_event = on_event or (lambda *a, **k: None)
         self.values = {}                    # name -> (value, monotonic stamp)
         self.counts = collections.Counter()
-        self.frame = None
-        self.frame_stamp = 0.0
-        self.frame_count = 0
+        self.frames = {}                    # camera topic -> Frame
+        self.watchers = collections.Counter()   # camera topic -> open streams showing it
         self.started = time.monotonic()
         self.series = {name: Series(history_seconds) for name in
                        ("altitude", "baro_altitude", "battery", "roll", "pitch")}
@@ -101,11 +110,34 @@ class Store:
                     self.on_event("flight controller node restarted", "warning")
                 self._last_frames_sent = frames
 
-    def apply_frame(self, jpeg):
+    def apply_frame(self, topic, jpeg):
+        now = time.monotonic()
         with self.lock:
-            self.frame = jpeg
-            self.frame_stamp = time.monotonic()
-            self.frame_count += 1
+            frame = self.frames.get(topic)
+            if frame is None:
+                frame = self.frames[topic] = Frame()
+            frame.jpeg, frame.stamp = jpeg, now
+            frame.count += 1
+            frame.arrivals.append(now)
+
+    # --- which camera topics an open page is showing ----------------------
+    def watch(self, topic):
+        """One more stream shows `topic`. True if that changed the set of watched topics."""
+        with self.lock:
+            self.watchers[topic] += 1
+            return self.watchers[topic] == 1
+
+    def unwatch(self, topic):
+        with self.lock:
+            self.watchers[topic] -= 1
+            if self.watchers[topic] > 0:
+                return False
+            del self.watchers[topic]
+            return True
+
+    def watched(self):
+        with self.lock:
+            return sorted(self.watchers)
 
     # --- reading ----------------------------------------------------------
     def get(self, name, max_age=STALE_AFTER):
@@ -128,17 +160,28 @@ class Store:
         with self.lock:
             return {name: count / elapsed for name, count in self.counts.items()}
 
-    def latest_frame(self, max_age=5.0):
+    def latest_frame(self, topic, max_age=5.0):
         with self.lock:
-            if self.frame is None:
+            frame = self.frames.get(topic)
+            if frame is None or frame.jpeg is None:
                 return None
-            if max_age is not None and (time.monotonic() - self.frame_stamp) > max_age:
+            if max_age is not None and (time.monotonic() - frame.stamp) > max_age:
                 return None
-            return self.frame
+            return frame.jpeg
 
-    def frame_age(self):
+    def frame_stats(self):
+        """Per camera topic: seconds since the last frame, frames received, and the rate they
+        arrive at here (after the agent's throttling, so at most its FRAME_HZ)."""
+        now = time.monotonic()
         with self.lock:
-            return (time.monotonic() - self.frame_stamp) if self.frame else None
+            out = {}
+            for topic, frame in self.frames.items():
+                times = frame.arrivals
+                fps = 0.0
+                if len(times) > 1 and now - times[-1] < 2.0 and times[-1] > times[0]:
+                    fps = (len(times) - 1) / (times[-1] - times[0])
+                out[topic] = {"age": now - frame.stamp, "frames": frame.count, "fps": fps}
+            return out
 
     def plot(self, *names):
         """Each series carries its own x: they run at very different rates (25 Hz baro,
