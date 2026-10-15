@@ -31,7 +31,7 @@ class VisulaEst(VisualVelocityEstimator):
     def __init__(self, camera_config: StereoCameraConfig, *, image_filters: tuple[str, ...],
                  convert_to_grayscale: bool, filters_enabled: bool,
                  filter_kernel_size: int, pyramid_levels: int,
-                 max_stereo_skew_s: float):
+                 max_stereo_skew_s: float, vision_backend=None):
         if not np.isfinite(max_stereo_skew_s) or max_stereo_skew_s < 0:
             raise ValueError('max_stereo_skew_s must be finite and nonnegative')
 
@@ -41,6 +41,16 @@ class VisulaEst(VisualVelocityEstimator):
         self.foc_l = float(camera_config.focal_px)
         self.dt = 0.01
         self.camera_saperation = float(camera_config.baseline)
+        camera_axes = camera_config.camera_axes("left")
+        camera_position = np.asarray(camera_config.camera_pos("left"), dtype=float)
+        configured_offset = getattr(camera_config, "camera_offset_from_yaw_center", None)
+        self.camera_offset_from_yaw_center = np.asarray(
+            configured_offset if configured_offset is not None else (
+                camera_position @ camera_axes[:, 0],
+                -camera_position @ camera_axes[:, 1],
+            ),
+            dtype=float,
+        )
         self.disparity_direction = np.asarray(
             camera_config.disparity_direction(), dtype=float
         )
@@ -63,21 +73,16 @@ class VisulaEst(VisualVelocityEstimator):
         self.imu_att = np.zeros(3)
         self.previous_cmd_vel = np.zeros(4)
 
-        self.buf_ang_vel = deque(maxlen=20)
-        self.buf_att = deque(maxlen=20)
-        self.buf_pos = deque(maxlen=20)
-        self.avg_ang_vel = np.zeros(3)
-        self.avg_att = np.zeros(3)
-        self.avg_pos = np.zeros(3)
-
-        self._init_velocity_estimator(self.frame_processor.pyramid_levels)
+        self._init_velocity_estimator(
+            self.frame_processor.pyramid_levels, vision_backend=vision_backend
+        )
         self.depth_median = np.nan
         self.depth_valid_frac = 0.0
         self.depth_points = np.empty((0, 3))
         self.previous_depth = None
         self.current_depth = None
         self.depth_velocity_z = np.nan
-        self.stereo = SparseStereoDepth()
+        self.stereo = SparseStereoDepth(backend=self.vision_backend)
         self.depth_by_layer = []
         self.depth_colors = np.empty((0, 3), np.uint8)
         self.depth_sigma = np.empty(0)
@@ -113,18 +118,6 @@ class VisulaEst(VisualVelocityEstimator):
         return self.frame_processor.preprocess(frame)
 
     def update_frame(self, frame, idx=None):
-        next_dt = None
-        if isinstance(frame, StereoFrame):
-            if frame.stereo_skew > self.max_stereo_skew_s:
-                raise ValueError('Stereo capture skew exceeds max_stereo_skew_s')
-            if self.buffer:
-                previous = self.buffer[-1]
-                if frame.sequence_id <= previous.idx:
-                    raise ValueError('Stereo sequence IDs must increase')
-                if previous.left_timestamp is not None:
-                    next_dt = frame.left_timestamp - previous.left_timestamp
-                    if next_dt <= 0 or frame.right_timestamp <= previous.right_timestamp:
-                        raise ValueError('Stereo capture timestamps must increase for both cameras')
         prepared = self.frame_processor.process(frame, idx)
         height, width = prepared.frames[0].shape[:2]
         if (width, height) != self.resolution:
@@ -132,8 +125,7 @@ class VisulaEst(VisualVelocityEstimator):
                 "Frame resolution differs from calibration; create a new estimator "
                 "for this output size"
             )
-        if next_dt is not None:
-            self.set_dt(float(next_dt))
+        self.vision_backend.begin_frame(prepared)
         self.frame_size = prepared.frames[0].shape
         self.buffer.append(prepared)
         self.current_frame = prepared.display_copy()
@@ -142,14 +134,12 @@ class VisulaEst(VisualVelocityEstimator):
                    drone_ang_vel=None, imu_att=None):
         """Process StereoFrame, or legacy [left,right] plus idx.
 
-        Sensor values may be supplied together to update the estimator and
-        buffer one sensor sample as part of this call. Existing callers may
-        continue buffering faster sensor samples with ``push_sensors()``.
+        Sensor values may be supplied together to update the estimator. The
+        latest supplied sensor values are used directly without averaging.
         Returns the display Frame. Read camera_velocity ([vx, vy, vz, yaw_rate]),
         depth_points ([u, v, optical_depth]), depth_colors, and depth_sigma on
-        this estimator. Capture metadata is on current_frame.
-        Typed inputs use left capture-time differences for dt. Legacy callers
-        retain their explicit set_dt() convention and have no invented timestamp.
+        this estimator.         Capture metadata is on current_frame. The configured dt is used for
+        typed and legacy frames; capture timestamps remain metadata only.
         """
         sensor_values = (drone_pos, drone_vel, drone_ang_vel, imu_att)
         if any(value is not None for value in sensor_values):
@@ -161,7 +151,6 @@ class VisulaEst(VisualVelocityEstimator):
             self.drone_vel = np.asarray(drone_vel, dtype=float)
             self.drone_ang_vel = np.asarray(drone_ang_vel, dtype=float)
             self.imu_att = np.asarray(imu_att, dtype=float)
-            self.push_sensors()
 
         self.update_frame(frame, idx)
         self.aply_flow()
@@ -213,23 +202,5 @@ class VisulaEst(VisualVelocityEstimator):
         self.depth_valid_frac = result.valid_fraction
         self.depth_view = result.view
 
-    def push_sensors(self):
-        self.buf_ang_vel.append(np.array(self.drone_ang_vel, dtype=float))
-        self.buf_att.append(np.array(self.imu_att, dtype=float))
-        self.buf_pos.append(np.array(self.drone_pos, dtype=float))
-
-    def _take_sensor_window(self):
-        if self.buf_ang_vel:
-            self.avg_ang_vel = np.mean(np.array(self.buf_ang_vel), axis=0)
-            self.avg_att = np.mean(np.array(self.buf_att), axis=0)
-            self.avg_pos = np.mean(np.array(self.buf_pos), axis=0)
-        else:
-            self.avg_ang_vel = np.array(self.drone_ang_vel, dtype=float)
-            self.avg_att = np.array(self.imu_att, dtype=float)
-            self.avg_pos = np.array(self.drone_pos, dtype=float)
-        self.buf_ang_vel.clear()
-        self.buf_att.clear()
-        self.buf_pos.clear()
-
     def _current_height(self):
-        return float(self.avg_pos[2])
+        return float(self.drone_pos[2])

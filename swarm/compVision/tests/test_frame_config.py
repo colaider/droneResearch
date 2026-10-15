@@ -34,6 +34,28 @@ class FrameConfigTests(unittest.TestCase):
             estimator.camera_config.disparity_direction(), (-1., 0.)
         )
 
+    def test_camera_offset_uses_simulation_mount_geometry_and_allows_override(self):
+        from swarm.compVision.visualEst import VisulaEst
+
+        options = dict(
+            image_filters=(), convert_to_grayscale=True, filters_enabled=True,
+            filter_kernel_size=3, pyramid_levels=2, max_stereo_skew_s=.005,
+        )
+        mounted = StereoCameraConfig(
+            res=(65, 49), left_focal=42.4, right_focal=42.4,
+            baseline=.2, mount_pos=(.1, 0., 0.),
+        )
+        estimator = VisulaEst(mounted, **options)
+        np.testing.assert_allclose(
+            estimator.camera_offset_from_yaw_center, [-.1, 0.]
+        )
+
+        mounted.camera_offset_from_yaw_center = (.02, -.01)
+        overridden = VisulaEst(mounted, **options)
+        np.testing.assert_allclose(
+            overridden.camera_offset_from_yaw_center, [.02, -.01]
+        )
+
     def test_image_processing_options_are_configured_at_estimator_creation(self):
         estimator = make_estimator(
             res=(65, 49),
