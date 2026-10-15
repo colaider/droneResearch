@@ -30,6 +30,8 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 
+from .tracks import ODOM_MAX_AGE, VO_MAX_AGE, displayed_position
+
 WEB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web")
 STREAM_HZ = 5.0
 BOARD_POLL_SECONDS = 3.0
@@ -163,8 +165,10 @@ class State:
             # baro+IMU); there is no X/Y from it at all, since Betaflight only knows position
             # with GPS and none is configured. X/Y has to come from the stereo estimator.
             "position": {
-                "odom": ros.get("odom", 5.0),
-                "vo": ros.get("vo_status", 10.0),
+                # x/y/z as shown, picked by the same function the path recorder uses
+                "shown": displayed_position(ros),
+                "odom": ros.get("odom", ODOM_MAX_AGE),
+                "vo": ros.get("vo_status", VO_MAX_AGE),
                 "fc_altitude_m": ros.get("altitude", 2.0),
                 "baro_altitude_m": ros.get("baro_altitude", 2.0),
             },

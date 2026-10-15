@@ -224,3 +224,5 @@ canvas { width: 100%; background: var(--panel-2); border: 1px solid var(--line);
 #track-3d:active { cursor: grabbing; }
 figcaption b.c-x { color: #ff5f56; } figcaption b.c-y { color: #3ecf8e; } figcaption b.c-z { color: #4da3ff; }
 #camera-motion-card canvas { height: 240px; }
+#track-2d { cursor: grab; touch-action: none; }
+#track-2d:active { cursor: grabbing; }

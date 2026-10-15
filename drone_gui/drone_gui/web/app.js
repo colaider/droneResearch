@@ -286,19 +286,20 @@ function renderPosition(position) {
     if (cell) cell.textContent = (value === null || value === undefined) ? '--' : fmt(value, digits);
   };
 
-  // Odometry wins; otherwise the control loop's own estimate (controll/main.py publishes the
-  // fused IMU + visual position and velocity it flies by on /vo/status).
-  const voPosition = vo && Array.isArray(vo.position) ? vo.position : null;
-  const pos = odom ? odom.position : voPosition;
+  // The server picks the position (tracks.displayed_position): odometry wins, otherwise the
+  // control loop's fused IMU + visual estimate on /vo/status. The path below is recorded from
+  // the very same value, so these numbers are always its newest point.
+  const shown = position.shown || {};
+  const pos = Array.isArray(shown.xyz) ? shown.xyz : null;
   set('pos-x', pos ? pos[0] : null, 2);
   set('pos-y', pos ? pos[1] : null, 2);
   set('pos-z', pos ? pos[2] : (position.fc_altitude_m ?? null), 2);
   const posSource = $('pos-source');
   if (posSource) {
     posSource.classList.toggle('dead', !pos);
-    posSource.textContent = odom
-      ? ('odom' + (odom.frame ? ' · frame ' + odom.frame : ''))
-      : voPosition ? 'control loop, fused IMU + visual' + (vo.mode ? ' · ' + vo.mode : '')
+    posSource.textContent = shown.source === 'odom'
+      ? ('odom' + (shown.frame ? ' · frame ' + shown.frame : ''))
+      : shown.source === 'vo' ? 'control loop, fused IMU + visual' + (shown.mode ? ' · ' + shown.mode : '')
       : 'no X/Y — nothing publishes odometry yet (z is the FC height)';
   }
 
@@ -584,6 +585,7 @@ const track = {
   samples: [],
   loading: false,
   view: {...VIEW3D},
+  view2d: {zoom: 1, cx: null, cy: null},   // cx/cy null = centred on the whole path
 };
 
 function updateTrack(status) {
@@ -687,7 +689,7 @@ $('track-new').onclick = async () => {
 
 function drawTrack() {
   setTrackInfo();
-  drawTrack2D($('track-2d'), track.samples);
+  drawTrack2D($('track-2d'), track.samples, track.view2d);
   drawTrack3D($('track-3d'), track.samples, track.view);
   drawCameraMotion();
 }
@@ -745,15 +747,18 @@ function heightLegend(context, width, b) {
   context.textAlign = 'left';
 }
 
-function drawTrack2D(canvas, samples) {
+function drawTrack2D(canvas, samples, view) {
   const {context, width, height} = prepareCanvas(canvas);
+  canvas.map = null;
   if (!samples.length) return noTrack(context, height, 'no position yet');
   const b = bounds(samples);
 
-  // Equal scale on both axes, at least 2 m across, so a hover does not fill the view with noise.
+  // Fitted: equal scale on both axes, at least 2 m across, so a hover does not fill the view
+  // with noise. Zoom multiplies that scale; a pan replaces the centre (null = follow the fit).
   const span = Math.max(b.x1 - b.x0, b.y1 - b.y0, 2) * 1.2;
-  const cx = (b.x0 + b.x1) / 2, cy = (b.y0 + b.y1) / 2;
-  const scale = Math.min(width, height) / span;
+  const cx = view.cx ?? (b.x0 + b.x1) / 2, cy = view.cy ?? (b.y0 + b.y1) / 2;
+  const scale = Math.min(width, height) / span * view.zoom;
+  canvas.map = {cx, cy, scale, width, height};
   const px = (x) => width / 2 + (x - cx) * scale;
   const py = (y) => height / 2 - (y - cy) * scale;          // y up on screen
 
@@ -777,14 +782,21 @@ function drawTrack2D(canvas, samples) {
   context.fillText('x →', width - 28, height - 16);
   context.fillText('y ↑', 6, 14);
 
-  // the path, coloured by height
-  context.lineWidth = 2;
+  // the path: a straight line between consecutive positions, coloured by height, and a dot
+  // on every recorded position
+  context.lineWidth = 1.5;
   context.lineCap = 'round';
   for (let i = 1; i < samples.length; i++) {
     const a = samples[i - 1], c = samples[i];
     context.strokeStyle = heightColour((a[Z] + c[Z]) / 2, b.z0, b.z1);
     context.beginPath(); context.moveTo(px(a[X]), py(a[Y])); context.lineTo(px(c[X]), py(c[Y]));
     context.stroke();
+  }
+  drawDots(context, samples.map((s) => [px(s[X]), py(s[Y])]), samples, b);
+  if (view.zoom !== 1 || view.cx !== null) {
+    context.fillStyle = '#8b93a7';
+    context.font = '10px ui-monospace, monospace';
+    context.fillText('zoom ' + view.zoom.toFixed(1) + '× · double-click or "fit" to see all', 30, 14);
   }
 
   // start: hollow circle
@@ -876,8 +888,9 @@ function drawTrack3D(canvas, samples, view) {
   }
   for (let i = 1; i < samples.length; i++) {
     const a = samples[i - 1], c = samples[i];
-    line([a[X], a[Y], a[Z]], [c[X], c[Y], c[Z]], heightColour((a[Z] + c[Z]) / 2, b.z0, b.z1), 2);
+    line([a[X], a[Y], a[Z]], [c[X], c[Y], c[Z]], heightColour((a[Z] + c[Z]) / 2, b.z0, b.z1), 1.5);
   }
+  drawDots(context, samples.map((s) => project(s[X], s[Y], s[Z])), samples, b);
 
   // start marker
   const first = samples[0];
@@ -1030,6 +1043,81 @@ function drawRunPlot(canvas, samples, first, minSpan, emptyText) {
   });
   context.textAlign = 'left';
 }
+
+// A dot on every recorded position (each frame the path was sampled at). Skipped while they
+// would be closer than ~3 px on average, where they only blur the line into a thick band.
+function drawDots(context, points, samples, b) {
+  if (points.length < 2) return;
+  let length = 0;
+  for (let i = 1; i < points.length; i++) {
+    length += Math.hypot(points[i][0] - points[i - 1][0], points[i][1] - points[i - 1][1]);
+  }
+  if (length / (points.length - 1) < 3) return;
+  points.forEach(([x, y], i) => {
+    context.fillStyle = heightColour(samples[i][Z], b.z0, b.z1);
+    context.beginPath(); context.arc(x, y, 2.2, 0, 2 * Math.PI); context.fill();
+  });
+}
+
+// Zoom: the -, + and fit buttons work on both views; the wheel zooms the view under the
+// mouse (the 2D one around the cursor); dragging pans the 2D view and turns the 3D one.
+function zoomTrack(factor) {
+  const view = track.view2d;
+  const map = $('track-2d').map;
+  if (map && view.cx === null) { view.cx = map.cx; view.cy = map.cy; }
+  view.zoom = Math.max(0.2, Math.min(200, view.zoom * factor));
+  track.view.zoom = Math.max(0.2, Math.min(200, track.view.zoom * factor));
+  drawTrack();
+}
+function fitTrack() {
+  track.view2d = {zoom: 1, cx: null, cy: null};
+  track.view = {...VIEW3D};
+  drawTrack();
+}
+$('track-zoom-in').onclick = () => zoomTrack(1.5);
+$('track-zoom-out').onclick = () => zoomTrack(1 / 1.5);
+$('track-fit').onclick = fitTrack;
+
+(() => {
+  const canvas = $('track-2d');
+  const toWorld = (event) => {
+    const map = canvas.map, rect = canvas.getBoundingClientRect();
+    return [map.cx + (event.clientX - rect.left - map.width / 2) / map.scale,
+            map.cy - (event.clientY - rect.top - map.height / 2) / map.scale];
+  };
+  let drag = null;
+  canvas.addEventListener('pointerdown', (event) => {
+    if (!canvas.map) return;
+    drag = {x: event.clientX, y: event.clientY};
+    canvas.setPointerCapture(event.pointerId);
+  });
+  canvas.addEventListener('pointermove', (event) => {
+    if (!drag || !canvas.map) return;
+    const map = canvas.map, view = track.view2d;
+    view.cx = map.cx - (event.clientX - drag.x) / map.scale;
+    view.cy = map.cy + (event.clientY - drag.y) / map.scale;
+    drag = {x: event.clientX, y: event.clientY};
+    drawTrack2D(canvas, track.samples, view);
+  });
+  canvas.addEventListener('pointerup', () => { drag = null; });
+  canvas.addEventListener('wheel', (event) => {
+    if (!canvas.map) return;
+    event.preventDefault();
+    const view = track.view2d, map = canvas.map;
+    const factor = Math.exp(-event.deltaY * 0.0015);
+    const zoom = Math.max(0.2, Math.min(200, view.zoom * factor));
+    const [wx, wy] = toWorld(event);            // keep the point under the cursor in place
+    const ratio = view.zoom / zoom;
+    view.cx = wx + (map.cx - wx) * ratio;
+    view.cy = wy + (map.cy - wy) * ratio;
+    view.zoom = zoom;
+    drawTrack2D(canvas, track.samples, view);
+  }, {passive: false});
+  canvas.addEventListener('dblclick', () => {
+    track.view2d = {zoom: 1, cx: null, cy: null};
+    drawTrack2D(canvas, track.samples, track.view2d);
+  });
+})();
 
 refreshTrackList();
 drawTrack();

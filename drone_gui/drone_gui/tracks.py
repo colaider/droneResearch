@@ -30,6 +30,27 @@ FRESH_SECONDS = 1.0         # a position older than this is not the drone's posi
 GAP_SECONDS = 5.0           # no positions for this long ends the run
 REPEAT_SECONDS = 1.0        # an unchanged sample is still recorded this often, so time advances
 TRACK_ID = re.compile(r"^\d{8}-\d{6}(-\d+)?$")
+# How long the Position card keeps showing a value after its last message (odom, /vo/status).
+ODOM_MAX_AGE = 5.0
+VO_MAX_AGE = 10.0
+
+
+def displayed_position(ros):
+    """The x/y/z the Position card shows, and where it came from.
+
+    The one place that picks the position: the card shows exactly this, and the path records
+    exactly this, so the two cannot disagree. /drone/odom wins when something publishes it;
+    otherwise the control loop's fused estimate on /vo/status. An axis may be None.
+    """
+    odom = ros.get("odom", ODOM_MAX_AGE)
+    if isinstance(odom, dict) and isinstance(odom.get("position"), list):
+        return {"xyz": odom["position"][:3], "source": "odom", "frame": odom.get("frame"),
+                "mode": None, "age": ros.age("odom")}
+    vo = ros.get("vo_status", VO_MAX_AGE)
+    if isinstance(vo, dict) and isinstance(vo.get("position"), list):
+        return {"xyz": vo["position"][:3], "source": "vo", "frame": None,
+                "mode": vo.get("mode"), "age": ros.age("vo_status")}
+    return {"xyz": None, "source": None, "frame": None, "mode": None, "age": None}
 
 
 def _optional(values, length=3):
@@ -77,20 +98,23 @@ class TrackLog:
 
     # --- recording --------------------------------------------------------
     def _current(self):
-        """(position, source, mode, camera) from the freshest source, or None. camera is
-        [x, y, z, vx, vy, vz] from the camera alone, None per axis where it has nothing."""
-        odom = self.ros.get("odom", FRESH_SECONDS)
+        """(position, source, mode, camera), or None when there is nothing new to record.
+
+        position is exactly what the Position card shows (displayed_position). It is recorded
+        only while its message is fresh: the card keeps showing the last value for a few
+        seconds after the source stops, and that value is already the last point of the path.
+        camera is [x, y, z, vx, vy, vz] from the camera alone, None per axis where it has
+        nothing."""
+        shown = displayed_position(self.ros)
+        if shown["xyz"] is None or shown["age"] is None or shown["age"] > FRESH_SECONDS:
+            return None
+        position = _vector(shown["xyz"])
+        if position is None:              # an axis the card shows as "--" cannot be drawn
+            return None
         vo = self.ros.get("vo_status", FRESH_SECONDS)
         vo = vo if isinstance(vo, dict) else {}
-        mode = vo.get("mode")
         camera = _optional(vo.get("visual_position")) + _optional(vo.get("visual_velocity"))
-        position = _vector(odom.get("position")) if isinstance(odom, dict) else None
-        if position is not None:
-            return position, "odom", mode, camera
-        position = _vector(vo.get("position"))
-        if position is not None:
-            return position, "vo", mode, camera
-        return None
+        return position, shown["source"], shown["mode"] or vo.get("mode"), camera
 
     def _run(self):
         period = 1.0 / SAMPLE_HZ
@@ -117,7 +141,7 @@ class TrackLog:
             self._last_mode = mode
             live = self.live
             t = round(time.time() - live["start"], 2)
-            row = [t] + [round(v, 3) for v in position] + \
+            row = [t] + [round(v, 4) for v in position] + \
                   [None if a is None else round(a, 4) for a in attitude] + [mode] + camera
             last = live["samples"][-1] if live["samples"] else None
             if last is not None and last[1:] == row[1:] and now - self._last_sample_at < REPEAT_SECONDS:

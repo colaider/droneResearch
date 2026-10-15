@@ -79,10 +79,13 @@
       <label for="track-select">path</label>
       <select id="track-select"><option value="live">live run</option></select>
       <button id="track-new" title="end the live track; the next position starts a new one">new track</button>
+      <button id="track-zoom-out" title="zoom out (both views)">&minus;</button>
+      <button id="track-zoom-in" title="zoom in (both views)">+</button>
+      <button id="track-fit" title="show the whole path again (both views)">fit</button>
       <span class="stream" id="track-info">--</span>
     </div>
     <div class="plots track-views">
-      <figure><figcaption>from above &mdash; x / y [m], path colour = height (z)</figcaption>
+      <figure><figcaption>from above &mdash; x / y [m], path colour = height (z) &middot; scroll to zoom, drag to move, double-click to fit</figcaption>
         <canvas id="track-2d"></canvas></figure>
       <figure><figcaption>3D &mdash; drag to turn, scroll to zoom, double-click to reset</figcaption>
         <canvas id="track-3d"></canvas></figure>
