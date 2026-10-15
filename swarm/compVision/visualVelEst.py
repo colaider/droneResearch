@@ -37,7 +37,6 @@ class VisualVelocityEstimator:
         self.estimated_height = np.nan
         self.height_smoothing = 0.2  # EMA weight of the newest height, 1 disables smoothing
         self._smoothed_z = None
-        self.velocity_log = []
         self.tracking_view = None
         self.vkfs = {}
         self.camera_velocity = np.zeros(4)
@@ -234,7 +233,6 @@ class VisualVelocityEstimator:
             self.estimated_height = np.nan
             fallback_velocity = np.array([0.0, 0.0, vz, 0.0])
             self.camera_velocity = self._average_camera_velocity(fallback_velocity)
-            self._log_velocity(np.full(3, np.nan), len(points), np.nan)
             return self.camera_velocity.copy()
 
         ang_vel, att = self.drone_ang_vel, self.imu_att
@@ -278,28 +276,7 @@ class VisualVelocityEstimator:
         velocity = np.insert(kf.get(), 2, vz)
         self.camera_velocity = self._average_camera_velocity(velocity)
 
-        self._log_velocity(measured, n, z_estimated)
-
         return self.camera_velocity.copy()
-
-    LOG_COLUMNS = (
-        'frame', 'dt', 'meas_vx', 'meas_vy', 'meas_yaw_rate',
-        'vx', 'vy', 'vz', 'yaw_rate', 'height', 'points',
-        'gyro_x', 'gyro_y', 'gyro_z', 'roll', 'pitch', 'yaw',
-        'drone_vx', 'drone_vy', 'drone_vz',
-    )
-
-    def _log_velocity(self, measured, point_count, height):
-        """Append one row: raw least-squares fit, filtered output and the inputs behind it."""
-        self.velocity_log.append([
-            self.current_frame.idx, self.dt, *measured, *self.camera_velocity,
-            height, point_count, *self.drone_ang_vel, *self.imu_att, *self.drone_vel,
-        ])
-
-    def save_velocity_log(self, path):
-        """Write the recorded per-frame velocity rows to a CSV file."""
-        np.savetxt(path, np.asarray(self.velocity_log, float), delimiter=',',
-                   header=','.join(self.LOG_COLUMNS), comments='')
 
     def point_prediction_filtering(self, old, new):
         """Reject tracks inconsistent with commanded motion and IMU rotation."""

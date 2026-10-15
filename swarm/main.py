@@ -1,5 +1,4 @@
 from pathlib import Path
-import atexit
 
 import genesis as gs
 
@@ -54,7 +53,6 @@ def main():
     map_viewer = MapViewer(title='Stereo point map — simulation pose')
 
     sm = StateMachine(drone_entity=drone, dt=dt, camera_fps=30)
-    atexit.register(lambda: drone.frame_processor.save_velocity_log('camera_velocity_log.csv'))
     scene.build()
     last_camera_frame_idx = None
 
