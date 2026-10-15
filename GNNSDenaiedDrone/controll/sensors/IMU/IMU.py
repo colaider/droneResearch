@@ -61,6 +61,7 @@ class IMU:
     def update(self, accel, gyro, dt):
         accel = np.asarray(accel, dtype=float)
         gyro = np.asarray(gyro, dtype=float)
+        print("dt:", dt, "acce", accel, "gyro", "gyro")
         self._accel, self._gyro = accel, gyro
 
         if self._calib is not None:

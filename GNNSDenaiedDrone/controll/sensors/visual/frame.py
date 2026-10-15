@@ -135,8 +135,9 @@ class FrameProcessor:
         pyramids = []
         for gray in gray_frames:
             levels = [gray]
-            for _ in range(1, self.pyramid_levels):
-                levels.append(cv2.pyrDown(levels[-1]))
+            if self.pyramid_levels > 1:
+                for _ in range(1, self.pyramid_levels):
+                    levels.append(cv2.pyrDown(levels[-1]))
             pyramids.append(levels)
         return Frame(frames=prepared, gray_frames=gray_frames, pyramids=pyramids,
                      idx=idx, left_timestamp=left_timestamp,

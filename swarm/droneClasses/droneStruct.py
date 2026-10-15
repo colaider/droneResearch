@@ -29,7 +29,7 @@ class DroneStruct:
             convert_to_grayscale=True,
             filters_enabled=True,
             filter_kernel_size=3,
-            pyramid_levels=2,
+            pyramid_levels=1,
             max_stereo_skew_s=0.005,
         )
         # This simulation path uses parallel cameras with a common projection.

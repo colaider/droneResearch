@@ -78,16 +78,16 @@ class ControlLoop:
                         else "unavailable"
                     )
                     print(f"[{i}] {self.sm.stage:9s} dt={dt*1e3:4.1f}ms "
-                          f"att={np.round(self.sensors.get_attitude(),3)} "
-                          f"baro={self.sensors.get_baro_position():+.2f}m "
-                          f"cmd={None if cmd is None else np.round(cmd,3)}"
+                        #   f"att={np.round(self.sensors.get_attitude(),3)} "
+                        #   f"baro={self.sensors.get_baro_position():+.2f}m "
+                        #   f"cmd={None if cmd is None else np.round(cmd,3)}"
                           f"pos={self.sensors.get_acc_position()}", 
-                          f"cmd pos = {self.controller.posCMD}"
+                        #   f"cmd pos = {self.controller.posCMD}"
                           f"acc={self.sensors.get_acceleration()} "
                           f"visual_vel={np.round(self.sensors.get_visual_velocity(), 3)} "
                           f"stereo_depth={stereo_depth_text} "
                           f"depth_points={len(visual_estimator.depth_points)} "
-                          f"depth_valid={visual_estimator.depth_valid_frac:.0%}"
+                        #   f"depth_valid={visual_estimator.depth_valid_frac:.0%}"
                           f"dt = {dt} ",
                           flush=True)
                 i += 1
