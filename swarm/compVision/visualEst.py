@@ -155,11 +155,7 @@ class VisulaEst(VisualVelocityEstimator):
         self.update_frame(frame, idx)
         self.aply_flow()
         self.estimate_depth()
-        return_velocity = self.estimate_velocities(
-            self.velocity_flows[self.velocity_point_mask],
-            self.velocity_points[self.velocity_point_mask],
-            vertical_velocity=self.depth_velocity_z,
-        )
+        return_velocity = self.estimate_velocities(*self.velocity_inputs())
 
         self.layer_views = [
             compose_layer_display(

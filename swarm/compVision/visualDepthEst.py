@@ -56,14 +56,7 @@ def estimate_frame_depth(frame, all_points, point_colors, layer_tracks, stereo, 
                 direction=direction, pixel_scale=2 ** layer,
             )
         else:
-            n = len(uv)
-            result = StereoDepth(
-                np.full((n, 2), np.nan, np.float32),
-                np.full(n, np.nan),
-                np.zeros(n, bool),
-                np.full(n, np.nan),
-                np.full(n, np.nan),
-            )
+            result = SparseStereoDepth._empty_result(len(uv))
         depth_by_layer.append(result)
         valid = result.valid
         valid_count += int(valid.sum())
@@ -92,7 +85,8 @@ def estimate_frame_depth(frame, all_points, point_colors, layer_tracks, stereo, 
     depth_valid_frac = valid_count / total if total else 0.0
     if valid_count:
         points, colors, sigma = np.vstack(points), np.vstack(colors), np.concatenate(sigma)
-        keep = unique_point_mask(points[:, :2], cross_layer_min_distance)
+        keep = (unique_point_mask(points[:, :2], cross_layer_min_distance)
+                if len(all_points) > 1 else np.ones(len(points), bool))
         depth_points, depth_colors, depth_sigma = points[keep], colors[keep], sigma[keep]
         depth_median = float(np.median(depth_points[:, 2]))
 
@@ -140,20 +134,12 @@ class SparseStereoDepth:
         )
 
     @staticmethod
-    def _validate_inputs(left, right, points, focal_px, baseline, direction, pixel_scale):
+    def _prepare_inputs(points, direction):
+        """Return (N, 2) points, the unit epipolar direction and its image axis."""
         points = np.asarray(points, np.float32).reshape(-1, 2)
         direction = np.asarray(direction, float)
-        if (not np.isfinite(focal_px) or focal_px <= 0 or not np.isfinite(baseline) or baseline <= 0
-                or direction.shape != (2,) or not np.isfinite(direction).all()
-                or np.linalg.norm(direction) == 0 or not np.isfinite(pixel_scale) or pixel_scale <= 0):
-            raise ValueError('Invalid stereo calibration or pyramid scale')
-        if left.ndim != 2 or right.shape != left.shape or left.dtype != np.uint8 or right.dtype != np.uint8:
-            raise ValueError('Stereo requires equal-size uint8 grayscale images')
         direction = direction / np.linalg.norm(direction)
-        axis = int(np.argmax(np.abs(direction)))
-        if abs(direction[1-axis]) > 1e-6:
-            raise ValueError('Rectify stereo images to horizontal or vertical epipolar lines first')
-        return points, direction, axis
+        return points, direction, int(np.argmax(np.abs(direction)))
 
     def _find_patch_matches(self, left, right, native_points, direction, axis,
                             dimensions, pixel_scale, focal_px, baseline, result):
@@ -252,12 +238,8 @@ class SparseStereoDepth:
         result.valid[rows] = True
 
     def estimate(self, left, right, points, *, focal_px, baseline, direction, pixel_scale=1.0):
-        points, direction, axis = self._validate_inputs(
-            left, right, points, focal_px, baseline, direction, pixel_scale
-        )
+        points, direction, axis = self._prepare_inputs(points, direction)
         result = self._empty_result(len(points))
-        if not len(points):
-            return result
         native_points = points / pixel_scale
         height, width = left.shape
         dimensions = np.array([width, height])

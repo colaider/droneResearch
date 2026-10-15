@@ -1,4 +1,5 @@
 from pathlib import Path
+import atexit
 
 import genesis as gs
 import numpy as np
@@ -32,7 +33,7 @@ def main():
 
     plotter = LivePlotter(
         plots={
-            'Cam Pos':    ['x', 'y', 'z', 'yaw'],
+            'Cam Pos':    ['x', 'y', 'z', 'yaw', 'raw x', 'raw y', 'raw z', 'raw yaw'],
             'Act Pos':    ['x', 'y', 'z'],
             'Camera Vel': ['x', 'y', 'z'],
         },
@@ -50,6 +51,7 @@ def main():
     map_viewer = MapViewer(title='Stereo point map — simulation pose')
 
     sm = StateMachine(drone_entity=drone, dt=dt, camera_fps=30)
+    atexit.register(lambda: drone.frame_processor.save_velocity_log('camera_velocity_log.csv'))
     scene.build()
 
     for step in range(100000):
@@ -65,7 +67,7 @@ def main():
             real_pos[1] = -1 * real_pos[1]
             vid = ctrl.get_camera_lin_v()
 
-            plotter.push('Cam Pos',    ctrl.cam_pos)
+            plotter.push('Cam Pos',    np.concatenate([ctrl.cam_pos, ctrl.raw_cam_pos]))
             plotter.push('Act Pos',    real_pos)
             plotter.push('Camera Vel', vid)
             plotter.update()

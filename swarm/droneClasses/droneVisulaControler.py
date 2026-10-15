@@ -10,6 +10,9 @@ class DroneVisulaCTRL(DronePositionCTRL):
         self.camera_step_period = max(1, round(self.camera_frame_interval / dt))
         self.last_frame_time = None
         self.cam_pos = None                      # lazily initialized on first position_ctrl_fused call
+        self.raw_cam_pos = None                  # [x, y, z, yaw] dead-reckoned from camera velocity only
+        self._raw_cam_idx = None
+        self._prev_frame_att = None              # attitude at the previous camera frame
        
         # 4D fusion: body [vx, vy, vz, yaw_rate]
         self.fkf = FusionKalmanFilter()
@@ -25,23 +28,26 @@ class DroneVisulaCTRL(DronePositionCTRL):
     def get_camera_lin_v(self):
         """Camera-estimated body velocity, with vz from accelerometer."""
         cv = self.drone.frame_processor.camera_velocity
-        return np.array([cv[0], cv[1], self.get_lin_vel()[2]])
+        return np.array([cv[0], cv[1], cv[2]])
 
     def get_camera_vel_v(self):
         """[vx, vy, vz, yaw_rate]."""
         cv = self.drone.frame_processor.camera_velocity
-        return np.array([cv[0], cv[1], self.get_lin_vel()[2], cv[3]])
+        return np.array([cv[0], cv[1], cv[2], cv[3]])
+
+    def integrate_camera_position(self):
+        """Add one camera-frame step of raw visual-odometry velocity to raw_cam_pos."""
+        fp = self.drone.frame_processor
+        if fp.current_frame.idx == self._raw_cam_idx:
+            return
+        self._raw_cam_idx = fp.current_frame.idx
+        self.raw_cam_pos += fp.dt * self.get_camera_vel_v()
 
   # ---------------- fused control ----------------
     def position_ctrl_fused(self, setpoint):
         fp = self.drone.frame_processor
+        self.integrate_camera_position()
 
-        # Seed the filter's position state once, from IMU/attitude
-        if self.cam_pos is None:
-            p0   = self.get_imu_pos()
-            yaw0 = self.get_attitude()[2]
-            self.fkf.reset_position(p=p0, yaw=yaw0)
-            self.cam_pos = np.append(p0, yaw0).astype(float)  # [x, y, z, yaw]
 
         # Raw sensor readings
         accel_v = self.get_lin_vel()                 # [vx, vy, vz]  (3D now)
@@ -87,6 +93,11 @@ class DroneVisulaCTRL(DronePositionCTRL):
                 fp.set_dt(sim_time - self.last_frame_time)
             else:
                 fp.set_dt(self.camera_frame_interval)
+            # Image rotation between exposures is the attitude change, not the sampled gyro.
+            if self._prev_frame_att is not None:
+                delta = fp.imu_att - self._prev_frame_att
+                fp.drone_ang_vel = ((delta + np.pi) % (2 * np.pi) - np.pi) / fp.dt
+            self._prev_frame_att = fp.imu_att.copy()
             self.last_frame_time = sim_time
             self.drone.camera_step()
 
@@ -112,6 +123,7 @@ class DroneVisulaCTRL(DronePositionCTRL):
         
         self.fkf.x[4:8] = 0.0
         self.cam_pos = np.append(p0, yaw0).astype(float)
+        self.raw_cam_pos = self.cam_pos.copy()
 
         self.calibrated = True
         return self.gyro_bias

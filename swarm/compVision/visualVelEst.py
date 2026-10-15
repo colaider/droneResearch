@@ -29,7 +29,7 @@ class VisualVelocityEstimator:
         self.tracked_points = self.tracked_points_by_layer[0]
         self.layer_tracks = {}
         self._layer_frame_idx = {}
-        self.max_feature_points = 500
+        self.max_feature_points = 1500
         self.feature_min_distance = 30.0
         self.cross_layer_min_distance = 5.0
         self.all_points = [np.empty((0, 2), np.float32) for _ in range(pyramid_levels)]
@@ -39,6 +39,9 @@ class VisualVelocityEstimator:
         self.velocity_points = np.empty((0, 3), np.float32)
         self.velocity_point_mask = np.empty(0, bool)
         self.estimated_height = np.nan
+        self.height_smoothing = 0.2  # EMA weight of the newest height, 1 disables smoothing
+        self._smoothed_z = None
+        self.velocity_log = []
         self.layer_views = []
         self.vkfs = {}
         self.camera_velocity = np.zeros(4)
@@ -142,7 +145,8 @@ class VisualVelocityEstimator:
             keep[ids] = self.point_prediction_filtering(old[ids], new[ids])
         # Duplicate observations remain visible per layer but count once in the fit.
         ids = np.flatnonzero(keep)
-        keep[ids] = unique_point_mask(new[ids, :2], self.cross_layer_min_distance)
+        if len(layer_results) > 1:
+            keep[ids] = unique_point_mask(new[ids, :2], self.cross_layer_min_distance)
         self.velocity_point_mask = keep
 
     def lucas_kanade_flow(self, frame1, frame2, frame_r, frame_r_curr,
@@ -331,36 +335,55 @@ class VisualVelocityEstimator:
         return filter_by_neighbors(
             good_old, good_new, links, thresh, min_links, neighbor_min_links)
 
-    def estimate_velocities(self, flow, points, vertical_velocity=np.nan):
-        """Estimate and return ``[vx, vy, vz, yaw_rate]`` from visual and depth data."""
-        vz = (
-            float(vertical_velocity)
-            if np.isfinite(vertical_velocity)
-            else float(self.drone_vel[2])
-        )
+    def velocity_inputs(self):
+        """Return masked (flow, points) with column 2 set to each point's stereo depth.
+
+        Points without a valid stereo depth keep the drone altitude.
+        """
+        keep = self.velocity_point_mask
+        points = self.velocity_points[keep]
+        depths = np.concatenate([result.depths for result in self.depth_by_layer])[keep]
+        points[:, 2] = np.where(np.isfinite(depths) & (depths > 0), depths, points[:, 2])
+        return self.velocity_flows[keep], points
+
+    def estimate_velocities(self, flow, points):
+        """Estimate and return ``[vx, vy, vz, yaw_rate]``; vz is the sensor value."""
+        vz = float(self.drone_vel[2])
         if len(points) < 2:
             self.estimated_height = np.nan
             self.camera_velocity = np.array([0.0, 0.0, vz, 0.0])
+            self._log_velocity(np.full(3, np.nan), len(points), np.nan)
             return self.camera_velocity.copy()
 
         ang_vel, att = self.drone_ang_vel, self.imu_att
         height, width = self.frame_size[:2]
         center = np.array([width / 2, height / 2])
+        n = len(points)
         z = points[:, 2]
-        k = max(1, int(len(z) * 0.10))
+
+        k = max(1, int(n * 0.10))
         z_estimated = np.median(np.partition(z, -k)[-k:])
+        if self._smoothed_z is None:
+            self._smoothed_z = z_estimated
+        self._smoothed_z += self.height_smoothing * (z_estimated - self._smoothed_z)
+        z_estimated = self._smoothed_z
 
         visual_flow = flow * (z / (self.foc_l * self.dt))[:, None]
-        angular_velocity = ang_vel[[1, 0]] * np.array([1, 1])
-        rotation_flow = z[:, None] / np.cos(att[[1, 0]]) ** 2 * angular_velocity
+        roll, pitch = att[0], att[1]
+        roll_rate, pitch_rate = ang_vel[0], ang_vel[1]
+        # Pitch moves the image along x, roll along y.
+        rotation_flow = z[:, None] * np.column_stack([
+            pitch_rate / np.cos(pitch) ** 2,
+            roll_rate / np.cos(roll) ** 2,
+        ])
         target = visual_flow - rotation_flow
         position = (
             (z[:, None] / self.foc_l) * (points[:, :2] - center)
             + self.camera_offset_from_yaw_center
         )
         matrix = np.vstack([
-            np.column_stack([np.ones(len(z)), np.zeros(len(z)), -position[:, 1]]),
-            np.column_stack([np.zeros(len(z)), np.ones(len(z)), position[:, 0]]),
+            np.column_stack([np.ones(n), np.zeros(n), -position[:, 1]]),
+            np.column_stack([np.zeros(n), np.ones(n), position[:, 0]]),
         ])
         measured, *_ = np.linalg.lstsq(
             matrix, np.concatenate([target[:, 0], target[:, 1]]), rcond=None)
@@ -375,7 +398,27 @@ class VisualVelocityEstimator:
 
         self.estimated_height = float(z_estimated)
         self.camera_velocity = np.insert(kalman.get(), 2, vz)
+        self._log_velocity(measured, n, z_estimated)
         return self.camera_velocity.copy()
+
+    LOG_COLUMNS = (
+        'frame', 'dt', 'meas_vx', 'meas_vy', 'meas_yaw_rate',
+        'vx', 'vy', 'vz', 'yaw_rate', 'height', 'points',
+        'gyro_x', 'gyro_y', 'gyro_z', 'roll', 'pitch', 'yaw',
+        'drone_vx', 'drone_vy', 'drone_vz',
+    )
+
+    def _log_velocity(self, measured, point_count, height):
+        """Append one row: raw least-squares fit, filtered output and the inputs behind it."""
+        self.velocity_log.append([
+            self.current_frame.idx, self.dt, *measured, *self.camera_velocity,
+            height, point_count, *self.drone_ang_vel, *self.imu_att, *self.drone_vel,
+        ])
+
+    def save_velocity_log(self, path):
+        """Write the recorded per-frame velocity rows to a CSV file."""
+        np.savetxt(path, np.asarray(self.velocity_log, float), delimiter=',',
+                   header=','.join(self.LOG_COLUMNS), comments='')
 
     def point_prediction_filtering(self, old, new):
         """Reject tracks inconsistent with commanded motion and IMU rotation."""
@@ -403,7 +446,7 @@ class VisualVelocityEstimator:
 class VelocityKalmanFilter:
     """Three-state Kalman filter for planar velocity and yaw rate."""
 
-    def __init__(self, process_var=0.6, measurement_var=4.5,
+    def __init__(self, process_var=0.6, measurement_var=100,
                  yaw_process_var=5.0, yaw_measurement_var=1):
         self.state = np.zeros(3)
         self.P = np.eye(3)
