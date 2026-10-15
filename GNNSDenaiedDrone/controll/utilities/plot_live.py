@@ -13,7 +13,6 @@ If plt.show() complains about no display/backend:  sudo apt install python3-tk
 import argparse
 import collections
 import threading
-import time
 
 import matplotlib.pyplot as plt
 import rclpy
@@ -22,7 +21,7 @@ from rclpy.executors import SingleThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Imu
-from std_msgs.msg import Float32
+from geometry_msgs.msg import PointStamped
 
 MAXLEN = 4000     # samples kept per trace
 
@@ -30,7 +29,6 @@ MAXLEN = 4000     # samples kept per trace
 class SensorBuffers(Node):
     def __init__(self, ns="/drone"):
         super().__init__("plot_live")
-        self.t0 = time.monotonic()
         d = lambda: collections.deque(maxlen=MAXLEN)
         self.t = d()                         # imu timestamps
         self.ax, self.ay, self.az = d(), d(), d()
@@ -39,10 +37,15 @@ class SensorBuffers(Node):
 
         ns = ns.rstrip("/")
         self.create_subscription(Imu, f"{ns}/imu", self._on_imu, qos_profile_sensor_data)
-        self.create_subscription(Float32, f"{ns}/baro_altitude", self._on_baro, 10)
+        self.create_subscription(
+            PointStamped,
+            f"{ns}/baro_altitude_stamped",
+            self._on_baro,
+            qos_profile_sensor_data,
+        )
 
     def _on_imu(self, m):
-        self.t.append(time.monotonic() - self.t0)
+        self.t.append(m.header.stamp.sec + m.header.stamp.nanosec * 1e-9)
         self.ax.append(m.linear_acceleration.x)
         self.ay.append(m.linear_acceleration.y)
         self.az.append(m.linear_acceleration.z)
@@ -51,8 +54,8 @@ class SensorBuffers(Node):
         self.gz.append(m.angular_velocity.z)
 
     def _on_baro(self, m):
-        self.bt.append(time.monotonic() - self.t0)
-        self.baro.append(float(m.data))
+        self.bt.append(m.header.stamp.sec + m.header.stamp.nanosec * 1e-9)
+        self.baro.append(float(m.point.z))
 
 
 def main():

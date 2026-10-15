@@ -4,6 +4,8 @@ import cv2
 import numpy as np
 from visualization.display import draw_tracks
 
+from .gpuVision import VisionBackend
+
 from .smallFeatures import (
     LAYER_COLORS,
     LayerTracks,
@@ -17,17 +19,18 @@ from .smallFeatures import (
 class VisualVelocityEstimator:
     """Mixin providing layered temporal LK tracking and image-flow velocity.
 
-    The host estimator supplies prepared frames, camera calibration, sensor
-    state, and ``_take_sensor_window`` / ``_current_height`` helpers.
+    The host estimator supplies prepared frames, camera calibration and its
+    latest sensor reading, plus a ``_current_height`` helper.
     """
 
-    def _init_velocity_estimator(self, pyramid_levels):
+    def _init_velocity_estimator(self, pyramid_levels, *, vision_backend=None):
         """Initialize tracking histories, budgets, per-frame flow, and velocity state."""
+        self.vision_backend = VisionBackend(vision_backend)
         self.tracked_points_by_layer = {0: {}}
         self.tracked_points = self.tracked_points_by_layer[0]
         self.layer_tracks = {}
         self._layer_frame_idx = {}
-        self.max_feature_points = 1500
+        self.max_feature_points = 500
         self.feature_min_distance = 30.0
         self.cross_layer_min_distance = 5.0
         self.all_points = [np.empty((0, 2), np.float32) for _ in range(pyramid_levels)]
@@ -42,7 +45,6 @@ class VisualVelocityEstimator:
 
     def aply_flow(self):
         """Track all layers, then publish aligned observations for velocity fitting."""
-        self._take_sensor_window()
         num_layers = self._reset_tracking_frame()
         if len(self.buffer) < 2:
             return
@@ -216,7 +218,7 @@ class VisualVelocityEstimator:
                                 width, height, lk):
         """Run forward/backward LK and return valid full-resolution pairs or None."""
         old = seeds.reshape(-1, 1, 2).astype(np.float32)
-        new, status_forward, _ = cv2.calcOpticalFlowPyrLK(
+        new, status_forward, _ = self.vision_backend.calcOpticalFlowPyrLK(
             gray_prev, gray_curr, old, None, **lk)
         if new is None or status_forward is None:
             return None
@@ -227,7 +229,7 @@ class VisualVelocityEstimator:
         if not valid.any():
             return None
         old, new = old[valid], new[valid]
-        back, status_backward, _ = cv2.calcOpticalFlowPyrLK(
+        back, status_backward, _ = self.vision_backend.calcOpticalFlowPyrLK(
             gray_curr, gray_prev, new, None, **lk)
         if back is None or status_backward is None:
             return None
@@ -290,7 +292,8 @@ class VisualVelocityEstimator:
     def _replenish(self, gray, pts, cam, max_points=300, *, pixel_scale=1.0):
         """Scale configured full-resolution feature spacing to the selected layer."""
         min_distance = max(1.0, self.feature_min_distance / pixel_scale)
-        return replenish(gray, pts, cam, max_points, min_distance=min_distance)
+        return replenish(gray, pts, cam, max_points, min_distance=min_distance,
+                         backend=self.vision_backend)
 
     def compensate_vertical(self, good_old, good_new, triangles, min_area=4.0):
         """Estimate and remove radial expansion from the tracked mesh flow."""
@@ -339,7 +342,7 @@ class VisualVelocityEstimator:
             self.camera_velocity = np.zeros(4)   # no usable tracks -> report zero velocity
             return self.camera_velocity.copy()
 
-        ang_vel, att = self.avg_ang_vel, self.avg_att
+        ang_vel, att = self.drone_ang_vel, self.imu_att
         height, width = self.frame_size[:2]
         center = np.array([width / 2, height / 2])
         z = points[:, 2]
@@ -376,7 +379,7 @@ class VisualVelocityEstimator:
     def point_prediction_filtering(self, old, new):
         """Reject tracks inconsistent with commanded motion and IMU rotation."""
         velocity = self.previous_cmd_vel[:3]
-        angular_velocity = self.avg_ang_vel
+        angular_velocity = self.drone_ang_vel
         height, width = self.frame_size[:2]
         center = np.array([width / 2, height / 2])
         u = old[:, 0] - center[0]

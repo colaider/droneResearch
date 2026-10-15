@@ -10,6 +10,7 @@ Topics (relative to the node namespace, /drone with the launch file):
   PUBLISH
     attitude       geometry_msgs/Vector3Stamped   roll/pitch/yaw [rad], from the FC
     altitude       std_msgs/Float32               baro+IMU altitude [m], from the FC
+    altitude_stamped geometry_msgs/PointStamped   same altitude in point.z, with ROS time
     battery        sensor_msgs/BatteryState       voltage, current, mAh
     armed          std_msgs/Bool                  Betaflight armed state
     status         std_msgs/String (JSON)         full state: mode, switches, arming flags, rates
@@ -36,13 +37,12 @@ import math
 import time
 
 import rclpy
-from geometry_msgs.msg import Twist, Vector3Stamped
+from geometry_msgs.msg import PointStamped, Twist, Vector3Stamped
 from nav_msgs.msg import Odometry
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
 from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
-from rclpy.time import Time
 from sensor_msgs.msg import BatteryState, FluidPressure, Imu, MagneticField
 from std_msgs.msg import Bool, Float32, String
 
@@ -134,6 +134,9 @@ class FlightControllerNode(Node):
 
         self.pub_attitude = self.create_publisher(Vector3Stamped, "attitude", 10)
         self.pub_altitude = self.create_publisher(Float32, "altitude", 10)
+        self.pub_altitude_stamped = self.create_publisher(
+            PointStamped, "altitude_stamped", qos_profile_sensor_data
+        )
         self.pub_battery = self.create_publisher(BatteryState, "battery", 10)
         self.pub_armed = self.create_publisher(Bool, "armed", 10)
         self.pub_status = self.create_publisher(String, "status", 10)
@@ -142,6 +145,9 @@ class FlightControllerNode(Node):
         self.pub_mag = self.create_publisher(MagneticField, "mag", qos_profile_sensor_data)
         self.pub_pressure = self.create_publisher(FluidPressure, "pressure", qos_profile_sensor_data)
         self.pub_baro = self.create_publisher(Float32, "baro_altitude", 10)
+        self.pub_baro_stamped = self.create_publisher(
+            PointStamped, "baro_altitude_stamped", qos_profile_sensor_data
+        )
 
         # Everything that talks MSP shares one serial port, so those callbacks must not
         # overlap; the RB3's own sensors are a separate process and get their own group, or
@@ -266,20 +272,27 @@ class FlightControllerNode(Node):
     def poll_telemetry(self):
         """Attitude and altitude from the flight controller. Called from loop() only, so it
         never overlaps another MSP request."""
-        stamp = self.get_clock().now().to_msg()
         attitude = self.msp.attitude()
-        altitude = self.msp.altitude()
 
         if attitude:
+            attitude_stamp = self.get_clock().now().to_msg()
             self.last_attitude = attitude
             msg = Vector3Stamped()
-            msg.header.stamp = stamp
+            msg.header.stamp = attitude_stamp
             msg.header.frame_id = "base_link"
             msg.vector.x, msg.vector.y, msg.vector.z = attitude
             self.pub_attitude.publish(msg)
+
+        altitude = self.msp.altitude()
         if altitude:
+            altitude_stamp = self.get_clock().now().to_msg()
             self.last_altitude = altitude
             self.pub_altitude.publish(Float32(data=float(altitude[0])))
+            stamped_altitude = PointStamped()
+            stamped_altitude.header.stamp = altitude_stamp
+            stamped_altitude.header.frame_id = "base_link"
+            stamped_altitude.point.z = float(altitude[0])
+            self.pub_altitude_stamped.publish(stamped_altitude)
 
     def poll_battery(self):
         battery = self.msp.battery()
@@ -334,9 +347,7 @@ class FlightControllerNode(Node):
                 "(sudo apt install qcom-sensors-test-apps)")
             return None
 
-        # Host monotonic (what the streams timestamp with) -> ROS clock.
-        self.time_offset_ns = self.get_clock().now().nanoseconds - int(time.monotonic() * 1e9)
-        self.ssc_offset = None
+        self.pending_accel = []
         self.baro_reference = self.cfg["baro_reference_hpa"] or None
         self.baro_samples = []
 
@@ -351,39 +362,39 @@ class FlightControllerNode(Node):
                           callback_group=self.sensor_group)
         return sensors
 
-    def stamp_for(self, host_time, ssc_time):
-        """Timestamp a sample, preferring the sensor core's own clock.
-
-        `host_time` is when the reader thread got the line, so it carries scheduling jitter;
-        the SSC timestamp is taken in hardware. Both clocks run off the same SoC, so a single
-        offset measured at the first sample keeps the two aligned.
-        """
-        if ssc_time is not None:
-            if self.ssc_offset is None:
-                self.ssc_offset = host_time - ssc_time
-            host_time = ssc_time + self.ssc_offset
-        return Time(nanoseconds=int(host_time * 1e9) + self.time_offset_ns).to_msg()
-
     def pump_sensors(self):
         """Publish everything the sensor core produced since the last call."""
         gyro = self.sensors.get("gyro")
         accel = self.sensors.get("accel")
 
-        # The IMU topic is driven by the gyro, with the newest accel sample merged in - the
-        # two streams are separate processes and never land on the same timestamp.
+        # Use the closest accelerometer sample to each gyro sample. The combined Imu message
+        # carries the gyro timestamp and marks acceleration unavailable when no close sample
+        # exists.
         if gyro is not None:
-            latest_accel = accel.peek() if accel is not None else None
             if accel is not None:
-                accel.drain()                  # keep the queue from going stale
-            for host, ssc, values in gyro.drain():
+                self.pending_accel.extend(accel.drain())
+                self.pending_accel = self.pending_accel[-512:]
+            for host, _ssc, values in gyro.drain():
                 if len(values) < 3:
                     continue
+                accel_sample = None
+                if self.pending_accel:
+                    nearest = min(
+                        range(len(self.pending_accel)),
+                        key=lambda i: abs(self.pending_accel[i][0] - host),
+                    )
+                    if abs(self.pending_accel[nearest][0] - host) <= 0.01:
+                        accel_sample = self.pending_accel.pop(nearest)
+                self.pending_accel = [
+                    sample for sample in self.pending_accel
+                    if sample[0] >= host - 0.01
+                ]
                 msg = Imu()
-                msg.header.stamp = self.stamp_for(host, ssc)
+                msg.header.stamp = self.get_clock().now().to_msg()
                 msg.header.frame_id = self.cfg["imu_frame"]
                 msg.angular_velocity.x, msg.angular_velocity.y, msg.angular_velocity.z = values[:3]
-                if latest_accel is not None and len(latest_accel[2]) >= 3:
-                    a = latest_accel[2]
+                if accel_sample is not None and len(accel_sample[2]) >= 3:
+                    a = accel_sample[2]
                     msg.linear_acceleration.x = a[0]
                     msg.linear_acceleration.y = a[1]
                     msg.linear_acceleration.z = a[2]
@@ -397,11 +408,11 @@ class FlightControllerNode(Node):
 
         mag = self.sensors.get("mag")
         if mag is not None:
-            for host, ssc, values in mag.drain():
+            for _host, _ssc, values in mag.drain():
                 if len(values) < 3:
                     continue
                 msg = MagneticField()
-                msg.header.stamp = self.stamp_for(host, ssc)
+                msg.header.stamp = self.get_clock().now().to_msg()
                 msg.header.frame_id = self.cfg["imu_frame"]
                 # SEE reports microtesla, ROS wants tesla.
                 msg.magnetic_field.x = values[0] * 1e-6
@@ -411,10 +422,10 @@ class FlightControllerNode(Node):
 
         pressure = self.sensors.get("pressure")
         if pressure is not None:
-            for host, ssc, values in pressure.drain():
+            for _host, _ssc, values in pressure.drain():
                 hpa = values[0]
                 msg = FluidPressure()
-                msg.header.stamp = self.stamp_for(host, ssc)
+                msg.header.stamp = self.get_clock().now().to_msg()
                 msg.header.frame_id = self.cfg["imu_frame"]
                 msg.fluid_pressure = hpa * 100.0        # hPa -> Pa
                 self.pub_pressure.publish(msg)
@@ -425,8 +436,13 @@ class FlightControllerNode(Node):
                         self.baro_reference = sum(self.baro_samples) / len(self.baro_samples)
                         self.get_logger().info("barometer zeroed at %.2f hPa" % self.baro_reference)
                     continue
-                self.pub_baro.publish(Float32(
-                    data=float(see.altitude_from_pressure(hpa, self.baro_reference))))
+                baro_altitude = float(see.altitude_from_pressure(hpa, self.baro_reference))
+                self.pub_baro.publish(Float32(data=baro_altitude))
+                stamped = PointStamped()
+                stamped.header.stamp = msg.header.stamp
+                stamped.header.frame_id = msg.header.frame_id
+                stamped.point.z = baro_altitude
+                self.pub_baro_stamped.publish(stamped)
 
     def destroy_node(self):
         self.release("node shutting down")

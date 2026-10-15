@@ -115,7 +115,8 @@ class SparseStereoDepth:
     """
     def __init__(self, patch_size=15, min_score=.80, uniqueness=.06,
                  max_disparity=512.0, min_depth=.1, max_depth=30.0,
-                 max_fb_error=1.0, max_epipolar_error=1.0):
+                 max_fb_error=1.0, max_epipolar_error=1.0, *, backend=cv2):
+        self.backend = backend
         self.patch_size = patch_size
         self.min_score, self.uniqueness = min_score, uniqueness
         self.max_disparity = max_disparity
@@ -202,7 +203,7 @@ class SparseStereoDepth:
             flags=cv2.OPTFLOW_USE_INITIAL_FLOW,
             criteria=(cv2.TERM_CRITERIA_COUNT | cv2.TERM_CRITERIA_EPS, 30, .001),
         )
-        matched, status, _ = cv2.calcOpticalFlowPyrLK(
+        matched, status, _ = self.backend.calcOpticalFlowPyrLK(
             left, right, old, seeds.copy(), **lk
         )
         if matched is None or status is None:
@@ -215,7 +216,7 @@ class SparseStereoDepth:
         rows, old, matched = rows[good], old[good], matched[good]
         if not len(rows):
             return None
-        back, status, _ = cv2.calcOpticalFlowPyrLK(
+        back, status, _ = self.backend.calcOpticalFlowPyrLK(
             right, left, matched[:, None].copy(), old.copy(), **lk
         )
         if back is None or status is None:
