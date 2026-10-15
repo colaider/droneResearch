@@ -117,7 +117,7 @@ class VisualVelocityEstimator:
         if len(seeds) < 3:
             return self._lose_tracks()
 
-        tracks = self._track_forward_backward(gray_prev, gray_curr, seeds, width, height, lk)
+        tracks = self._track_forward(gray_prev, gray_curr, seeds, width, height, lk)
         if tracks is None:
             return self._lose_tracks()
         filtered = self._filter_tracks(*tracks)
@@ -131,33 +131,27 @@ class VisualVelocityEstimator:
         self._tracked_frame_idx = self.current_frame.idx
         self.tracks = Tracks.empty(self.current_frame.idx)
 
-    def _track_forward_backward(self, gray_prev, gray_curr, seeds, width, height, lk):
-        """Run forward/backward LK and return valid (old, new) pairs or None."""
+    def _track_forward(self, gray_prev, gray_curr, seeds, width, height, lk):
+        """Run forward LK and return valid (old, new) pairs or None."""
         old = seeds.reshape(-1, 1, 2).astype(np.float32)
-        new, status_forward, _ = self.vision_backend.calcOpticalFlowPyrLK(
-            gray_prev, gray_curr, old, None, **lk)
-        if new is None or status_forward is None:
-            return None
-        valid = (
-            (status_forward.ravel() == 1)
-            & np.isfinite(new.reshape(-1, 2)).all(axis=1)
-        )
-        if not valid.any():
-            return None
-        old, new = old[valid], new[valid]
-        back, status_backward, _ = self.vision_backend.calcOpticalFlowPyrLK(
-            gray_curr, gray_prev, new, None, **lk)
-        if back is None or status_backward is None:
-            return None
 
-        old, new, back = old.reshape(-1, 2), new.reshape(-1, 2), back.reshape(-1, 2)
+        new, status, _ = self.vision_backend.calcOpticalFlowPyrLK(gray_prev, gray_curr, old, None, **lk)
+
+        if new is None or status is None: return None
+
+        old = old.reshape(-1, 2)
+        new = new.reshape(-1, 2)
+
         good = (
-            (status_backward.ravel() == 1)
-            & np.isfinite(back).all(axis=1)
-            & (np.abs(old - back).max(axis=1) < 1.0)
+            (status.ravel() == 1)
+            & np.isfinite(new).all(axis=1)
             & (new[:, 0] >= 0) & (new[:, 0] < width)
             & (new[:, 1] >= 0) & (new[:, 1] < height)
         )
+
+        if not good.any():
+            return None
+
         return old[good], new[good]
 
     def _filter_tracks(self, good_old, good_new):
@@ -180,6 +174,7 @@ class VisualVelocityEstimator:
             return None
         triangles, _, links, _ = self._build_triangles(good_new, **mesh_args)
         return good_old, good_new, triangles, links
+    
 
     def _finish_tracking(self, good_old, good_new, triangles, links):
         """Update tracking history and return the flow with (u, v, height) rows."""
@@ -194,6 +189,7 @@ class VisualVelocityEstimator:
         olds = np.column_stack((good_old, np.full(len(good_old), z)))
         news = np.column_stack((good_new, np.full(len(good_new), z)))
         return flow, olds, news
+    
 
     def compensate_vertical(self, good_old, good_new, triangles, min_area=4.0):
         """Estimate and remove radial expansion from the tracked mesh flow."""
@@ -218,6 +214,7 @@ class VisualVelocityEstimator:
         flow_comp = flow - (scale - 1) * (good_old - center)
         divergence = np.log(scale) / self.dt
         return flow_comp, scale, divergence
+    
 
     def _build_triangles(self, points, max_edge=200.0, min_area=20.0):
         """Build spatial links and triangles for track coherence checks."""
@@ -241,8 +238,9 @@ class VisualVelocityEstimator:
         return self.velocity_flows[keep], points
 
     def estimate_velocities(self, flow, points):
-        """Estimate and return ``[vx, vy, vz, yaw_rate]``; vz is the sensor value."""
+        """Estimate [vx, vy, vz, yaw_rate]; vz is the sensor value."""
         vz = float(self.drone_vel[2])
+
         if len(points) < 2:
             self.estimated_height = np.nan
             self.camera_velocity = np.array([0.0, 0.0, vz, 0.0])
@@ -250,49 +248,64 @@ class VisualVelocityEstimator:
             return self.camera_velocity.copy()
 
         ang_vel, att = self.drone_ang_vel, self.imu_att
-        height, width = self.frame_size[:2]
-        center = np.array([width / 2, height / 2])
+        h, w = self.frame_size[:2]
+        c = np.array([w / 2, h / 2])
+
         n = len(points)
         z = points[:, 2]
 
         k = max(1, int(n * 0.10))
         z_estimated = np.median(np.partition(z, -k)[-k:])
+
         if self._smoothed_z is None:
             self._smoothed_z = z_estimated
-        self._smoothed_z += self.height_smoothing * (z_estimated - self._smoothed_z)
+        self._smoothed_z += self.height_smoothing * (
+            z_estimated - self._smoothed_z
+        )
         z_estimated = self._smoothed_z
 
-        visual_flow = flow * (z / (self.foc_l * self.dt))[:, None]
+        v = flow * (z / (self.foc_l * self.dt))[:, None]
+
+        # Pitch affects image x; roll affects image y.
         roll, pitch = att[0], att[1]
         roll_rate, pitch_rate = ang_vel[0], ang_vel[1]
-        # Pitch moves the image along x, roll along y.
-        rotation_flow = z[:, None] * np.column_stack([
+
+        v_rot = z[:, None] * np.column_stack([
             pitch_rate / np.cos(pitch) ** 2,
             roll_rate / np.cos(roll) ** 2,
         ])
-        target = visual_flow - rotation_flow
-        position = (
-            (z[:, None] / self.foc_l) * (points[:, :2] - center)
+
+        B = v - v_rot
+
+        r = (
+            (z[:, None] / self.foc_l) * (points[:, :2] - c)
             + self.camera_offset_from_yaw_center
         )
-        matrix = np.vstack([
-            np.column_stack([np.ones(n), np.zeros(n), -position[:, 1]]),
-            np.column_stack([np.zeros(n), np.ones(n), position[:, 0]]),
+
+        A = np.vstack([
+            np.column_stack([np.ones(n), np.zeros(n), -r[:, 1]]),
+            np.column_stack([np.zeros(n), np.ones(n),  r[:, 0]]),
         ])
+
         measured, *_ = np.linalg.lstsq(
-            matrix, np.concatenate([target[:, 0], target[:, 1]]), rcond=None)
+            A, np.concatenate([B[:, 0], B[:, 1]]), rcond=None
+        )
         measured = -measured
 
-        kalman = self.vkfs.setdefault(0, VelocityKalmanFilter())
-        if not kalman.started:
-            kalman.state = measured.copy()
-            kalman.started = True
-        kalman.predict(kalman.state)
-        kalman.update(measured)
+        kf = self.vkfs.setdefault(0, VelocityKalmanFilter())
+
+        if not kf.started:
+            kf.state = measured.copy()
+            kf.started = True
+
+        kf.predict(kf.state)
+        kf.update(measured)
 
         self.estimated_height = float(z_estimated)
-        self.camera_velocity = np.insert(kalman.get(), 2, vz)
+        self.camera_velocity = np.insert(kf.get(), 2, vz)
+
         self._log_velocity(measured, n, z_estimated)
+
         return self.camera_velocity.copy()
 
     LOG_COLUMNS = (
