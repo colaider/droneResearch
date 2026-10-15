@@ -1,6 +1,7 @@
 import numpy as np
 import threading
 
+from filters.FKF import FusionKalmanFilter
 from sensors.IMU.IMU import IMU
 from sensors.IMU.IMUBridge import IMUBridge
 from sensors.visual.config.cameraConfig import STEREO_CAM
@@ -25,9 +26,14 @@ class Sensors:
             if publish_processed_camera:
                 self.visual_frame_bridge = VisualFrameBridge(node)
 
-        self.imu = IMU()                  # accel + gyro estimator
+        self.imu = IMU()                  # accel + gyro estimator (de-biasing, attitude, body accel)
         self.sample = None                # latest fully timestamped ImuSample (accel+gyro+baro+t)
         self.imu_bridge = IMUBridge(capacity=50)
+
+        # Fusion: the Kalman filter REPLACES the old low-pass blend. IMU accel drives the predict,
+        # the camera velocity corrects it (with its timestamp for out-of-sequence handling).
+        self.fkf = FusionKalmanFilter()
+        self._pending_cam = None          # one unconsumed camera measurement: (v4_world, t_s, idx)
 
         # barometer (kept here; it is not part of the IMU)
         self.baro_vel_ema = baro_vel_ema
@@ -76,6 +82,8 @@ class Sensors:
                 self._visual_position = None
                 self._visual_velocity_world = None
                 self._last_visual_frame_idx = None
+                self._pending_cam = None
+            self._reset_fkf()
         self._update_baro_velocity(float(baro), dt)
         if not self.imu.is_calibrating():
             self.imu.fuse_vertical_velocity(self._baro_vel, 0.9)   # vz = 0.9 accel + 0.1 baro
@@ -90,6 +98,17 @@ class Sensors:
                     with self._visual_condition:
                         self._pending_visual_frame = frame
                         self._visual_condition.notify()
+
+        # --- Kalman fusion: IMU accel drives predict, baro anchors vertical, camera corrects
+        # horizontal (with its timestamp for out-of-sequence replay). Replaces the old low-pass. ---
+        if not self.imu.is_calibrating():
+            v_cam, cam_t, cam_id = self._pop_camera_measurement()
+            self.fkf.step(
+                self.imu.get_body_accel(), dt, self.imu.get_attitude(),
+                t=None if t is None else float(t),
+                v_camera=v_cam, camera_id=cam_id, camera_timestamp=cam_t,
+            )
+            self.fkf.update_baro(self._baro, self._baro_vel)
 
     def _visual_worker_loop(self):
         while True:
@@ -122,6 +141,7 @@ class Sensors:
 
     def process_visual_frame(self, frame, idx=None):
         """Process a stereo capture and integrate valid visual velocity into position."""
+        frame_t = getattr(frame, "left_timestamp", None)   # capture time [s], same clock as IMU t
         processed = self.visual_estimator.processing(frame, idx)
         if self.visual_frame_bridge is not None:
             self.visual_frame_bridge.publish(
@@ -166,6 +186,11 @@ class Sensors:
         held = visual_velocity_world.copy()
         if not has_visual_vertical_velocity:
             held[2] = np.nan
+        # Camera measurement for the FKF: [vx, vy, vz, yaw_rate] in the world frame. vz is left in
+        # (the FKF's camera vz variance is ~1e6, so it is ignored); yaw_rate from the estimator.
+        yaw_rate = float(estimator.camera_velocity[3])
+        v4 = np.array([visual_velocity_world[0], visual_velocity_world[1],
+                       visual_velocity_world[2], yaw_rate])
         with self._visual_state_lock:
             visual_position = (
                 imu_position.copy()
@@ -177,6 +202,7 @@ class Sensors:
                 visual_position[2] = imu_position[2]
             self._visual_position = visual_position
             self._visual_velocity_world = held
+            self._pending_cam = (v4, frame_t, frame_idx)
         return processed
 
     def get_visual_velocity(self):
@@ -267,24 +293,22 @@ class Sensors:
     def get_baro_velocity(self):
         return self._baro_vel             # vertical velocity from the barometer
 
-    # ---------------- fused ----------------
-    def get_fused_position(self):
-        imu_position = self.get_acc_position()
+    # ---------------- fused (Kalman filter, not a low-pass blend) ----------------
+    def _pop_camera_measurement(self):
+        """Take the one unconsumed camera measurement for the FKF: (v4_world, t_s, idx) or Nones."""
         with self._visual_state_lock:
-            if self._visual_position is None:
-                return imu_position
-            return 0.1 * imu_position + 0.9 * self._visual_position
+            pending, self._pending_cam = self._pending_cam, None
+        if pending is None:
+            return None, None, None
+        return pending                       # (v4, t_s, idx)
+
+    def _reset_fkf(self):
+        """Re-origin the filter at calibration end: zero state, position 0, yaw = current heading."""
+        self.fkf.x[:] = 0.0
+        self.fkf.reset_position(p=np.zeros(3), yaw=float(self.imu.get_attitude()[2]))
+
+    def get_fused_position(self):
+        return self.fkf.get_position()       # world [x, y, z] from the Kalman filter
 
     def get_fused_velocity(self):
-        imu_velocity = self.get_acc_velocity()
-        with self._visual_state_lock:
-            visual = (
-                None if self._visual_velocity_world is None
-                else self._visual_velocity_world.copy()
-            )
-        if visual is None:
-            return imu_velocity
-        fused = imu_velocity.copy()
-        usable = np.isfinite(visual)
-        fused[usable] = 1.0 * imu_velocity[usable] + 0.0 * visual[usable]
-        return fused
+        return self.fkf.get_velocity()       # world [vx, vy, vz] from the Kalman filter

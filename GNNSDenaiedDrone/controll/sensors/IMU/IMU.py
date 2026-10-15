@@ -48,6 +48,7 @@ class IMU:
         self.imu_offset = np.zeros(3)
         self.compensate_tangential = False
         self._prev_gyro_c = None
+        self._accel_comp = np.zeros(3)   # last de-biased, lever-arm-compensated body accel [m/s^2]
 
     # ---------------- timestamped sample ----------------
     @staticmethod
@@ -70,6 +71,7 @@ class IMU:
         accel_c = accel - self.accel_bias
         gyro_c = gyro - self.gyro_bias
         accel_c = self._compensate_lever_arm(accel_c, gyro_c, dt)   # offset IMU -> rotation center
+        self._accel_comp = accel_c                                  # de-biased, lever-arm body accel
         self._update_attitude(accel_c, gyro_c, dt)
 
         if self._detect_stationary(accel_c, gyro_c):
@@ -182,7 +184,10 @@ class IMU:
         return self._pos.copy()              # world position from accel integration
 
     def get_acceleration(self):
-        return self._accel.copy()            # body accel [ax, ay, az] m/s^2
+        return self._accel.copy()            # raw body accel [ax, ay, az] m/s^2
+
+    def get_body_accel(self):
+        return self._accel_comp.copy()       # de-biased, lever-arm-compensated body accel [m/s^2]
 
     def get_angular_velocity(self):
         return self._gyro - self.gyro_bias   # [wx, wy, wz] rad/s, bias removed

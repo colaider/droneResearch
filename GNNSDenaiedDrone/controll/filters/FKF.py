@@ -17,12 +17,12 @@ class FusionKalmanFilter:
     """
 
     def __init__(self,
-                 command_gain=0.4,
                  # per-second process variance for each state axis
                  process_var=(0.05, 0.05, 0.03, 0.01,   # px, py, pz, yaw
-                              0.5, 0.5, 0.3, 1.0),       # vx, vy, vz, yaw_rate
-                 accel_var=(0.8, 0.8, 0.8),              # vx, vy, vz
-                 camera_var=(1.3, 1.3, 1e6, 0.3),        # vx, vy, vz, yaw_rate
+                              0.6, 0.6, 0.4, 1.0),       # vx, vy, vz, yaw_rate
+                 accel_var=(1.2, 1.2, 0.8),              # vx, vy, vz (accel vel drifts -> trust less)
+                 camera_var=(0.4, 0.4, 1e6, 0.25),       # vx, vy, vz(unusable), yaw_rate (trust camera xy)
+                 baro_var=(0.25, 0.4),                   # pz [m^2], vz [ (m/s)^2 ] (anchors vertical)
                  # extra P growth per second while camera is overdue
                  camera_staleness_rate=(0.5, 0.5, 0.0, 0.1,   # px, py, pz, yaw
                                         2.0, 2.0, 0.0, 0.1),  # vx, vy, vz, yaw_rate
@@ -30,13 +30,13 @@ class FusionKalmanFilter:
                  history_seconds=2.0, dt_nominal=0.01):
 
         self.dim = 8
-        self.k = command_gain
         self.x = np.zeros(self.dim)
         self.P = np.eye(self.dim)
         self.Q_rate = np.diag(process_var)
         self.Q_cam_stale = np.diag(camera_staleness_rate)
         self.R_accel = np.diag(accel_var)
         self.R_camera = np.diag(camera_var)
+        self.R_baro = np.diag(baro_var)
         self.expected_cam_interval = expected_cam_interval
         self._last_cam_id = None
         self._time_since_cam = 0.0
@@ -56,6 +56,11 @@ class FusionKalmanFilter:
         self.H_camera[2, 6] = 1.0
         self.H_camera[3, 7] = 1.0
 
+        # Barometer: observes pz (index 2) and vz (index 6) -> anchors the vertical channel
+        self.H_baro = np.zeros((2, self.dim))
+        self.H_baro[0, 2] = 1.0
+        self.H_baro[1, 6] = 1.0
+
         # OOSM state replay
         history_len = max(10, int(history_seconds / dt_nominal) + 10)
         self.history = deque(maxlen=history_len)
@@ -63,26 +68,19 @@ class FusionKalmanFilter:
 
     # ---------------- core steps ----------------
 
-    def predict(self, dt, imu_accel_body=None, attitude=None, command=None):
+    def predict(self, dt, imu_accel_body=None, attitude=None):
         # --- position & yaw: integrate from velocity & yaw_rate ---
         self.x[0] += self.x[4] * dt   # px += vx * dt
         self.x[1] += self.x[5] * dt   # py += vy * dt
         self.x[2] += self.x[6] * dt   # pz += vz * dt
         self.x[3] += self.x[7] * dt   # yaw += yaw_rate * dt
 
-        # --- velocity: driven by IMU accel (world frame) or command ---
+        # --- velocity: driven by IMU accel in world frame (no command prediction) ---
+        # yaw_rate is left to drift under process noise and is corrected by the camera update.
         if imu_accel_body is not None and attitude is not None:
             R = self.rotation_matrix(attitude)
             accel_world = R @ np.asarray(imu_accel_body, float)[:3] - self.gravity
             self.x[4:7] += accel_world * dt
-        elif command is not None:
-            u = np.asarray(command, float)
-            self.x[4:7] += self.k * (u[:3] - self.x[4:7]) * dt
-
-        # --- yaw_rate: pull toward command yaw_rate ---
-        if command is not None:
-            u = np.asarray(command, float)
-            self.x[7] += self.k * (u[3] - self.x[7]) * dt
 
         # --- covariance propagation with full F (couples pos<-vel, yaw<-yaw_rate) ---
         F = np.eye(self.dim)
@@ -120,16 +118,20 @@ class FusionKalmanFilter:
         self.x, self.P = self._update(self.x, self.P, v, self.H_camera, self.R_camera)
         self._time_since_cam = 0.0
 
+    def update_baro(self, altitude, vertical_velocity):
+        """Barometer update: altitude -> pz, vertical speed -> vz (anchors the vertical channel)."""
+        z = np.array([float(altitude), float(vertical_velocity)])
+        self.x, self.P = self._update(self.x, self.P, z, self.H_baro, self.R_baro)
+
     # ---------------- OOSM ----------------
 
-    def _snapshot(self, dt, imu_accel_body, attitude, command, v_accel):
+    def _snapshot(self, dt, imu_accel_body, attitude, v_accel):
         """Record everything needed to replay this tick."""
         self.history.append({
             "t": self.now,
             "dt": dt,
             "imu_accel_body": None if imu_accel_body is None else np.asarray(imu_accel_body, float).copy(),
             "attitude":       None if attitude       is None else np.asarray(attitude, float).copy(),
-            "command":        None if command        is None else np.asarray(command, float).copy(),
             "v_accel":        None if v_accel        is None else np.asarray(v_accel, float).copy(),
             # pre-tick state (before this tick's predict + accel update ran)
             "x_pre": self.x.copy(),
@@ -177,14 +179,12 @@ class FusionKalmanFilter:
                 dt=snap["dt"],
                 imu_accel_body=snap["imu_accel_body"],
                 attitude=snap["attitude"],
-                command=snap["command"],
                 v_accel=snap["v_accel"],
             )
             self.predict(
                 dt=snap["dt"],
                 imu_accel_body=snap["imu_accel_body"],
                 attitude=snap["attitude"],
-                command=snap["command"],
             )
             if snap["v_accel"] is not None:
                 self.update_accel(snap["v_accel"])
@@ -192,22 +192,22 @@ class FusionKalmanFilter:
 
     # ---------------- driver ----------------
 
-    def step(self, command, v_accel, dt,
-             v_camera=None, camera_id=None, camera_timestamp=None,
-             attitude=None):
+    def step(self, accel_body, dt, attitude,
+             t=None, v_camera=None, camera_id=None, camera_timestamp=None):
+        """One fusion tick.
 
-        self._snapshot(
-            dt=dt,
-            imu_accel_body=v_accel,
-            attitude=attitude,
-            command=command,
-            v_accel=v_accel,
-        )
+        accel_body : de-biased, lever-arm-compensated body acceleration [m/s^2] (drives velocity)
+        attitude   : [roll, pitch, yaw] to rotate accel to world and remove gravity
+        t          : absolute time at the START of this tick [s]; when given, the filter clock is
+                     pinned to it so camera_timestamp (same clock) is directly comparable for OOSM.
+        Velocity is driven ONLY by the IMU here (predict) and corrected by the camera update; there
+        is no accel-velocity measurement and no command prediction.
+        """
+        if t is not None:
+            self.now = float(t)
 
-        self.predict(dt, imu_accel_body=v_accel, attitude=attitude, command=command)
-        if v_accel is not None:
-            self.update_accel(v_accel)
-
+        self._snapshot(dt=dt, imu_accel_body=accel_body, attitude=attitude, v_accel=None)
+        self.predict(dt, imu_accel_body=accel_body, attitude=attitude)
         self.now += dt
 
         if v_camera is not None and camera_id != self._last_cam_id:
