@@ -1,22 +1,10 @@
 """Render triangulated visual tracks and publish the processed stereo view."""
 
-from collections.abc import Mapping
-
 import cv2
 import numpy as np
 
-
-_LAYER_COLORS = (
-    (255, 0, 0),
-    (0, 220, 0),
-    (0, 165, 255),
-    (255, 0, 255),
-    (255, 255, 0),
-)
-
-
-def render_visual_frame(frame, layer_tracks, depth_by_layer):
-    """Render left feature meshes and right stereo matches side by side."""
+def render_visual_frame(frame, tracks, stereo):
+    """Render tracked features and stereo matches side by side."""
     if len(frame.gray_frames) != 2:
         raise ValueError("Processed stereo frame must contain two grayscale images")
 
@@ -26,39 +14,28 @@ def render_visual_frame(frame, layer_tracks, depth_by_layer):
 
     left = cv2.cvtColor(left_gray, cv2.COLOR_GRAY2BGR)
     right = cv2.cvtColor(right_gray, cv2.COLOR_GRAY2BGR)
-    track_items = (
-        layer_tracks.items()
-        if isinstance(layer_tracks, Mapping)
-        else enumerate(layer_tracks)
-    )
-    for layer, tracks in track_items:
-        color = _LAYER_COLORS[layer % len(_LAYER_COLORS)]
-        points = np.asarray(tracks.new_points, dtype=np.float32).reshape(-1, 2)
-        triangles = np.asarray(tracks.triangles, dtype=int).reshape(-1, 3)
+    points = np.asarray(tracks.new_points, dtype=np.float32).reshape(-1, 2)
+    triangles = np.asarray(tracks.triangles, dtype=int).reshape(-1, 3)
+    color = (255, 0, 0)
+    for triangle in triangles:
+        if (np.all((triangle >= 0) & (triangle < len(points)))
+                and np.isfinite(points[triangle]).all()):
+            polygon = np.rint(points[triangle]).astype(np.int32)
+            cv2.polylines(left, [polygon], True, color, 1, cv2.LINE_AA)
+    for point in points:
+        if np.isfinite(point).all():
+            cv2.circle(left, tuple(np.rint(point).astype(int)), 2, color, -1)
 
-        for triangle in triangles:
-            if (np.all((triangle >= 0) & (triangle < len(points)))
-                    and np.isfinite(points[triangle]).all()):
-                polygon = np.rint(points[triangle]).astype(np.int32)
-                cv2.polylines(left, [polygon], True, color, 1, cv2.LINE_AA)
-        for point in points:
-            if np.isfinite(point).all():
-                cv2.circle(left, tuple(np.rint(point).astype(int)), 2, color, -1)
-
-        if layer >= len(depth_by_layer):
-            continue
-        stereo = depth_by_layer[layer]
-        right_points = np.asarray(stereo.right_points, dtype=np.float32).reshape(-1, 2)
-        count = min(len(points), len(right_points))
-        matched = np.isfinite(right_points[:count]).all(axis=1)
-
-        for triangle in triangles:
-            if (np.all((triangle >= 0) & (triangle < count))
-                    and matched[triangle].all()):
-                polygon = np.rint(right_points[triangle]).astype(np.int32)
-                cv2.polylines(right, [polygon], True, color, 1, cv2.LINE_AA)
-        for point in right_points[:count][matched]:
-            cv2.circle(right, tuple(np.rint(point).astype(int)), 2, color, -1)
+    right_points = np.asarray(stereo.right_points, dtype=np.float32).reshape(-1, 2)
+    count = min(len(points), len(right_points))
+    matched = np.isfinite(right_points[:count]).all(axis=1)
+    for triangle in triangles:
+        if (np.all((triangle >= 0) & (triangle < count))
+                and matched[triangle].all()):
+            polygon = np.rint(right_points[triangle]).astype(np.int32)
+            cv2.polylines(right, [polygon], True, color, 1, cv2.LINE_AA)
+    for point in right_points[:count][matched]:
+        cv2.circle(right, tuple(np.rint(point).astype(int)), 2, color, -1)
 
     cv2.putText(left, "Left: tracked feature mesh", (8, 20),
                 cv2.FONT_HERSHEY_SIMPLEX, .5, (255, 255, 255), 1, cv2.LINE_AA)
@@ -82,9 +59,9 @@ class VisualFrameBridge:
             CompressedImage, self.topic, qos_profile_sensor_data
         )
 
-    def publish(self, frame, layer_tracks, depth_by_layer):
+    def publish(self, frame, tracks, stereo):
         """Render the completed estimator outputs and publish one side-by-side JPEG."""
-        visual = render_visual_frame(frame, layer_tracks, depth_by_layer)
+        visual = render_visual_frame(frame, tracks, stereo)
         ok, encoded = cv2.imencode(".jpg", visual)
         if not ok:
             raise RuntimeError("OpenCV failed to encode the visualized stereo frame")

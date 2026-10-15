@@ -17,7 +17,7 @@ from sensors.visual.estimatorTypes import StereoFrame
 
 
 def frame(left, right=None):
-    return SimpleNamespace(pyramids=[[left], [left if right is None else right]])
+    return SimpleNamespace(gray_frames=[left, left if right is None else right])
 
 
 class GPUVisionTests(unittest.TestCase):
@@ -95,18 +95,18 @@ class GPUVisionTests(unittest.TestCase):
         pairs = [frame(self.image.copy(), self.image.copy()) for _ in range(3)]
         for pair in pairs[:2]:
             backend.begin_frame(pair)
-            for camera in pair.pyramids:
-                backend.Canny(camera[0], 50, 150)
+            for image in pair.gray_frames:
+                backend.Canny(image, 50, 150)
         self.assertEqual(len(backend._images), 4)
-        key = id(pairs[1].pyramids[1][0])
+        key = id(pairs[1].gray_frames[1])
         cached = backend._images[key]
         backend.begin_frame(pairs[2])
         self.assertEqual(len(backend._images), 2)
         self.assertIs(backend._images[key], cached)
-        for camera in pairs[0].pyramids:
-            self.assertNotIn(id(camera[0]), backend._images.sources)
-        for camera in pairs[2].pyramids:
-            backend.Canny(camera[0], 50, 150)
+        for image in pairs[0].gray_frames:
+            self.assertNotIn(id(image), backend._images.sources)
+        for image in pairs[2].gray_frames:
+            backend.Canny(image, 50, 150)
         self.assertEqual(len(backend._images), 4)
 
     def test_stereo_depth_uses_shared_backend(self):
@@ -124,28 +124,27 @@ class GPUVisionTests(unittest.TestCase):
     def test_estimator_routes_all_operations_through_shared_backend(self):
         cam = StereoCameraConfig(res=(321, 241), left_focal=160, right_focal=160,
                                  epipolar_direction=(1., 0.))
-        for layers in (1, 2):
-            est = VisulaEst(cam, image_filters=(), convert_to_grayscale=True,
-                filters_enabled=False, filter_kernel_size=3, pyramid_levels=layers,
-                max_stereo_skew_s=.005, vision_backend='opencl')
-            est.max_feature_points, est.feature_min_distance = 120, 12
-            calls = dict.fromkeys(('calcOpticalFlowPyrLK', 'goodFeaturesToTrack', 'Canny', 'dilate'), 0)
-            for name in calls:
-                operation = getattr(est.vision_backend, name)
-                def counted(*args, _name=name, _operation=operation, **kwargs):
-                    calls[_name] += 1
-                    return _operation(*args, **kwargs)
-                setattr(est.vision_backend, name, counted)
-            for i in range(3):
-                pair = StereoFrame(self.shifted(2*i), self.shifted(2*i+12),
-                                   i*.033, i*.033, i)
-                est.processing(pair, drone_pos=np.float64([0, 0, 2]),
-                    drone_vel=np.zeros(3), drone_ang_vel=np.zeros(3), imu_att=np.zeros(3))
-            self.assertIs(est.stereo.backend, est.vision_backend)
-            self.assertTrue(all(count > 0 for count in calls.values()))
-            self.assertGreater(len(est.depth_points), 10)
-            self.assertTrue(np.isfinite(est.camera_velocity).all())
-            self.assertLessEqual(len(est.vision_backend._images), 4 * layers)
+        est = VisulaEst(cam, image_filters=(), convert_to_grayscale=True,
+            filters_enabled=False, filter_kernel_size=3,
+            max_stereo_skew_s=.005, vision_backend='opencl')
+        est.max_feature_points, est.feature_min_distance = 120, 12
+        calls = dict.fromkeys(('calcOpticalFlowPyrLK', 'goodFeaturesToTrack', 'Canny', 'dilate'), 0)
+        for name in calls:
+            operation = getattr(est.vision_backend, name)
+            def counted(*args, _name=name, _operation=operation, **kwargs):
+                calls[_name] += 1
+                return _operation(*args, **kwargs)
+            setattr(est.vision_backend, name, counted)
+        for i in range(3):
+            pair = StereoFrame(self.shifted(2*i), self.shifted(2*i+12),
+                               i*.033, i*.033, i)
+            est.processing(pair, drone_pos=np.float64([0, 0, 2]),
+                drone_vel=np.zeros(3), drone_ang_vel=np.zeros(3), imu_att=np.zeros(3))
+        self.assertIs(est.stereo.backend, est.vision_backend)
+        self.assertTrue(all(count > 0 for count in calls.values()))
+        self.assertGreater(len(est.depth_points), 10)
+        self.assertTrue(np.isfinite(est.camera_velocity).all())
+        self.assertLessEqual(len(est.vision_backend._images), 4)
 
 
 if __name__ == '__main__':

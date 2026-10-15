@@ -11,7 +11,7 @@ class Sensors:
                  publish_processed_camera=True, async_visual_processing=False,
                  camera_config=None, image_filters=("clahe",),
                  convert_to_grayscale=True, filters_enabled=True,
-                 filter_kernel_size=3, pyramid_levels=1,
+                 filter_kernel_size=3,
                  max_stereo_skew_s=0.005, vision_backend=None):
         from sensors.visual import VisulaEst
 
@@ -52,7 +52,6 @@ class Sensors:
             convert_to_grayscale=convert_to_grayscale,
             filters_enabled=filters_enabled,
             filter_kernel_size=filter_kernel_size,
-            pyramid_levels=pyramid_levels,
             max_stereo_skew_s=max_stereo_skew_s,
         )
         if async_visual_processing and self.camera_receiver is not None:
@@ -127,8 +126,8 @@ class Sensors:
         if self.visual_frame_bridge is not None:
             self.visual_frame_bridge.publish(
                 processed,
-                self.visual_estimator.layer_tracks,
-                self.visual_estimator.depth_by_layer,
+                self.visual_estimator.tracks,
+                self.visual_estimator.point_depth,
             )
         frame_idx = processed.idx
         with self._visual_state_lock:

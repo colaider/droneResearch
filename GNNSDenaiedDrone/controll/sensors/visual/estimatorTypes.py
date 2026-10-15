@@ -20,8 +20,7 @@ class StereoFrame:
     Image format is inferred from shape unless explicitly supplied. Native
     (height, width) mono images feed tracking without a BGR-to-gray conversion.
     Conversion and filter settings are supplied to the estimator/frame processor.
-    skip_preprocessing can additionally bypass intensity filters for one pair;
-    required pyramids remain.
+    skip_preprocessing can additionally bypass intensity filters for one pair.
     BGR display copies are still built for the existing colored overlays.
     """
     left: np.ndarray
@@ -83,18 +82,15 @@ class StereoFrame:
 
 @dataclass
 class Frame:
-    """One stereo sample, with full-resolution inputs and coarse grayscale levels.
+    """One stereo sample with full-resolution tracking inputs.
 
     ``frames`` contains BGR display images (expanded from gray for mono input).
-    Each camera's ``pyramids`` entry contains its full, half, and quarter-resolution
-    grayscale images. The
-    full-resolution level is the same array as the corresponding gray frame.
+    ``gray_frames`` are the left/right images used for tracking and stereo.
     Empty defaults preserve the former ``EnumFrame()`` construction pattern.
     """
 
     frames: list = field(default_factory=list)
     gray_frames: list = field(default_factory=list)
-    pyramids: list = field(default_factory=list)
     idx: int = 0
     left_timestamp: float | None = None
     right_timestamp: float | None = None
@@ -114,13 +110,12 @@ class Frame:
     def display_copy(self):
         """Copy color images for overlays while retaining clean tracking inputs.
 
-        Grayscale images and pyramids are shared and must be treated as
-        read-only by downstream processing and display code.
+        Grayscale images are shared and must be treated as read-only by
+        downstream processing and display code.
         """
         return Frame(
             frames=[image.copy() for image in self.frames],
             gray_frames=self.gray_frames,
-            pyramids=self.pyramids,
             idx=self.idx,
             left_timestamp=self.left_timestamp,
             right_timestamp=self.right_timestamp,
@@ -130,14 +125,12 @@ class Frame:
 
 
 @dataclass
-class LayerTracks:
-    """One layer's current tracks, all expressed in full-resolution pixels.
+class Tracks:
+    """Current temporal tracks in full-resolution pixels.
 
     The mesh is image-space topology, not a reconstructed physical surface.
     Stereo correspondences/depth are stored separately from temporal tracking.
-    Native layer coordinates used to seed LK are kept separately by the estimator.
     """
-    layer: int
     frame_idx: int
     old_points: np.ndarray
     new_points: np.ndarray
@@ -146,8 +139,8 @@ class LayerTracks:
     links: np.ndarray
 
     @classmethod
-    def empty(cls, layer, frame_idx):
-        return cls(layer, frame_idx, *(np.empty((0, 2), np.float32) for _ in range(3)),
+    def empty(cls, frame_idx):
+        return cls(frame_idx, *(np.empty((0, 2), np.float32) for _ in range(3)),
                    np.empty((0, 3), int), np.empty((0, 2), int))
 
 
@@ -163,8 +156,8 @@ class StereoDepth:
 
 @dataclass
 class FrameDepth:
-    """Aggregated stereo-depth results for one frame."""
-    by_layer: list
+    """Stereo-depth results for one frame."""
+    stereo: StereoDepth
     points: np.ndarray
     colors: np.ndarray
     sigma: np.ndarray

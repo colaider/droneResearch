@@ -59,6 +59,29 @@ def compose_layer_display(gray, points, links, layer, color):
     return image
 
 
+def compose_tracking_display(gray, points, links, color):
+    """Draw the current full-resolution tracked feature mesh."""
+    image = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+    points = np.asarray(points).reshape(-1, 2)
+    pixels = np.rint(points).astype(int)
+    for a, b in links:
+        cv2.line(image, tuple(pixels[a]), tuple(pixels[b]), color, 1)
+    for x, y in pixels:
+        cv2.circle(image, (x, y), 2, color, -1)
+    height, width = gray.shape
+    image = cv2.copyMakeBorder(
+        image, 28, 0, 0, max(0, 330 - width), cv2.BORDER_CONSTANT,
+        value=(32, 32, 32),
+    )
+    label = f'Tracking | {width}x{height} | {len(points)} points'
+    cv2.putText(
+        image, label, (8, 19), cv2.FONT_HERSHEY_SIMPLEX, .45,
+        (235, 235, 235), 1, cv2.LINE_AA,
+    )
+    cv2.line(image, (0, 26), (image.shape[1] - 1, 26), color, 2)
+    return image
+
+
 def compose_depth_display(gray, points, total_points):
     """Draw sparse measured depth; label the per-frame depth colour range in metres."""
     image = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)

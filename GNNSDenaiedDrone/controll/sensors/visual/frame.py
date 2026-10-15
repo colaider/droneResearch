@@ -1,4 +1,4 @@
-"""Stereo frame preprocessing and clean image-pyramid storage.
+"""Stereo frame preprocessing and grayscale tracking-input preparation.
 
 This module owns image preparation only. Tracking state, feature selection,
 depth, and velocity estimation belong to their respective pipeline stages.
@@ -16,11 +16,8 @@ class FrameProcessor:
     SUPPORTED_FILTERS = frozenset(("clahe", "gaussian", "median"))
 
     def __init__(self, image_filters: tuple[str, ...], filter_kernel_size: int,
-                 pyramid_levels: int, *, convert_to_grayscale: bool,
+                 *, convert_to_grayscale: bool,
                  filters_enabled: bool):
-        if not isinstance(pyramid_levels, int) or pyramid_levels < 1:
-            raise ValueError("pyramid_levels must be a positive integer")
-        self.pyramid_levels = pyramid_levels
         self.image_filters = tuple(image_filters)
         self.convert_to_grayscale = convert_to_grayscale
         self.filters_enabled = filters_enabled
@@ -93,8 +90,6 @@ class FrameProcessor:
         FILTERS_ENABLED=False bypasses filters; a pair can also opt out using
         skip_preprocessing=True. All processor options are supplied at creation.
 
-        ``pyrDown`` smooths before reducing each image dimension. Tracking and
-        stereo matching can keep using the original-resolution gray frames.
         """
         left_timestamp = right_timestamp = None
         left_timestamp_ns = right_timestamp_ns = None
@@ -132,14 +127,7 @@ class FrameProcessor:
         else:
             prepared = filtered
             gray_frames = [cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) for image in prepared]
-        pyramids = []
-        for gray in gray_frames:
-            levels = [gray]
-            if self.pyramid_levels > 1:
-                for _ in range(1, self.pyramid_levels):
-                    levels.append(cv2.pyrDown(levels[-1]))
-            pyramids.append(levels)
-        return Frame(frames=prepared, gray_frames=gray_frames, pyramids=pyramids,
+        return Frame(frames=prepared, gray_frames=gray_frames,
                      idx=idx, left_timestamp=left_timestamp,
                      right_timestamp=right_timestamp,
                      left_timestamp_ns=left_timestamp_ns,

@@ -41,7 +41,7 @@ class VisionBackend:
         self._activate()
         self._frames.append(frame)
         sources = {id(image): image for frame in self._frames
-                   for camera in frame.pyramids for image in camera}
+               for image in frame.gray_frames}
         for key in self._images.keys() - sources.keys():
             del self._images[key]
         self._images.sources = sources
@@ -63,8 +63,21 @@ class VisionBackend:
         return tuple(map(_numpy, result))
 
     def goodFeaturesToTrack(self, image, *, mask=None, **parameters):
-        return _numpy(cv2.goodFeaturesToTrack(
+        points = _numpy(cv2.goodFeaturesToTrack(
             self._images[id(image)], mask=self._convert(mask), **parameters))
+        if points is None or mask is None:
+            return points
+        points = points.reshape(-1, 2)
+        pixels = points.astype(int)
+        height, width = mask.shape
+        inside = (
+            np.isfinite(points).all(axis=1)
+            & (pixels[:, 0] >= 0) & (pixels[:, 0] < width)
+            & (pixels[:, 1] >= 0) & (pixels[:, 1] < height)
+        )
+        valid = np.flatnonzero(inside)
+        inside[valid] = mask[pixels[valid, 1], pixels[valid, 0]] > 0
+        return points[inside].reshape(-1, 1, 2)
 
     def Canny(self, image, threshold1, threshold2, **parameters):
         return cv2.Canny(_numpy(self._images[id(image)]), threshold1, threshold2,
