@@ -48,7 +48,8 @@ class ControlLoop:
         )
         self.sensors.update(
             self.reader.get_accel(), self.reader.get_gyro(),
-            self.reader.get_baro(), dt, command_velocity=command_velocity,
+            self.reader.get_baro(), dt, t=self.reader.get_imu_timestamp(),
+            command_velocity=command_velocity,
         )
         self.sm.step()                                      # WARMUP -> CALIBRATE -> HOVER
         self.estimates.publish(self.sensors, self.sm.stage)

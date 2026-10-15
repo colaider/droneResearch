@@ -26,6 +26,7 @@ class Sensors:
                 self.visual_frame_bridge = VisualFrameBridge(node)
 
         self.imu = IMU()                  # accel + gyro estimator
+        self.sample = None                # latest fully timestamped ImuSample (accel+gyro+baro+t)
         self.imu_bridge = IMUBridge(capacity=50)
 
         # barometer (kept here; it is not part of the IMU)
@@ -63,7 +64,12 @@ class Sensors:
             self._visual_worker.start()
 
     # ---------------- update ----------------
-    def update(self, accel, gyro, baro, dt, command_velocity=None):
+    def update(self, accel, gyro, baro, dt, t=None, command_velocity=None):
+        # Build the timestamped record: the IMU makes it (gyro+accel+stamp, baro empty), then
+        # the Sensors facade fills the barometer -> one fully timestamped sample per update.
+        self.sample = self.imu.build_sample(accel, gyro, t)
+        self.sample.baro = float(baro)
+
         was_calibrating = self.imu.is_calibrating()
         self.imu.update(accel, gyro, dt)
         if was_calibrating and not self.imu.is_calibrating():
@@ -227,6 +233,10 @@ class Sensors:
 
     def is_calibrating(self):
         return self.imu.is_calibrating()
+
+    def get_sample(self):
+        """Latest fully timestamped ImuSample (accel + gyro + baro + sensor-core t), or None."""
+        return self.sample
 
     # ---------------- forwarded IMU estimates ----------------
     def get_attitude(self):

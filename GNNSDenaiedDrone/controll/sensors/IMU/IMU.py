@@ -1,6 +1,22 @@
+from dataclasses import dataclass
+
 import numpy as np
 
 G = 9.81
+
+
+@dataclass
+class ImuSample:
+    """One timestamped sensor reading.
+
+    Built by the IMU from accel + gyro + the sensor-core timestamp (baro left empty);
+    the Sensors facade fills in the barometer afterwards. This is the single timestamped
+    record that later feeds time-windowed fusion.
+    """
+    t: float                       # sensor-core internal clock [s]
+    accel: np.ndarray              # body accel [ax, ay, az] m/s^2
+    gyro: np.ndarray               # body angular velocity [wx, wy, wz] rad/s
+    baro: float = None             # altitude [m]; None until Sensors fills it
 
 
 class IMU:
@@ -32,6 +48,14 @@ class IMU:
         self.imu_offset = np.zeros(3)
         self.compensate_tangential = False
         self._prev_gyro_c = None
+
+    # ---------------- timestamped sample ----------------
+    @staticmethod
+    def build_sample(accel, gyro, t):
+        """Construct a timestamped ImuSample from a reading (barometer left empty)."""
+        return ImuSample(t=t,
+                         accel=np.asarray(accel, dtype=float),
+                         gyro=np.asarray(gyro, dtype=float))
 
     # ---------------- update ----------------
     def update(self, accel, gyro, dt):

@@ -1,6 +1,11 @@
 """IMU topic: the RB3's OWN accelerometer + gyro, from the sensor core (see.py).
 
 Only the RB3 IMU is used here (not Betaflight's), published as sensor_msgs/Imu on <ns>/imu.
+
+header.stamp is the RB3 sensor-core INTERNAL clock (SSC/QTimer time, seconds) of the reading --
+NOT ROS/system time and NOT publish time. This is the true capture time, so it carries no timer
+jitter and lets consumers window IMU samples by the exact interval between readings. For visual
+fusion the camera (and baro) must be stamped on this SAME sensor-core clock to be comparable.
 """
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Imu
@@ -44,8 +49,14 @@ class ImuTopic:
             ]
 
             msg = Imu()
-            msg.header.stamp = self.node.get_clock().now().to_msg()
             msg.header.frame_id = self.frame
+            # Stamp from the sensor-core internal clock of THIS gyro reading (g[1], seconds).
+            # Fall back to ROS time only if the sample carried no sensor timestamp.
+            ssc_seconds = g[1]
+            if ssc_seconds is not None:
+                self._set_stamp(msg.header.stamp, ssc_seconds)
+            else:
+                msg.header.stamp = self.node.get_clock().now().to_msg()
 
             gv = g[2]
             msg.angular_velocity.x, msg.angular_velocity.y, msg.angular_velocity.z = gv[0], gv[1], gv[2]
@@ -57,6 +68,24 @@ class ImuTopic:
             msg.orientation.w = 1.0
             msg.orientation_covariance[0] = -1.0               # no orientation estimate here
             self.pub.publish(msg)
+
+    @staticmethod
+    def _set_stamp(stamp, seconds):
+        """Write float seconds (sensor-core internal clock) into a builtin_interfaces/Time.
+
+        Splits into whole seconds + nanoseconds, guarding the rounding case where the
+        fractional part rounds up to a full second (nanosec must stay < 1e9).
+        """
+        sec = int(seconds)
+        nanosec = int(round((seconds - sec) * 1_000_000_000))
+        if nanosec >= 1_000_000_000:
+            sec += 1
+            nanosec -= 1_000_000_000
+        elif nanosec < 0:                       # defensive: seconds was negative/odd
+            sec -= 1
+            nanosec += 1_000_000_000
+        stamp.sec = sec
+        stamp.nanosec = nanosec
 
     def stop(self):
         self.sensors.stop()
