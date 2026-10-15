@@ -42,9 +42,7 @@ class VisualVelocityEstimator:
 
     def aply_flow(self):
         """Track the left image, then publish observations for velocity fitting."""
-        self._reset_tracking_frame()
-        if len(self.buffer) < 2:
-            return
+        if len(self.buffer) < 2: return
 
         previous, current = self.buffer[-2], self.buffer[-1]
         if min(len(previous.frames), len(current.frames)) < 2:
@@ -83,16 +81,8 @@ class VisualVelocityEstimator:
         """Store observations and mark rows eligible for velocity fitting."""
         self.velocity_flows = flow
         self.velocity_points = new
-        keep = (
-            np.isfinite(flow).all(axis=1)
-            & np.isfinite(old).all(axis=1)
-            & np.isfinite(new).all(axis=1)
-            & (old[:, 2] > 0)
-            & (new[:, 2] > 0)
-        )
-        ids = np.flatnonzero(keep)
-        if len(ids):
-            keep[ids] = self.point_prediction_filtering(old[ids], new[ids])
+       
+        keep = self.point_prediction_filtering(old, new)
         self.velocity_point_mask = keep
 
     def lucas_kanade_flow(self, gray_prev, gray_curr):
@@ -227,15 +217,19 @@ class VisualVelocityEstimator:
             good_old, good_new, links, thresh, min_links, neighbor_min_links)
 
     def velocity_inputs(self):
-        """Return masked (flow, points) with column 2 set to each point's stereo depth.
+        """Return flow and points filtered by valid stereo depth."""
+        points = self.velocity_points.copy()
+        flow = self.velocity_flows
+        depths = self.point_depth.depths
 
-        Points without a valid stereo depth keep the drone altitude.
-        """
-        keep = self.velocity_point_mask
-        points = self.velocity_points[keep]
-        depths = self.point_depth.depths[keep]
-        points[:, 2] = np.where(np.isfinite(depths) & (depths > 0), depths, points[:, 2])
-        return self.velocity_flows[keep], points
+        valid = np.isfinite(depths) & (depths > 0)
+
+        points = points[valid].copy()
+        flow = flow[valid]
+        depths = depths[valid]
+        points[:, 2] = depths
+
+        return flow, points
 
     def estimate_velocities(self, flow, points):
         """Estimate [vx, vy, vz, yaw_rate]; vz is the sensor value."""
@@ -243,7 +237,7 @@ class VisualVelocityEstimator:
 
         if len(points) < 2:
             self.estimated_height = np.nan
-            self.camera_velocity = np.array([0.0, 0.0, vz, 0.0])
+            self.camera_velocity = np.array([0.0, 0.0, 0.0, 0.0])
             self._log_velocity(np.full(3, np.nan), len(points), np.nan)
             return self.camera_velocity.copy()
 

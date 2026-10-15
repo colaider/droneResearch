@@ -6,7 +6,8 @@ import time
 class DroneVisulaCTRL(DronePositionCTRL):
     def __init__(self, drone_entity, dt=0.01, camera_fps=30):
         super().__init__(drone_entity, dt)
-        self.camera_frame_interval = 1.0 / camera_fps
+        # self.camera_frame_interval = 1.0 / camera_fps
+        self.camera_frame_interval  = 0.01
         self.camera_step_period = max(1, round(self.camera_frame_interval / dt))
         self.last_frame_time = None
         self.cam_pos = None                      # lazily initialized on first position_ctrl_fused call
