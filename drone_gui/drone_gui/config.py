@@ -12,7 +12,7 @@ def _env(name, default):
 @dataclass
 class Config:
     # --- the board ---------------------------------------------------------
-    host: str = _env("DRONE_HOST", "192.168.0.172")
+    host: str = _env("DRONE_HOST", "192.168.137.124")
     user: str = _env("DRONE_USER", "ubuntu")
     # Whichever candidate key this machine already has (see setup_key.CANDIDATES); if it has
     # none, this is where `--login` creates one.
