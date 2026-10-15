@@ -47,7 +47,20 @@ class Config:
         ("rb3-stereo-setup", "Camera kernel modules (camss combo + CAM0B)", False),
         ("rb3-usb-host", "Renesas USB host re-probe (brings up /dev/ttyACM0)", False),
         ("sscrpcd", "Qualcomm sensor core daemon (IMU/baro/mag)", False),
+        ("drone-rb3", "RB3 topics: IMU, baro, stereo cameras, FC bridge (rb3/start_rb3.py)", True),
+        ("drone-gnss-control", "GNSS-denied control loop (controll/main.py) - commands the motors",
+         True),
     ])
+    # Asked in the page before start/restart of these units, since starting them has an effect
+    # beyond the unit itself. Both are installed by service/install_board_units.sh.
+    unit_warnings: dict = field(default_factory=lambda: {
+        "drone-rb3": "drone-rb3 takes the flight controller and the cameras, so systemd stops "
+                     "drone-control and drone-stereo. Continue?",
+        "drone-gnss-control": "The control loop can COMMAND THE MOTORS once the radio has armed "
+                              "the drone and the MSP OVERRIDE switch is on. It also starts "
+                              "drone-rb3. Keep the drone resting until it reaches HOVER "
+                              "(it calibrates first). Continue?",
+    })
 
     def __post_init__(self):
         if not self.ssh_key:

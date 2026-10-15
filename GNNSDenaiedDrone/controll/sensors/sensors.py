@@ -189,6 +189,13 @@ class Sensors:
         with self._visual_state_lock:
             return None if self._visual_position is None else self._visual_position.copy()
 
+    def get_visual_velocity_world(self):
+        """Return latest camera velocity in the world frame [vx, vy, vz] (nan axis = no
+        measurement), or None until visual tracks are usable."""
+        with self._visual_state_lock:
+            return (None if self._visual_velocity_world is None
+                    else self._visual_velocity_world.copy())
+
     def close(self):
         """Release optional camera-topic subscriptions."""
         if self._visual_worker is not None:

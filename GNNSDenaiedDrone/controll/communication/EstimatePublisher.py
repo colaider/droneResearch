@@ -54,6 +54,8 @@ class EstimatePublisher:
             "position": _finite(sensors.get_fused_position()),  # what the controller flies by
             "velocity": _finite(sensors.get_fused_velocity()),
             "visual_position": _finite(sensors.get_visual_position()),
+            # camera velocity rotated into the world frame, same axes as visual_position
+            "visual_velocity": _finite(sensors.get_visual_velocity_world()),
             "vx": visual[0], "vy": visual[1], "vz": visual[2], "yaw_rate": visual[3],
             "tracked": int(np.count_nonzero(estimator.velocity_point_mask)),
             "depth_m": depth if math.isfinite(depth) else None,
