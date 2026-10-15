@@ -65,7 +65,7 @@ class IMU:
 
     # ---------------- update ----------------
     def update(self, accel, gyro, dt):
-        gyro = IMU.rotate_x_90(gyro)
+        gyro = IMU.rotate_x_180(gyro)
         self._accel, self._gyro = accel, gyro
 
         if self._calib is not None:
