@@ -60,8 +60,8 @@ class IMU:
     def build_sample(accel, gyro, t):
         """Construct a timestamped ImuSample from a reading (barometer left empty)."""
         return ImuSample(t=t,
-                         accel=IMU.rotate_x_90(accel),
-                         gyro=IMU.rotate_x_90(gyro))
+                         accel=accel,
+                         gyro=IMU.rotate_x_180(gyro))
 
     # ---------------- update ----------------
     def update(self, accel, gyro, dt):
