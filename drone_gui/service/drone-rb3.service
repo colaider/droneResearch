@@ -1,0 +1,35 @@
+[Unit]
+# Keep retrying for as long as it takes: giving up permanently is worse than a retry
+# every 5 s. This key is only honoured in [Unit] - systemd ignores it in [Service].
+StartLimitIntervalSec=0
+# All RB3 topics on one node (GNNSDenaiedDrone/rb3/start_rb3.py): the board's IMU and barometer,
+# the stereo cameras, and the flight controller bridge (cmd_attitude in, FC telemetry out).
+Description=RB3 topics (start_rb3: IMU, baro, stereo cameras, flight controller bridge)
+After=rb3-usb-host.service sscrpcd.service rb3-stereo-setup.service
+# Wants, not Requires: start_rb3 treats a missing camera or FC as a warning and brings the
+# rest up, so neither should stop it from starting.
+Wants=rb3-usb-host.service rb3-stereo-setup.service
+# It opens /dev/ttyACM0 (like drone-control) and the cameras (like drone-stereo and drone-vo).
+# Only one process may hold each, so systemd stops those when this starts, and the other way round.
+Conflicts=drone-control.service drone-stereo.service drone-vo.service
+
+[Service]
+Type=simple
+User=ubuntu
+Environment=ROS_DOMAIN_ID=42
+# The repo checkout on the board (see rb3_stereo/QUICKSTART.md). start_rb3 puts rb3_control
+# and rb3_stereo on sys.path itself, so the ROS workspace is not needed.
+WorkingDirectory=/home/ubuntu/droneResearch/GNNSDenaiedDrone
+# fastdds.xml keeps full-size images in shared memory for subscribers on the board (the control
+# loop); $$ is systemd's escape for a literal $, so bash expands $PWD.
+ExecStart=/bin/bash -lc 'source /opt/ros/jazzy/setup.bash && export FASTRTPS_DEFAULT_PROFILES_FILE=$$PWD/rb3/rb3_stereo/config/fastdds.xml && exec python3 -u -m rb3.start_rb3'
+SyslogIdentifier=drone-rb3
+# A crash (e.g. the FC re-enumerating on USB) restarts it; a stop from the panel does not.
+Restart=on-failure
+RestartSec=5
+# SIGINT lets start_rb3 stop every topic, which releases the sticks back to the radio.
+KillSignal=SIGINT
+TimeoutStopSec=10
+
+[Install]
+WantedBy=multi-user.target

@@ -90,11 +90,26 @@ Environment variables work too (`DRONE_HOST`, `DRONE_GUI_PORT`, `DRONE_GUI_BIND`
 | Flight controller | who has control (radio or RB3), armed state, arming flags, roll/pitch/yaw, both altitudes, battery, and the sticks the RB3 sent next to the ones the FC used |
 | RB3 sensors | the board's own IMU, barometer and magnetometer: gyro, accel, mag with field magnitude, pressure and baro altitude, each with its stream rate, sample count and restart count. The sensors are on the sensor core, but `rb3_control` publishes them, so they read "not streaming" while `drone-control` is down |
 | Position | x/y/z and velocity, each labelled with where it came from. The flight controller supplies height only - Betaflight has no X/Y without GPS and none is fitted - so x/y has to come from the stereo estimator |
+| Path | the position over time, from above (x/y, coloured by height) and in 3D (drag to turn, scroll to zoom), with the drone drawn as a box turned by the FC's roll/pitch/yaw. One track per flight run, saved to `~/.local/share/drone_gui/tracks/`; the list replays earlier runs, `new track` starts a fresh one |
+| Position and velocity from camera | the camera's own estimate over the same run as the path: x/y/z and vx/vy/vz (world frame) from `visual_position` / `visual_velocity` on `/vo/status`. A gap means the camera had no measurement on that axis (vz without depth velocity) |
 | Cameras | up to 4 views, each showing any image topic on the board (`CompressedImage` as published, raw `Image` encoded to JPEG on the board), e.g. `/stereo/preview/compressed` next to `/stereoVisualReturn/processed/compressed`. Only topics a view shows are subscribed and sent over the link |
 | History | 2 minutes of altitude, attitude and battery |
 | Processes | every unit's state, with start / stop / restart and a journal viewer |
 | Board | uptime, load, temperature, memory, disk, whether `/dev/ttyACM0` exists and **which PID holds it**, and how many of the 4 sensor-core streams are alive |
 | Event log | arm/disarm, node restarts, board reboots, unit state changes, every action taken from the panel — appended to `~/.local/share/drone_gui/events.jsonl`, so it survives restarts of the panel itself |
+
+## start_rb3 and the control loop
+
+Two more units run the `GNNSDenaiedDrone` code from the board's checkout at `~/droneResearch`
+(`git pull` there first; `install_board_units.sh` installs both):
+
+| Unit | Runs | |
+| --- | --- | --- |
+| `drone-rb3` | `rb3/start_rb3.py` | IMU, baro, stereo cameras and the FC bridge on one node. Publishes the same `/drone/...` FC topics as `rb3_control` (attitude, altitude, altitude_stamped, battery, armed, status), so the Flight controller and RB3 sensors boxes work with either. It holds `/dev/ttyACM0` and the cameras, so it `Conflicts=` with `drone-control`, `drone-stereo` and `drone-vo`: starting it stops them. Restarts itself after a crash |
+| `drone-gnss-control` | `controll/main.py` | The control loop. `BindsTo=drone-rb3`: starting it starts `drone-rb3` first, and `drone-rb3` stopping stops it. **It publishes `/drone/cmd_attitude`, so it can command the motors** once the radio has armed the drone and the MSP OVERRIDE switch is on. Never restarted automatically, because it calibrates assuming the drone is resting |
+
+The page asks for confirmation before starting or restarting either one, and says why. Neither
+is enabled at boot; `sudo systemctl enable drone-rb3` on the board changes that.
 
 ## Position, and what is missing for it
 
@@ -157,6 +172,7 @@ drone_gui/ros_link.py         alternative transport: subscribe to DDS directly
 drone_gui/store.py            latest values + plot history, shared by both transports
 drone_gui/board.py            systemctl and health probes over SSH
 drone_gui/events.py           the on-disk event log
+drone_gui/tracks.py           position tracks, one file per flight run
 drone_gui/server.py           HTTP: SSE for state, MJPEG for the camera, POST for actions
 drone_gui/web/                the page (hand-written; no framework, no build step)
 ```

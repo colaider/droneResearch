@@ -1,0 +1,136 @@
+<?xml version="1.0" ?>
+
+<robot name="custom_racer">
+
+  <!--
+    Custom racing-drone airframe, measured 2026-09-18. A new file, separate from the
+    stock drone.urdf/cf2 asset it is patterned after; nothing under drone_urdf/ was modified.
+    arm: diagonal motor-to-CoG distance, derived from the measured prop-center
+      spacings (0.188 m horizontal x 0.148 m vertical -> half-offsets 0.094 / 0.074 m).
+    kf/km: estimated from measured max lift (2.5 kg payload + 0.8 kg airframe = 32.373 N
+      total thrust) and an assumed max RPM (~27500, from 5" prop disk theory, C_T=0.11).
+      Max RPM was not measured directly, replace kf once the real max RPM is known
+      (kf scales as 1/RPM_max^2, km scales with kf so their ratio stays ~1.17 cm).
+    thrust2weight: computed at the 1.0 kg operating mass (airframe + battery + sensors + RPi).
+  -->
+  <properties arm="0.1196" kf="1.07e-8" km="1.25e-10" thrust2weight="3.3" prop_radius="0.065" />
+
+  <link name="base_link">
+
+    <!-- base_link origin is treated as the drone's center of gravity (see center_of_mass_link below) -->
+    <inertial>
+      <origin rpy="0 0 0" xyz="0 0 0"/>
+      <mass value="1.0"/>
+      <inertia ixx="3.1e-3" ixy="0.0" ixz="0.0" iyy="2.4e-3" iyz="0.0" izz="4.9e-3"/>
+    </inertial>
+
+    <!-- Visual mesh inherited from the cf2 placeholder asset: it is not the real airframe shape,
+         only used so the drone renders as something recognizable in the viewer. -->
+    <visual>
+      <origin rpy="0 0 0" xyz="0 0 0"/>
+      <geometry>
+        <mesh filename="./body.obj" scale="1 1 1"/>
+      </geometry>
+      <material name="grey">
+        <color rgba=".5 .5 .5 1"/>
+      </material>
+    </visual>
+
+    <collision>
+      <origin rpy="0 0 0" xyz="0 0 0"/>
+      <geometry>
+        <cylinder radius="0.1065" length="0.07"/>
+      </geometry>
+    </collision>
+
+  </link>
+
+  <!-- Motor positions: +-0.094 m horizontal, +-0.074 m vertical (measured prop-center spacing / 2),
+       +0.02 m above the CoG (estimated prop-plane height; not directly measured). -->
+
+  <link name="prop0_link">
+    <inertial>
+      <origin rpy="0 0 0" xyz="0.094 -0.074 0.02"/>
+      <mass value="0"/>
+      <inertia ixx="0" ixy="0" ixz="0" iyy="0" iyz="0" izz="0"/>
+    </inertial>
+    <visual>
+      <origin rpy="0 0 0" xyz="0.0323 -0.0323 0.0132"/>
+      <geometry>
+          <mesh filename="./propeller0.obj"/>
+      </geometry>
+    </visual>
+
+  </link>
+  <joint name="prop0_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="prop0_link"/>
+  </joint>
+
+  <link name="prop1_link">
+    <inertial>
+      <origin rpy="0 0 0" xyz="-0.094 -0.074 0.02"/>
+      <mass value="0"/>
+      <inertia ixx="0" ixy="0" ixz="0" iyy="0" iyz="0" izz="0"/>
+    </inertial>
+    <visual>
+      <origin rpy="0 0 0" xyz="-0.0323 -0.0323 0.0132"/>
+      <geometry>
+          <mesh filename="./propeller1.obj"/>
+      </geometry>
+    </visual>
+  </link>
+  <joint name="prop1_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="prop1_link"/>
+  </joint>
+
+  <link name="prop2_link">
+    <inertial>
+      <origin rpy="0 0 0" xyz="-0.094 0.074 0.02"/>
+      <mass value="0"/>
+      <inertia ixx="0" ixy="0" ixz="0" iyy="0" iyz="0" izz="0"/>
+    </inertial>
+    <visual>
+      <origin rpy="0 0 0" xyz="-0.0323 0.0323 0.0132"/>
+      <geometry>
+          <mesh filename="./propeller2.obj"/>
+      </geometry>
+    </visual>
+  </link>
+  <joint name="prop2_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="prop2_link"/>
+  </joint>
+
+  <link name="prop3_link">
+    <inertial>
+      <origin rpy="0 0 0" xyz="0.094 0.074 0.02"/>
+      <mass value="0"/>
+      <inertia ixx="0" ixy="0" ixz="0" iyy="0" iyz="0" izz="0"/>
+    </inertial>
+    <visual>
+      <origin rpy="0 0 0" xyz="0.0323 0.0323 0.0132"/>
+      <geometry>
+          <mesh filename="./propeller3.obj"/>
+      </geometry>
+    </visual>
+  </link>
+  <joint name="prop3_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="prop3_link"/>
+  </joint>
+
+  <link name="center_of_mass_link">
+    <inertial>
+      <origin rpy="0 0 0" xyz="0 0 0"/>
+      <mass value="0"/>
+      <inertia ixx="0" ixy="0" ixz="0" iyy="0" iyz="0" izz="0"/>
+    </inertial>
+  </link>
+  <joint name="center_of_mass_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="center_of_mass_link"/>
+  </joint>
+
+</robot>

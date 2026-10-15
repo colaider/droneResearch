@@ -15,6 +15,7 @@ from .config import CONFIG
 from .events import EventLog
 from .server import State, serve
 from .ssh_link import SshLink
+from .tracks import TrackLog
 
 
 def main(argv=None):
@@ -62,8 +63,11 @@ def main(argv=None):
                          % (exc, "\nDid you source the ROS 2 setup?"
                             if args.transport == "dds" else ""))
 
+    tracks = TrackLog(CONFIG.state_dir, ros, on_event=events.add)
+    tracks.start()
+
     board = Board(CONFIG)
-    state = State(CONFIG, ros, board, events)
+    state = State(CONFIG, ros, board, events, tracks)
     state.start()
 
     try:
