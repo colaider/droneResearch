@@ -15,36 +15,17 @@ from scipy.spatial import Delaunay, QhullError
 TRACK_COLOR = (255, 0, 0)
 
 
-def replenish(gray, pts, cam, max_points=300, min_distance=100, backend=None):
-    backend = backend or cv2
+def replenish(gray, pts, max_points=300):
     h, w = gray.shape
-    margin_x, margin_y = int(np.ceil(w * 0.05)), int(np.ceil(h * 0.05))
-    pts = np.asarray(pts, np.float32).reshape(-1, 2)
-    inside = (np.isfinite(pts).all(axis=1)
-              & (pts[:, 0] >= margin_x) & (pts[:, 0] < w - margin_x)
-              & (pts[:, 1] >= margin_y) & (pts[:, 1] < h - margin_y))
-    pts = pts[inside][:max_points]
-    if len(pts) >= max_points:
-        return pts.copy()
-    mask = np.zeros((h, w), np.uint8)
-    mask[margin_y:h - margin_y, margin_x:w - margin_x] = 255
-    for x, y in pts.astype(int):
-        cv2.circle(mask, (x, y), max(1, int(np.ceil(min_distance))), 0, -1)
+    mask = np.full((h, w), 255, np.uint8)
 
-    cand = backend.goodFeaturesToTrack(
-        gray, maxCorners=500, qualityLevel=0.005, minDistance=min_distance,
-        blockSize=11, mask=mask,
-    )
+    for x, y in pts.astype(int):
+        cv2.circle(mask, (x, y), 7, 0, -1)
+
+    cand = cv2.goodFeaturesToTrack(gray, maxCorners=500, qualityLevel=0.005, minDistance=100, blockSize=11, mask=mask)
     if cand is None: return pts
     cand = cand.reshape(-1, 2)
-    inside = (np.isfinite(cand).all(axis=1)
-              & (cand[:, 0] >= margin_x) & (cand[:, 0] < w - margin_x)
-              & (cand[:, 1] >= margin_y) & (cand[:, 1] < h - margin_y))
-    cand = cand[inside]
-    if len(cand) == 0: return pts
-    edges = backend.dilate(
-        backend.Canny(gray, 50, 150), np.ones((5, 5), np.uint8)
-    )
+    edges = cv2.dilate(cv2.Canny(gray, 50, 150), np.ones((5, 5), np.uint8))
 
     # Keep only corners that are near an edge
     xs = np.clip(cand[:, 0].astype(int), 0, w - 1)
@@ -69,8 +50,7 @@ def replenish(gray, pts, cam, max_points=300, min_distance=100, backend=None):
     take = []
     for q in range(4):
         in_q = np.flatnonzero(cand_q == q)
-        room = max(0, need - len(take))
-        take.extend(in_q[:min(int(quota[q]), room)])
+        take.extend(in_q[:quota[q]])
 
     remaining_need = need - len(take)
     if remaining_need > 0:
@@ -79,6 +59,7 @@ def replenish(gray, pts, cam, max_points=300, min_distance=100, backend=None):
 
     if not take: return pts
     return np.vstack([pts, cand[take]]).astype(np.float32)
+
 
 
 def build_triangles(points, max_edge=200.0, min_area=20.0):

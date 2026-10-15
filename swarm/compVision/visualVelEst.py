@@ -98,19 +98,14 @@ class VisualVelocityEstimator:
             maxLevel=1,
             criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 30, 0.01),
         )
-        seeds = replenish(
-            gray_prev, self.tracked_points, 0, max_points=self.max_feature_points,
-            min_distance=self.feature_min_distance, backend=self.vision_backend,
-        )
-        if len(seeds) < 3:
-            return self._lose_tracks()
+
+        seeds = replenish(gray_prev, self.tracked_points)
+        if len(seeds) < 3: return self._lose_tracks()
 
         tracks = self._track_forward(gray_prev, gray_curr, seeds, width, height, lk)
-        if tracks is None:
-            return self._lose_tracks()
+        if tracks is None: return self._lose_tracks()
         filtered = self._filter_tracks(*tracks)
-        if filtered is None:
-            return self._lose_tracks()
+        if filtered is None: return self._lose_tracks()
         return self._finish_tracking(*filtered)
 
     def _lose_tracks(self):
@@ -130,12 +125,7 @@ class VisualVelocityEstimator:
         old = old.reshape(-1, 2)
         new = new.reshape(-1, 2)
 
-        good = (
-            (status.ravel() == 1)
-            & np.isfinite(new).all(axis=1)
-            & (new[:, 0] >= 0) & (new[:, 0] < width)
-            & (new[:, 1] >= 0) & (new[:, 1] < height)
-        )
+        good = ((status.ravel() == 1) & np.isfinite(new).all(axis=1) & (new[:, 0] >= 0) & (new[:, 0] < width) & (new[:, 1] >= 0) & (new[:, 1] < height))
 
         if not good.any():
             return None
@@ -168,14 +158,14 @@ class VisualVelocityEstimator:
         """Update tracking history and return the flow with (u, v, height) rows."""
         self.tracked_points = good_new.astype(np.float32)
         self._tracked_frame_idx = self.current_frame.idx
-        flow, _, _ = self.compensate_vertical(good_old, good_new, triangles)
+        flow = good_new - good_old
         self.tracks = Tracks(
             self.current_frame.idx, good_old.copy(), good_new.copy(),
             flow.copy(), triangles.copy(), links.copy(),
         )
         z = self._current_height()
-        olds = np.column_stack((good_old, np.full(len(good_old), z)))
-        news = np.column_stack((good_new, np.full(len(good_new), z)))
+        olds = np.column_stack((good_old, np.full(len(good_old), 0)))
+        news = np.column_stack((good_new, np.full(len(good_new), 0)))
         return flow, olds, news
     
 
