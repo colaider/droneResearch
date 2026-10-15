@@ -240,22 +240,11 @@ class VisualVelocityEstimator:
         z_estimated = np.median(np.partition(z, -k)[-k:])
 
         v = flow * (z / (self.foc_l * self.dt))[:, None]
-
-        # Pitch affects image x; roll affects image y.
-        roll, pitch = att[0], att[1]
-        roll_rate, pitch_rate = ang_vel[0], ang_vel[1]
-
-        v_rot = z[:, None] * np.column_stack([
-            pitch_rate / np.cos(pitch) ** 2,
-            roll_rate / np.cos(roll) ** 2,
-        ])
+        v_rot = z[:, None] / np.cos(att[[1, 0]]) ** 2 * w
 
         B = v - v_rot
 
-        r = (
-            (z[:, None] / self.foc_l) * (points[:, :2] - c)
-            + self.camera_offset_from_yaw_center
-        )
+        r = ((z[:, None] / self.foc_l) * (points[:, :2] - c))
 
         A = np.vstack([
             np.column_stack([np.ones(n), np.zeros(n), -r[:, 1]]),
