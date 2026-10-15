@@ -25,7 +25,7 @@ class FrameConfigTests(unittest.TestCase):
             (65, 49), 60, focal_px=42.4, baseline=.2,
             disparity_direction=(-1., 0.), image_filters=(),
             convert_to_grayscale=True, filters_enabled=True,
-            filter_kernel_size=3, pyramid_levels=2,
+            filter_kernel_size=3,
         )
         self.assertEqual(estimator.resolution, (65, 49))
         self.assertEqual(estimator.foc_l, 42.4)
@@ -39,7 +39,7 @@ class FrameConfigTests(unittest.TestCase):
 
         options = dict(
             image_filters=(), convert_to_grayscale=True, filters_enabled=True,
-            filter_kernel_size=3, pyramid_levels=2, max_stereo_skew_s=.005,
+            filter_kernel_size=3, max_stereo_skew_s=.005,
         )
         mounted = StereoCameraConfig(
             res=(65, 49), left_focal=42.4, right_focal=42.4,
@@ -67,7 +67,6 @@ class FrameConfigTests(unittest.TestCase):
             convert_to_grayscale=False,
             filters_enabled=False,
             filter_kernel_size=5,
-            pyramid_levels=4,
             max_stereo_skew_s=.005,
         )
         processor = estimator.frame_processor
@@ -75,7 +74,6 @@ class FrameConfigTests(unittest.TestCase):
         self.assertFalse(processor.convert_to_grayscale)
         self.assertFalse(processor.filters_enabled)
         self.assertEqual(processor.filter_kernel_size, 5)
-        self.assertEqual(processor.pyramid_levels, 4)
 
     def test_both_boolean_switches_and_filter_selection_reach_estimator(self):
         for convert in (False, True):
@@ -90,7 +88,6 @@ class FrameConfigTests(unittest.TestCase):
                         convert_to_grayscale=convert,
                         filters_enabled=filters,
                         filter_kernel_size=3,
-                        pyramid_levels=2,
                     )
                     image = self.color if convert else self.gray
                     pair = StereoFrame(image, image.copy(), 1., 1., 0)
@@ -110,7 +107,7 @@ class FrameConfigTests(unittest.TestCase):
             (65, 49), 60, focal_px=42.4, baseline=.2,
             disparity_direction=(-1., 0.), image_filters=('clahe',),
             convert_to_grayscale=False, filters_enabled=True,
-            filter_kernel_size=3, pyramid_levels=2,
+            filter_kernel_size=3,
         )
         with self.assertRaisesRegex(ValueError, 'requires native grayscale'):
             estimator.processing(StereoFrame(self.color, self.color, 1., 1., 0))
@@ -119,7 +116,7 @@ class FrameConfigTests(unittest.TestCase):
 
     def test_gray_image_lists_work_with_explicit_processor_options(self):
         processor = FrameProcessor(
-            image_filters=(), filter_kernel_size=3, pyramid_levels=3,
+            image_filters=(), filter_kernel_size=3,
             convert_to_grayscale=False, filters_enabled=False,
         )
         prepared = processor.process([self.gray, self.gray], 3)
@@ -128,7 +125,7 @@ class FrameConfigTests(unittest.TestCase):
 
     def test_native_gray_never_gets_color_roundtrip_when_conversion_enabled(self):
         processor = FrameProcessor(
-            image_filters=(), filter_kernel_size=3, pyramid_levels=3,
+            image_filters=(), filter_kernel_size=3,
             convert_to_grayscale=True, filters_enabled=False,
         )
         with patch('swarm.compVision.frame.cv2.cvtColor', wraps=cv2.cvtColor) as convert:
@@ -139,12 +136,12 @@ class FrameConfigTests(unittest.TestCase):
     def test_config_requires_actual_booleans(self):
         with self.assertRaises(ValueError):
             FrameProcessor(
-                image_filters=(), filter_kernel_size=3, pyramid_levels=3,
+                image_filters=(), filter_kernel_size=3,
                 convert_to_grayscale='False', filters_enabled=True,
             )
         with self.assertRaises(ValueError):
             FrameProcessor(
-                image_filters=(), filter_kernel_size=3, pyramid_levels=3,
+                image_filters=(), filter_kernel_size=3,
                 convert_to_grayscale=True, filters_enabled='False',
             )
 

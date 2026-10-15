@@ -17,7 +17,6 @@ def make_estimator(
     convert_to_grayscale=True,
     filters_enabled=True,
     filter_kernel_size=3,
-    pyramid_levels=2,
     max_stereo_skew_s=0.005,
 ):
     focal = (
@@ -37,6 +36,5 @@ def make_estimator(
         convert_to_grayscale=convert_to_grayscale,
         filters_enabled=filters_enabled,
         filter_kernel_size=filter_kernel_size,
-        pyramid_levels=pyramid_levels,
         max_stereo_skew_s=max_stereo_skew_s,
     )

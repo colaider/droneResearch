@@ -36,8 +36,8 @@ def compose_camera_display(processed, tracking_gray):
     return cv2.vconcat([top, bottom])
 
 
-def compose_layer_display(gray, points, links, layer, color):
-    """Draw one pyramid layer's tracks; points use that layer's native pixels."""
+def compose_tracking_display(gray, points, links, color):
+    """Draw the tracked points and mesh links on the grayscale tracking input."""
     image = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
     points = np.asarray(points).reshape(-1, 2)
     pixels = np.rint(points).astype(int)
@@ -50,7 +50,7 @@ def compose_layer_display(gray, points, links, layer, color):
         image, 28, 0, 0, max(0, 330 - width), cv2.BORDER_CONSTANT,
         value=(32, 32, 32),
     )
-    label = f'Layer {layer} | {width}x{height} | {len(points)} points'
+    label = f'Tracking | {width}x{height} | {len(points)} points'
     cv2.putText(
         image, label, (8, 19), cv2.FONT_HERSHEY_SIMPLEX, .45,
         (235, 235, 235), 1, cv2.LINE_AA,

@@ -16,7 +16,7 @@ def frame_depth(depths):
         np.zeros(len(depths)),
         np.asarray(depths, dtype=float),
     ))
-    return FrameDepth([], points, np.empty((len(points), 3), np.uint8),
+    return FrameDepth(None, points, np.empty((len(points), 3), np.uint8),
                       np.empty(len(points)), float(np.median(depths)), 1.0,
                       np.empty((0, 0), np.uint8))
 
@@ -42,7 +42,7 @@ class DepthVelocityTests(unittest.TestCase):
             with self.subTest(dt=dt), self.assertRaises(ValueError):
                 estimate_vertical_velocity(depth, depth, dt)
 
-    def test_velocity_fit_returns_complete_vector_with_depth_vertical_speed(self):
+    def test_velocity_fit_returns_complete_vector_with_sensor_vertical_speed(self):
         estimator = make_estimator()
         estimator.drone_vel[2] = 0.75
         estimator.drone_ang_vel = np.zeros(3)
@@ -58,36 +58,27 @@ class DepthVelocityTests(unittest.TestCase):
         points = np.column_stack((points_xy, np.full(len(points_xy), 10.0)))
         flow = np.tile([2.0, -1.0], (len(points), 1))
 
-        velocity = estimator.estimate_velocities(flow, points, vertical_velocity=2.0)
+        velocity = estimator.estimate_velocities(flow, points)
 
         self.assertEqual(velocity.shape, (4,))
-        self.assertAlmostEqual(velocity[2], 2.0)
+        self.assertAlmostEqual(velocity[2], 0.75)
         np.testing.assert_array_equal(velocity, estimator.camera_velocity)
 
-    def test_processing_publishes_depth_rate_and_falls_back_on_first_frame(self):
+    def test_processing_publishes_depth_rate_without_using_it_for_the_fit(self):
         estimator = make_estimator()
         estimator.set_dt(0.2)
         estimator.drone_vel[2] = 0.75
 
         def update_frame(frame, idx):
             self.assertIsNone(frame)
-            estimator.current_frame = Frame(idx=idx, pyramids=[[]])
+            estimator.current_frame = Frame(
+                idx=idx, gray_frames=[np.zeros((8, 8), np.uint8)] * 2)
 
-        def estimate_velocities(flow, points, vertical_velocity=np.nan):
-            self.assertEqual(flow.shape, (0, 2))
-            self.assertEqual(points.shape, (0, 3))
-            estimator.camera_velocity = np.array(
-                [0.0, 0.0,
-                 vertical_velocity if np.isfinite(vertical_velocity)
-                 else estimator.drone_vel[2],
-                 0.0]
-            )
-            return estimator.camera_velocity.copy()
-
+        no_points = (np.empty((0, 2)), np.empty((0, 3)))
         with (
             patch.object(estimator, "update_frame", side_effect=update_frame),
             patch.object(estimator, "aply_flow"),
-            patch.object(estimator, "estimate_velocities", side_effect=estimate_velocities),
+            patch.object(estimator, "velocity_inputs", return_value=no_points),
             patch(
                 "swarm.compVision.visualEst.estimate_frame_depth",
                 side_effect=[frame_depth([10, 10.1, 9.9]),
@@ -95,10 +86,11 @@ class DepthVelocityTests(unittest.TestCase):
             ),
         ):
             estimator.processing(None, 0)
-            self.assertEqual(estimator.camera_velocity[2], 0.75)
+            self.assertTrue(np.isnan(estimator.depth_velocity_z))
             estimator.processing(None, 1)
 
-        self.assertAlmostEqual(estimator.camera_velocity[2], 2.0)
+        self.assertAlmostEqual(estimator.depth_velocity_z, 2.0)
+        self.assertEqual(estimator.camera_velocity[2], 0.75)
 
 
 if __name__ == "__main__":

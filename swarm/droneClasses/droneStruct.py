@@ -18,7 +18,7 @@ class DroneStruct:
         self.postpocessed_frames = []
         self._camera_display = None
         self._camera_window_ready = False
-        self._layer_windows = set()
+        self._tracking_window_ready = False
         self._depth_window_ready = False
         self.point_map = PointMap(cam_cfg)
         self.map_pose_position = np.zeros(3)
@@ -29,7 +29,6 @@ class DroneStruct:
             convert_to_grayscale=True,
             filters_enabled=True,
             filter_kernel_size=3,
-            pyramid_levels=1,
             max_stereo_skew_s=0.005,
         )
         # This simulation path uses parallel cameras with a common projection.
@@ -52,18 +51,14 @@ class DroneStruct:
                 cv2.resizeWindow("Stereo cameras", w, h)
                 self._camera_window_ready = True
             cv2.imshow("Stereo cameras", self._camera_display)
-        layer_views = self.frame_processor.layer_views
-        for layer in self._layer_windows - set(range(len(layer_views))):
-            cv2.destroyWindow(f'Tracking layer {layer}')
-        self._layer_windows.intersection_update(range(len(layer_views)))
-        for layer, image in enumerate(layer_views):
-            title = f'Tracking layer {layer}'
-            if layer not in self._layer_windows:
-                cv2.namedWindow(title, cv2.WINDOW_NORMAL | cv2.WINDOW_KEEPRATIO)
-                h, w = image.shape[:2]
-                cv2.resizeWindow(title, w, h)
-                self._layer_windows.add(layer)
-            cv2.imshow(title, image)
+        tracking_view = self.frame_processor.tracking_view
+        if tracking_view is not None:
+            if not self._tracking_window_ready:
+                cv2.namedWindow('Tracking', cv2.WINDOW_NORMAL | cv2.WINDOW_KEEPRATIO)
+                h, w = tracking_view.shape[:2]
+                cv2.resizeWindow('Tracking', w, h)
+                self._tracking_window_ready = True
+            cv2.imshow('Tracking', tracking_view)
         if self.frame_processor.depth_view is not None:
             if not self._depth_window_ready:
                 cv2.namedWindow('Stereo depth', cv2.WINDOW_NORMAL | cv2.WINDOW_KEEPRATIO)

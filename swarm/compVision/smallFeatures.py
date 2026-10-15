@@ -6,32 +6,13 @@ these triangles do not establish physical surfaces or depth.
 filter_by_neighbors is a separate track-quality filter using supplied motion.
 Temporal optical flow, stereo matching and metric reconstruction live elsewhere.
 """
-from swarm.compVision.estimatorTypes import LayerTracks
-
 import cv2
 import numpy as np
 from scipy.spatial import Delaunay, QhullError
 
 
-# BGR colours used consistently for both points and within-layer mesh edges.
-LAYER_COLORS = ((255, 0, 0), (0, 220, 0), (0, 165, 255), (255, 0, 255), (255, 255, 0))
-
-
-def unique_point_mask(points, radius=5.0):
-    """Keep first finite point in each neighbourhood, for the combined motion fit.
-
-    Input order establishes priority (the configured layer order). Coordinates
-    and radius are full-resolution pixels. Per-layer display/history stay intact.
-    """
-    points = np.asarray(points)
-    keep = np.zeros(len(points), bool)
-    chosen = []
-    for i, point in enumerate(points):
-        if np.isfinite(point).all() and (not chosen or
-                np.all(np.sum((points[chosen] - point) ** 2, axis=1) >= radius ** 2)):
-            keep[i] = True
-            chosen.append(i)
-    return keep
+# BGR colour used for tracked points and mesh edges.
+TRACK_COLOR = (255, 0, 0)
 
 
 def replenish(gray, pts, cam, max_points=300, min_distance=100, backend=None):

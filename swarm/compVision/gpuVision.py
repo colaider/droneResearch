@@ -44,8 +44,7 @@ class VisionBackend:
         sources = {
             id(image): image
             for cached_frame in self._frames
-            for camera in cached_frame.pyramids
-            for image in camera
+            for image in cached_frame.gray_frames
         }
         for key in self._images.keys() - sources.keys():
             del self._images[key]

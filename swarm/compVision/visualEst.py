@@ -7,14 +7,14 @@ import numpy as np
 from swarm.config.cameraConfig import StereoCameraConfig
 from swarm.compVision.frame import FrameProcessor
 from swarm.compVision.estimatorTypes import Frame, StereoFrame
-from swarm.compVision.smallFeatures import LAYER_COLORS
+from swarm.compVision.smallFeatures import TRACK_COLOR
 from swarm.compVision.visualDepthEst import (
     SparseStereoDepth,
     estimate_vertical_velocity,
     estimate_frame_depth,
 )
 from swarm.compVision.visualVelEst import VisualVelocityEstimator, VelocityKalmanFilter
-from swarm.visualization.display import compose_layer_display
+from swarm.visualization.display import compose_tracking_display
 
 
 # Preserve the original public frame name.
@@ -30,7 +30,7 @@ class VisulaEst(VisualVelocityEstimator):
 
     def __init__(self, camera_config: StereoCameraConfig, *, image_filters: tuple[str, ...],
                  convert_to_grayscale: bool, filters_enabled: bool,
-                 filter_kernel_size: int, pyramid_levels: int,
+                 filter_kernel_size: int,
                  max_stereo_skew_s: float, vision_backend=None):
         if not np.isfinite(max_stereo_skew_s) or max_stereo_skew_s < 0:
             raise ValueError('max_stereo_skew_s must be finite and nonnegative')
@@ -60,7 +60,6 @@ class VisulaEst(VisualVelocityEstimator):
             convert_to_grayscale=convert_to_grayscale,
             filters_enabled=filters_enabled,
             filter_kernel_size=filter_kernel_size,
-            pyramid_levels=pyramid_levels,
         )
         self.resolution = tuple(camera_config.res)
         self.use_stereo_depth = True
@@ -73,9 +72,7 @@ class VisulaEst(VisualVelocityEstimator):
         self.imu_att = np.zeros(3)
         self.previous_cmd_vel = np.zeros(4)
 
-        self._init_velocity_estimator(
-            self.frame_processor.pyramid_levels, vision_backend=vision_backend
-        )
+        self._init_velocity_estimator(vision_backend=vision_backend)
         self.depth_median = np.nan
         self.depth_valid_frac = 0.0
         self.depth_points = np.empty((0, 3))
@@ -83,7 +80,7 @@ class VisulaEst(VisualVelocityEstimator):
         self.current_depth = None
         self.depth_velocity_z = np.nan
         self.stereo = SparseStereoDepth(backend=self.vision_backend)
-        self.depth_by_layer = []
+        self.point_depth = SparseStereoDepth._empty_result(0)
         self.depth_colors = np.empty((0, 3), np.uint8)
         self.depth_sigma = np.empty(0)
         self.depth_view = None
@@ -157,16 +154,10 @@ class VisulaEst(VisualVelocityEstimator):
         self.estimate_depth()
         return_velocity = self.estimate_velocities(*self.velocity_inputs())
 
-        self.layer_views = [
-            compose_layer_display(
-                gray,
-                self.all_points[layer] / (2 ** layer),
-                self.layer_tracks[layer].links,
-                layer,
-                LAYER_COLORS[layer % len(LAYER_COLORS)],
-            )
-            for layer, gray in enumerate(self.current_frame.pyramids[0])
-        ]
+        self.tracking_view = compose_tracking_display(
+            self.current_frame.gray_frames[0], self.tracks.new_points,
+            self.tracks.links, TRACK_COLOR,
+        )
         self.camera_velocity = return_velocity
         return self.current_frame
 
@@ -175,22 +166,20 @@ class VisulaEst(VisualVelocityEstimator):
         self.depth_frame_idx = self.current_frame.idx
         result = estimate_frame_depth(
             self.current_frame,
-            self.all_points,
-            self.point_colors,
-            self.layer_tracks,
+            self.tracks.new_points,
+            self.tracks,
             self.stereo,
             use_stereo_depth=self.use_stereo_depth,
             focal_px=self.foc_l,
             baseline=self.camera_saperation,
             direction=self.disparity_direction,
-            cross_layer_min_distance=self.cross_layer_min_distance,
         )
         self.previous_depth = self.current_depth
         self.current_depth = result
         self.depth_velocity_z = estimate_vertical_velocity(
             self.previous_depth, self.current_depth, self.dt
         )
-        self.depth_by_layer = result.by_layer
+        self.point_depth = result.stereo
         self.depth_points = result.points
         self.depth_colors = result.colors
         self.depth_sigma = result.sigma

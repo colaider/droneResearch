@@ -17,7 +17,7 @@ class FrameTests(unittest.TestCase):
     def test_default_preprocessing_preserves_existing_clahe_behavior(self):
         original = self.image.copy()
         processor = FrameProcessor(
-            image_filters=("clahe",), filter_kernel_size=3, pyramid_levels=3,
+            image_filters=("clahe",), filter_kernel_size=3,
             convert_to_grayscale=True, filters_enabled=True,
         )
         lab = cv2.cvtColor(original, cv2.COLOR_BGR2LAB)
@@ -28,7 +28,7 @@ class FrameTests(unittest.TestCase):
 
     def test_filter_order_and_runtime_configuration(self):
         processor = FrameProcessor(
-            image_filters=(), filter_kernel_size=3, pyramid_levels=3,
+            image_filters=(), filter_kernel_size=3,
             convert_to_grayscale=True, filters_enabled=True,
         )
         processor.image_filters = ("gaussian", "median")
@@ -43,27 +43,25 @@ class FrameTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             processor.preprocess(self.image)
 
-    def test_pyramids_and_display_images_do_not_corrupt_inputs(self):
+    def test_gray_inputs_and_display_images_do_not_corrupt_inputs(self):
         original = self.image.copy()
         prepared = FrameProcessor(
-            image_filters=(), filter_kernel_size=3, pyramid_levels=3,
+            image_filters=(), filter_kernel_size=3,
             convert_to_grayscale=True, filters_enabled=True,
         ).process([self.image, self.image], 7)
         self.assertEqual(prepared.idx, 7)
-        self.assertEqual([p.shape for p in prepared.pyramids[0]], [(49, 65), (25, 33), (13, 17)])
-        self.assertIs(prepared.pyramids[0][0], prepared.gray_frames[0])
-        self.assertTrue(all(p.dtype == np.uint8 for p in prepared.pyramids[0]))
+        self.assertEqual([g.shape for g in prepared.gray_frames], [(49, 65)] * 2)
+        self.assertTrue(all(g.dtype == np.uint8 for g in prepared.gray_frames))
         display = prepared.display_copy()
         display.frames[0][:] = 0
         np.testing.assert_array_equal(prepared.frames[0], original)
         self.assertIs(display.gray_frames, prepared.gray_frames)
-        self.assertIs(display.pyramids, prepared.pyramids)
         prepared.frames[1][:] = 0
         np.testing.assert_array_equal(self.image, original)
 
     def test_invalid_stereo_inputs(self):
         processor = FrameProcessor(
-            image_filters=("clahe",), filter_kernel_size=3, pyramid_levels=3,
+            image_filters=("clahe",), filter_kernel_size=3,
             convert_to_grayscale=True, filters_enabled=True,
         )
         for frames in (

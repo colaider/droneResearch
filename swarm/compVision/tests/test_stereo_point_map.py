@@ -37,7 +37,10 @@ class StereoTests(unittest.TestCase):
         fit.assert_called_once()
         flow, points = fit.call_args.args
         self.assertGreaterEqual(len(flow), 2)
-        np.testing.assert_allclose(points[:, 2], 99.0)
+        # Rows with stereo depth use it; the rest keep the supplied drone height.
+        measured = points[:, 2] != 99.0
+        self.assertGreater(measured.sum(), 2)
+        np.testing.assert_allclose(points[measured, 2], 6.0, atol=.15)
         self.assertGreater(len(est.depth_points), 2)
         np.testing.assert_allclose(est.depth_points[:, 2], 6.0, atol=.15)
         self.assertEqual(est.camera_velocity[2], .75)
@@ -62,21 +65,17 @@ class StereoTests(unittest.TestCase):
         np.testing.assert_allclose(points[:, 2], 99.0)
         self.assertEqual(est.depth_valid_frac, 0.0)
 
-    def test_two_surface_depths_at_three_scales(self):
+    def test_two_surface_depths(self):
         left = texture()
         right = translate(left, -8)
         right[240:] = translate(left, -16)[240:]
         points = np.float32([[x, y] for y in (140, 180, 300, 340) for x in (220, 300, 380, 460)])
         truth = np.where(points[:, 1] < 240, 6., 3.)
-        matcher = SparseStereoDepth()
-        for level in range(3):
-            out = matcher.estimate(left, right, points, focal_px=400, baseline=.12,
-                                   direction=[-1, 0], pixel_scale=2**level)
-            with self.subTest(layer=level):
-                self.assertGreaterEqual(out.valid.mean(), .8)
-                np.testing.assert_allclose(out.depths[out.valid], truth[out.valid], rtol=.015)
-                np.testing.assert_allclose(out.right_points[out.valid, 1], points[out.valid, 1], atol=.1)
-            left, right = cv2.pyrDown(left), cv2.pyrDown(right)
+        out = SparseStereoDepth().estimate(left, right, points, focal_px=400, baseline=.12,
+                                           direction=[-1, 0])
+        self.assertGreaterEqual(out.valid.mean(), .8)
+        np.testing.assert_allclose(out.depths[out.valid], truth[out.valid], rtol=.015)
+        np.testing.assert_allclose(out.right_points[out.valid, 1], points[out.valid, 1], atol=.1)
 
     def test_vertical_baseline_and_no_groundtruth_height_input(self):
         left = texture(); points = np.float32([[200, 180], [300, 240], [400, 300]])
@@ -119,7 +118,6 @@ class StereoTests(unittest.TestCase):
             np.array([0]),
             np.array([[199.0, 180.0]], np.float32),
             fB=48.0,
-            pixel_scale=1.0,
         )
         self.assertFalse(result.valid[0])
         np.testing.assert_array_equal(result.right_points[0], [199.0, 180.0])
@@ -138,7 +136,7 @@ class StereoTests(unittest.TestCase):
         base = cv2.cvtColor(texture(), cv2.COLOR_GRAY2BGR)
         est = make_estimator(
             focal_px=400, baseline=.12, disparity_direction=(-1., 0.),
-            image_filters=(), pyramid_levels=3,
+            image_filters=(),
         )
         est.feature_min_distance=20
         est.drone_pos[2]=99 # must not become measured depth
@@ -149,9 +147,9 @@ class StereoTests(unittest.TestCase):
         self.assertAlmostEqual(est.depth_median,3.,delta=.03)
         self.assertEqual(est.depth_frame_idx,1)
         self.assertEqual(len(est.depth_colors),len(est.depth_points))
-        for points, depth in zip(est.all_points,est.depth_by_layer):
-            np.testing.assert_allclose(depth.right_points[depth.valid]-points[depth.valid],
-                                      np.tile([-16,0],(depth.valid.sum(),1)),atol=.15)
+        points, depth = est.tracks.new_points, est.point_depth
+        np.testing.assert_allclose(depth.right_points[depth.valid]-points[depth.valid],
+                                  np.tile([-16,0],(depth.valid.sum(),1)),atol=.15)
         est.use_stereo_depth=False
         with patch.object(est.stereo,'estimate',side_effect=AssertionError('Stereo disabled')):
             est.processing([current,current],2)

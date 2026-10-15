@@ -8,7 +8,6 @@ import numpy as np
 
 from swarm.compVision import estimatorTypes as types
 from swarm.compVision.frame import Frame, FrameProcessor
-from swarm.compVision.smallFeatures import LayerTracks
 from swarm.compVision.visualDepthEst import FrameDepth, StereoDepth
 from swarm.compVision.visualEst import EnumFrame
 from swarm.compVision.tests.estimator_factory import make_estimator
@@ -25,7 +24,6 @@ class EstimatorTypesTests(unittest.TestCase):
 
     def test_existing_imports_reference_shared_types(self):
         for old, new in ((Frame, types.Frame), (EnumFrame, types.Frame),
-                         (LayerTracks, types.LayerTracks),
                          (FrameDepth, types.FrameDepth), (StereoDepth, types.StereoDepth)):
             self.assertIs(old, new)
 
@@ -49,7 +47,7 @@ class EstimatorTypesTests(unittest.TestCase):
             right_timestamp_ns=2_001_000_002,
         )
         processor = FrameProcessor(
-            image_filters=(), filter_kernel_size=3, pyramid_levels=3,
+            image_filters=(), filter_kernel_size=3,
             convert_to_grayscale=True, filters_enabled=True,
         )
         prepared = processor.process(pair)

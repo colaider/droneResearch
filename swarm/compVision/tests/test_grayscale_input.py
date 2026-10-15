@@ -21,7 +21,7 @@ class GrayscaleInputTests(unittest.TestCase):
     def test_native_gray_skips_color_roundtrip_and_filters(self):
         processor = FrameProcessor(
             image_filters=('clahe', 'gaussian', 'median'), filter_kernel_size=3,
-            pyramid_levels=3, convert_to_grayscale=True, filters_enabled=True,
+            convert_to_grayscale=True, filters_enabled=True,
         )
         original = self.gray.copy()
         with patch('swarm.compVision.frame.cv2.cvtColor', wraps=cv2.cvtColor) as convert:
@@ -29,10 +29,6 @@ class GrayscaleInputTests(unittest.TestCase):
         self.assertEqual([call.args[1] for call in convert.call_args_list],
                          [cv2.COLOR_GRAY2BGR, cv2.COLOR_GRAY2BGR])
         np.testing.assert_array_equal(prepared.gray_frames[0], original)
-        expected = original
-        for level in prepared.pyramids[0]:
-            np.testing.assert_array_equal(level, expected)
-            expected = cv2.pyrDown(expected)
         self.assertEqual((prepared.idx, prepared.timestamp), (7, 1.))
         prepared.frames[0][:] = 0
         np.testing.assert_array_equal(prepared.gray_frames[0], original)
@@ -42,7 +38,7 @@ class GrayscaleInputTests(unittest.TestCase):
     def test_optional_filters_operate_directly_on_gray(self):
         processor = FrameProcessor(
             image_filters=('clahe', 'gaussian', 'median'), filter_kernel_size=3,
-            pyramid_levels=3, convert_to_grayscale=True, filters_enabled=True,
+            convert_to_grayscale=True, filters_enabled=True,
         )
         expected = cv2.medianBlur(cv2.GaussianBlur(processor.clahe.apply(self.gray), (3, 3), 0), 3)
         prepared = processor.process(self.pair())
@@ -64,7 +60,7 @@ class GrayscaleInputTests(unittest.TestCase):
 
     def test_bypass_is_per_frame_and_does_not_change_filter_configuration(self):
         processor = FrameProcessor(
-            image_filters=('clahe',), filter_kernel_size=3, pyramid_levels=3,
+            image_filters=('clahe',), filter_kernel_size=3,
             convert_to_grayscale=True, filters_enabled=True,
         )
         np.testing.assert_array_equal(processor.process(self.pair(skip_preprocessing=True)).gray_frames[0],
