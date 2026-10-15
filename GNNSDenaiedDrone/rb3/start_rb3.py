@@ -19,7 +19,7 @@ for _pkg in ("rb3_control", "rb3_stereo"):
         sys.path.insert(0, _root)
 
 import rclpy
-from rclpy.executors import MultiThreadedExecutor
+from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
 
 try:                                   # works both as a package and when run directly
     from .imu_topic import ImuTopic
@@ -46,17 +46,27 @@ def main(args=None):
         except Exception as exc:                       # noqa: BLE001 - report and continue
             log.warn("%s disabled: %s" % (name, exc))
 
+    def sensors_info():
+        """RB3 sensor-core streams for <ns>/status, merged from the IMU and baro topics."""
+        info = {}
+        for t in topics:
+            if hasattr(t, "sensors"):
+                info.update(t.sensors.info())
+        return info
+
     add("ImuTopic", lambda: ImuTopic(node))
     add("BaroTopic", lambda: BaroTopic(node))
     add("CameraTopic", lambda: CameraTopic(node))
-    add("CommandTopic", lambda: CommandTopic(node))
+    add("CommandTopic", lambda: CommandTopic(node, sensors_info=sensors_info))
 
     log.info("RB3 up with: " + ", ".join(t.__class__.__name__ for t in topics))
     executor = MultiThreadedExecutor()
     executor.add_node(node)
     try:
         executor.spin()
-    except KeyboardInterrupt:
+    # rclpy turns SIGINT (Ctrl-C, or `systemctl stop` of drone-rb3.service) into a context
+    # shutdown; catching it lets the stop end cleanly instead of leaving the unit "failed".
+    except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
         for t in topics:

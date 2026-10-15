@@ -11,6 +11,8 @@ Three kinds of traffic, each matched to a plain-HTTP mechanism that needs no fra
                             here either. While a stream is open its topic is "watched": only
                             watched topics are subscribed on the board and sent over the link.
   POST /api/unit/...        process control, forwarded to systemd on the board over SSH.
+  GET  /api/tracks[/<id>?from=N], POST /api/tracks/split
+                            position tracks, one per flight run (tracks.py).
 
 Board polling runs in its own thread, so an SSH call that hangs slows the health panel down
 instead of blocking page requests.
@@ -64,11 +66,12 @@ def _cameras(config, ros):
 class State:
     """Assembles what the page shows, from the ROS link and the board poller."""
 
-    def __init__(self, config, ros, board, events):
+    def __init__(self, config, ros, board, events, tracks=None):
         self.cfg = config
         self.ros = ros
         self.board = board
         self.events = events
+        self.tracks = tracks
         self._last_online = None
         self._last_uptime = None
         self._last_units = {}
@@ -181,12 +184,16 @@ class State:
             },
             "units": [
                 {"name": name, "description": description, "controllable": controllable,
+                 "warning": self.cfg.unit_warnings.get(name),
                  "active": health.units.get(name, ("unknown", "", ""))[0],
                  "sub": health.units.get(name, ("", "", ""))[1],
                  "enabled": health.units.get(name, ("", "", ""))[2]}
                 for name, description, controllable in self.cfg.units
             ],
             "plots": plots,
+            # Which position track is being recorded and how long it is; the page fetches the
+            # samples themselves from /api/tracks/<id> only when this count grows.
+            "track": self.tracks.status() if self.tracks else None,
             # The page scales the x axis to this, not to the oldest sample it happens to
             # have, so the traces slide instead of compressing while the buffer fills.
             "window_seconds": self.cfg.history_seconds,
@@ -265,6 +272,19 @@ class Handler(BaseHTTPRequestHandler):
             if frame is None:
                 return self._send(503, b"no frame (only topics an open stream shows are received)")
             return self._send(200, frame, "image/jpeg")
+        if path == "/api/tracks":
+            if not self.state.tracks:
+                return self._json({"live": None, "tracks": []})
+            return self._json(self.state.tracks.list())
+        if path.startswith("/api/tracks/") and self.state.tracks:
+            try:
+                start = int(parse_qs(url.query).get("from", ["0"])[0])
+            except ValueError:
+                start = 0
+            track = self.state.tracks.get(path.rsplit("/", 1)[-1], max(start, 0))
+            if track is None:
+                return self._json({"ok": False, "error": "unknown track"}, 404)
+            return self._json(track)
         if path.startswith("/api/journal/"):
             unit = path.rsplit("/", 1)[-1]
             if unit not in [name for name, _, _ in self.state.cfg.units]:
@@ -308,6 +328,10 @@ class Handler(BaseHTTPRequestHandler):
             self.state.events.add("reboot requested from the panel", "warning")
             result = self.state.board.reboot()
             return self._json({"ok": result.ok, "err": result.err})
+
+        if path == "/api/tracks/split" and self.state.tracks:
+            self.state.tracks.split()
+            return self._json({"ok": True})
 
         if path == "/api/note":
             return self._json({"ok": True})

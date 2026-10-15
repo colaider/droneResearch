@@ -207,3 +207,20 @@ canvas { width: 100%; background: var(--panel-2); border: 1px solid var(--line);
 .axes em { font: 600 15px/1.25 var(--mono); font-style: normal; }
 .stream { margin-top: 7px; font: 500 11px var(--mono); color: var(--muted); }
 .stream.dead { color: var(--bad); }
+
+/* --- position track ---------------------------------------------------------- */
+.track-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 12px 0 8px; }
+.track-bar label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .6px; }
+.track-bar select {
+  min-width: 0; max-width: 100%;
+  font: 500 12px var(--mono); color: var(--text);
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px; padding: 4px 6px;
+}
+.track-bar select:focus { outline: none; border-color: var(--accent); }
+.track-bar .stream { flex: 1 1 240px; min-width: 0; }
+.track-views { grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr)); }
+.track-views canvas { height: 340px; display: block; }
+#track-3d { cursor: grab; touch-action: none; }
+#track-3d:active { cursor: grabbing; }
+figcaption b.c-x { color: #ff5f56; } figcaption b.c-y { color: #3ecf8e; } figcaption b.c-z { color: #4da3ff; }
+#camera-motion-card canvas { height: 240px; }

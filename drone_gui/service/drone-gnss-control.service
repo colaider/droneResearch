@@ -1,0 +1,27 @@
+[Unit]
+# The GNSS-denied control loop (GNNSDenaiedDrone/controll/main.py). It publishes
+# /drone/cmd_attitude, so it CAN COMMAND THE MOTORS: drone-rb3 forwards those commands to the
+# flight controller only while the radio has armed the drone and the MSP OVERRIDE switch is on.
+Description=GNSS-denied control loop (controll/main.py) - commands the motors
+# It runs on drone-rb3's topics (imu, baro, FC altitude, stereo images). BindsTo: starting this
+# starts drone-rb3 first, and drone-rb3 stopping or dying stops this too.
+BindsTo=drone-rb3.service
+After=drone-rb3.service
+
+[Service]
+Type=simple
+User=ubuntu
+Environment=ROS_DOMAIN_ID=42
+WorkingDirectory=/home/ubuntu/droneResearch/GNNSDenaiedDrone/controll
+# Same Fast DDS profile as drone-rb3, so the raw stereo images arrive over shared memory.
+ExecStart=/bin/bash -lc 'source /opt/ros/jazzy/setup.bash && export FASTRTPS_DEFAULT_PROFILES_FILE=$$PWD/../rb3/rb3_stereo/config/fastdds.xml && exec python3 -u main.py'
+SyslogIdentifier=drone-gnss-control
+# Never restarted automatically: a restart re-runs WARMUP/CALIBRATE, which assumes the drone
+# is resting, so it must only ever start because someone chose to start it.
+Restart=no
+# SIGINT lets ControlLoop.close() run, which sends a neutral (zero) command last.
+KillSignal=SIGINT
+TimeoutStopSec=10
+
+[Install]
+WantedBy=multi-user.target
