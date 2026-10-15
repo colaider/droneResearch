@@ -274,7 +274,7 @@ class Sensors:
         with self._visual_state_lock:
             if self._visual_position is None:
                 return imu_position
-            return 0.9 * imu_position + 0.1 * self._visual_position
+            return 0.1 * imu_position + 0.9 * self._visual_position
 
     def get_fused_velocity(self):
         imu_velocity = self.get_acc_velocity()
