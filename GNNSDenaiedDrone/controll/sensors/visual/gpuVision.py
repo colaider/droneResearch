@@ -67,7 +67,8 @@ class VisionBackend:
             self._images[id(image)], mask=self._convert(mask), **parameters))
 
     def Canny(self, image, threshold1, threshold2, **parameters):
-        return cv2.Canny(self._images[id(image)], threshold1, threshold2, **parameters)
+        return cv2.Canny(_numpy(self._images[id(image)]), threshold1, threshold2,
+                         **parameters)
 
     def dilate(self, image, kernel, **parameters):
         return _numpy(cv2.dilate(image, kernel, **parameters))
