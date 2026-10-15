@@ -2,7 +2,6 @@ from pathlib import Path
 import atexit
 
 import genesis as gs
-import numpy as np
 
 from swarm.scene_builders.customScene import CustomScene
 from swarm.droneClasses.stateMachine import StateMachine
@@ -35,10 +34,14 @@ def main():
         plots={
             'Cam Pos':    ['raw x', 'raw y', 'raw z', 'raw yaw'],
             'Act Pos':    ['x', 'y', 'z'],
-            'Camera Vel': ['x', 'y', 'z'],
         },
         buffer_size=1000,
         title='IMU Live',
+    )
+    camera_velocity_plotter = LivePlotter(
+        plots={'Camera Velocity': ['vx', 'vy', 'vz', 'yaw_rate']},
+        buffer_size=1000,
+        title='Visual Estimator Camera Velocity',
     )
     depth_plotter = LivePlotter(
         plots={
@@ -53,6 +56,7 @@ def main():
     sm = StateMachine(drone_entity=drone, dt=dt, camera_fps=30)
     atexit.register(lambda: drone.frame_processor.save_velocity_log('camera_velocity_log.csv'))
     scene.build()
+    last_camera_frame_idx = None
 
     for step in range(100000):
         sim_time = step * dt
@@ -65,14 +69,18 @@ def main():
 
             real_pos = ctrl.get_position()
             real_pos[1] = -1 * real_pos[1]
-            vid = ctrl.get_camera_lin_v()
+            fp = ctrl.drone.frame_processor
 
             plotter.push('Cam Pos',    ctrl.raw_cam_pos)
             plotter.push('Act Pos',    real_pos)
-            plotter.push('Camera Vel', vid)
             plotter.update()
+            if fp.current_frame.idx != last_camera_frame_idx:
+                camera_velocity_plotter.push(
+                    'Camera Velocity', fp.camera_velocity
+                )
+                camera_velocity_plotter.update()
+                last_camera_frame_idx = fp.current_frame.idx
 
-            fp = ctrl.drone.frame_processor
             # Optical-axis depth varies across roofs/ground; it is not drone altitude.
             depth_plotter.push('Depth (m)',     fp.depth_median)
             depth_plotter.push('Valid matches', fp.depth_valid_frac)
@@ -81,6 +89,7 @@ def main():
         scene.step()
 
     print("\n✅ Simulation complete!")
+    camera_velocity_plotter.close()
     map_viewer.close()
     scene.close()
 

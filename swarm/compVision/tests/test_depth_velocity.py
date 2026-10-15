@@ -1,5 +1,6 @@
 """Tests for vertical velocity derived from consecutive stereo-depth frames."""
 
+from collections import deque
 import unittest
 from unittest.mock import patch
 
@@ -63,6 +64,17 @@ class DepthVelocityTests(unittest.TestCase):
         self.assertEqual(velocity.shape, (4,))
         self.assertAlmostEqual(velocity[2], 0.75)
         np.testing.assert_array_equal(velocity, estimator.camera_velocity)
+
+    def test_camera_velocity_average_uses_bounded_rolling_buffer(self):
+        estimator = make_estimator()
+        estimator.camera_velocity_buffer = deque(maxlen=2)
+
+        estimator._average_camera_velocity([1, 2, 3, 4])
+        estimator._average_camera_velocity([3, 4, 5, 6])
+        averaged = estimator._average_camera_velocity([5, 6, 7, 8])
+
+        np.testing.assert_allclose(averaged, [4, 5, 6, 7])
+        self.assertEqual(len(estimator.camera_velocity_buffer), 2)
 
     def test_processing_publishes_depth_rate_without_using_it_for_the_fit(self):
         estimator = make_estimator()
