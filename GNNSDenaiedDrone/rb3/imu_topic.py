@@ -59,14 +59,17 @@ class ImuTopic:
                 msg.header.stamp = self.node.get_clock().now().to_msg()
 
             gv = g[2]
-            msg.angular_velocity.x, msg.angular_velocity.y, msg.angular_velocity.z = gv[0], gv[1], gv[2]
+            msg.angular_velocity.x = gv[0]
+            msg.angular_velocity.y = gv[1] * -1
+            msg.angular_velocity.z = gv[2] * -1
+
             if a is not None and len(a[2]) >= 3:
                 av = a[2]
-                msg.linear_acceleration.x, msg.linear_acceleration.y, msg.linear_acceleration.z = av[0], av[1], av[2]
+                msg.linear_acceleration.x = av[0] * -1
+                msg.linear_acceleration.y = av[1]
+                msg.linear_acceleration.z = av[2]
             else:
-                msg.linear_acceleration_covariance[0] = -1.0   # no accel this cycle
-            msg.orientation.w = 1.0
-            msg.orientation_covariance[0] = -1.0               # no orientation estimate here
+                msg.linear_acceleration_covariance[0] = -1.0               # no orientation estimate here
             self.pub.publish(msg)
 
     @staticmethod

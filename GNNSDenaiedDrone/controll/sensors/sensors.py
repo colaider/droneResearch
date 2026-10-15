@@ -144,7 +144,6 @@ class Sensors:
                 return processed
 
             self._last_visual_frame_idx = frame_idx
-
         estimator = self.visual_estimator
 
         if (np.count_nonzero(estimator.velocity_point_mask) < 2 or not np.isfinite(estimator.camera_velocity[:3]).all()):
@@ -152,8 +151,6 @@ class Sensors:
 
         imu_position = self.get_acc_position()
         dt = float(estimator.dt)
-        if not np.isfinite(dt) or dt <= 0:
-            return processed
 
         roll, pitch, yaw = self.get_attitude()
         cr, sr = np.cos(roll), np.sin(roll)
@@ -169,35 +166,21 @@ class Sensors:
         has_visual_vertical_velocity = np.isfinite(estimator.depth_velocity_z)
         visual_velocity = estimator.camera_velocity[:3].copy()
 
-        visual_velocity[0] = -1*visual_velocity[0]
-
         if not has_visual_vertical_velocity:
             visual_velocity[2] = 0.0
 
         visual_velocity_world = body_to_world @ visual_velocity
 
-        if not has_visual_vertical_velocity:
-            visual_velocity_world[2] = 0.0
-
-        # keep the latest world-frame visual velocity for get_fused_velocity(); nan on z when
-        # the camera gave no depth velocity, so the fuse leaves vz to the IMU/baro.
         held = visual_velocity_world.copy()
-        if not has_visual_vertical_velocity:
-            held[2] = np.nan
-        # Camera measurement for the FKF: [vx, vy, vz, yaw_rate] in the world frame. vz is left in
-        # (the FKF's camera vz variance is ~1e6, so it is ignored); yaw_rate from the estimator.
+        if not has_visual_vertical_velocity: held[2] = np.nan
+
         yaw_rate = float(estimator.camera_velocity[3])
-        v4 = np.array([visual_velocity_world[0], visual_velocity_world[1],
-                       visual_velocity_world[2], yaw_rate])
+        v4 = np.array([visual_velocity_world[0], visual_velocity_world[1], visual_velocity_world[2], yaw_rate])
+
         with self._visual_state_lock:
-            visual_position = (
-                np.zeros(3)
-                if self._visual_position is None
-                else self._visual_position.copy()
-            )
+            visual_position = self._visual_position.copy()
             visual_position += visual_velocity_world * dt
-            if not has_visual_vertical_velocity:
-                visual_position[2] = imu_position[2]
+
             self._visual_position = visual_position
             self._visual_velocity_world = held
             self._pending_cam = (v4, frame_idx)
