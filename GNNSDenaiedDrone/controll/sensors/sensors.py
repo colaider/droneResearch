@@ -286,5 +286,5 @@ class Sensors:
             return imu_velocity
         fused = imu_velocity.copy()
         usable = np.isfinite(visual)
-        fused[usable] = 0.9 * imu_velocity[usable] + 0.1 * visual[usable]
+        fused[usable] = 1.0 * imu_velocity[usable] + 0.0 * visual[usable]
         return fused
