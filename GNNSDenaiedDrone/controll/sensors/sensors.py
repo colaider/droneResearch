@@ -135,20 +135,19 @@ class Sensors:
         """Process a stereo capture and integrate valid visual velocity into position."""
         processed = self.visual_estimator.processing(frame, idx)
         if self.visual_frame_bridge is not None:
-            self.visual_frame_bridge.publish(
-                processed,
-                self.visual_estimator.tracks,
-                self.visual_estimator.point_depth,
-            )
+            self.visual_frame_bridge.publish( processed, self.visual_estimator.tracks,
+            self.visual_estimator.point_depth, )
         frame_idx = processed.idx
+
         with self._visual_state_lock:
             if frame_idx == self._last_visual_frame_idx:
                 return processed
+
             self._last_visual_frame_idx = frame_idx
 
         estimator = self.visual_estimator
-        if (np.count_nonzero(estimator.velocity_point_mask) < 2
-                or not np.isfinite(estimator.camera_velocity[:3]).all()):
+
+        if (np.count_nonzero(estimator.velocity_point_mask) < 2 or not np.isfinite(estimator.camera_velocity[:3]).all()):
             return processed
 
         imu_position = self.get_acc_position()
@@ -160,18 +159,26 @@ class Sensors:
         cr, sr = np.cos(roll), np.sin(roll)
         cp, sp = np.cos(pitch), np.sin(pitch)
         cy, sy = np.cos(yaw), np.sin(yaw)
+
         body_to_world = np.array([
             [cy * cp, cy * sp * sr - sy * cr, cy * sp * cr + sy * sr],
             [sy * cp, sy * sp * sr + cy * cr, sy * sp * cr - cy * sr],
             [-sp, cp * sr, cp * cr],
         ])
+
         has_visual_vertical_velocity = np.isfinite(estimator.depth_velocity_z)
         visual_velocity = estimator.camera_velocity[:3].copy()
+
+        visual_velocity[0] = -1*visual_velocity[0]
+
         if not has_visual_vertical_velocity:
             visual_velocity[2] = 0.0
+
         visual_velocity_world = body_to_world @ visual_velocity
+
         if not has_visual_vertical_velocity:
             visual_velocity_world[2] = 0.0
+
         # keep the latest world-frame visual velocity for get_fused_velocity(); nan on z when
         # the camera gave no depth velocity, so the fuse leaves vz to the IMU/baro.
         held = visual_velocity_world.copy()
@@ -184,7 +191,7 @@ class Sensors:
                        visual_velocity_world[2], yaw_rate])
         with self._visual_state_lock:
             visual_position = (
-                imu_position.copy()
+                np.zeros(3)
                 if self._visual_position is None
                 else self._visual_position.copy()
             )
@@ -198,7 +205,8 @@ class Sensors:
 
     def get_visual_velocity(self):
         """Return latest camera velocity [vx, vy, vz, yaw_rate]."""
-        return self.visual_estimator.camera_velocity.copy()
+        visula_velocity = self.visual_estimator.camera_velocity.copy()
+        return visula_velocity
 
     def get_visual_position(self):
         """Return integrated visual position, or None until visual tracks are usable."""
