@@ -20,6 +20,11 @@ class ImuSample:
 
 
 class IMU:
+    @staticmethod
+    def rotate_x_180(vector):
+        vector = np.asarray(vector, dtype=float)
+        return np.array([vector[0], -vector[1], -vector[2]])
+
     def __init__(self):
         # raw latest
         self._accel = np.zeros(3)        # body accel [ax, ay, az] m/s^2
@@ -55,13 +60,12 @@ class IMU:
     def build_sample(accel, gyro, t):
         """Construct a timestamped ImuSample from a reading (barometer left empty)."""
         return ImuSample(t=t,
-                         accel=np.asarray(accel, dtype=float),
-                         gyro=np.asarray(gyro, dtype=float))
+                         accel=IMU.rotate_x_90(accel),
+                         gyro=IMU.rotate_x_90(gyro))
 
     # ---------------- update ----------------
     def update(self, accel, gyro, dt):
-        accel = np.asarray(accel, dtype=float)
-        gyro = np.asarray(gyro, dtype=float)
+        gyro = IMU.rotate_x_90(gyro)
         self._accel, self._gyro = accel, gyro
 
         if self._calib is not None:
@@ -191,3 +195,6 @@ class IMU:
 
     def get_angular_velocity(self):
         return self._gyro - self.gyro_bias   # [wx, wy, wz] rad/s, bias removed
+
+
+    
