@@ -45,8 +45,6 @@ class VisualVelocityEstimator:
         if len(self.buffer) < 2: return
 
         previous, current = self.buffer[-2], self.buffer[-1]
-        if min(len(previous.frames), len(current.frames)) < 2:
-            return
 
         tracked = self._track(previous, current)
         if tracked is not None:
