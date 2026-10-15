@@ -257,13 +257,6 @@ class VisualVelocityEstimator:
         k = max(1, int(n * 0.10))
         z_estimated = np.median(np.partition(z, -k)[-k:])
 
-        if self._smoothed_z is None:
-            self._smoothed_z = z_estimated
-        self._smoothed_z += self.height_smoothing * (
-            z_estimated - self._smoothed_z
-        )
-        z_estimated = self._smoothed_z
-
         v = flow * (z / (self.foc_l * self.dt))[:, None]
 
         # Pitch affects image x; roll affects image y.

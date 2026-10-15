@@ -17,11 +17,17 @@ TRACK_COLOR = (255, 0, 0)
 
 def replenish(gray, pts, cam, max_points=300, min_distance=100, backend=None):
     backend = backend or cv2
-    pts = np.asarray(pts, np.float32).reshape(-1, 2)[:max_points]
+    h, w = gray.shape
+    margin_x, margin_y = int(np.ceil(w * 0.05)), int(np.ceil(h * 0.05))
+    pts = np.asarray(pts, np.float32).reshape(-1, 2)
+    inside = (np.isfinite(pts).all(axis=1)
+              & (pts[:, 0] >= margin_x) & (pts[:, 0] < w - margin_x)
+              & (pts[:, 1] >= margin_y) & (pts[:, 1] < h - margin_y))
+    pts = pts[inside][:max_points]
     if len(pts) >= max_points:
         return pts.copy()
-    h, w = gray.shape
-    mask = np.full((h, w), 255, np.uint8)
+    mask = np.zeros((h, w), np.uint8)
+    mask[margin_y:h - margin_y, margin_x:w - margin_x] = 255
     for x, y in pts.astype(int):
         cv2.circle(mask, (x, y), max(1, int(np.ceil(min_distance))), 0, -1)
 
@@ -31,6 +37,11 @@ def replenish(gray, pts, cam, max_points=300, min_distance=100, backend=None):
     )
     if cand is None: return pts
     cand = cand.reshape(-1, 2)
+    inside = (np.isfinite(cand).all(axis=1)
+              & (cand[:, 0] >= margin_x) & (cand[:, 0] < w - margin_x)
+              & (cand[:, 1] >= margin_y) & (cand[:, 1] < h - margin_y))
+    cand = cand[inside]
+    if len(cand) == 0: return pts
     edges = backend.dilate(
         backend.Canny(gray, 50, 150), np.ones((5, 5), np.uint8)
     )

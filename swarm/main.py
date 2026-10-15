@@ -33,7 +33,7 @@ def main():
 
     plotter = LivePlotter(
         plots={
-            'Cam Pos':    ['x', 'y', 'z', 'yaw', 'raw x', 'raw y', 'raw z', 'raw yaw'],
+            'Cam Pos':    ['raw x', 'raw y', 'raw z', 'raw yaw'],
             'Act Pos':    ['x', 'y', 'z'],
             'Camera Vel': ['x', 'y', 'z'],
         },
@@ -67,7 +67,7 @@ def main():
             real_pos[1] = -1 * real_pos[1]
             vid = ctrl.get_camera_lin_v()
 
-            plotter.push('Cam Pos',    np.concatenate([ctrl.cam_pos, ctrl.raw_cam_pos]))
+            plotter.push('Cam Pos',    ctrl.raw_cam_pos)
             plotter.push('Act Pos',    real_pos)
             plotter.push('Camera Vel', vid)
             plotter.update()
