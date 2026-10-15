@@ -1,7 +1,7 @@
 """Shared OpenCL inputs for LK, GFTT and Canny/dilation.
 
 OpenCV may fall back to CPU. Use from one processing thread; cached source
-images are immutable. Set RB3_VISION_BACKEND=cpu for a CPU comparison.
+images are immutable. CPU is the default; set RB3_VISION_BACKEND=opencl to enable OpenCL.
 """
 from collections import deque
 import os
@@ -28,7 +28,7 @@ class _ImageCache(dict):
 
 class VisionBackend:
     def __init__(self, mode=None):
-        self.mode = mode or os.environ.get('RB3_VISION_BACKEND', 'opencl')
+        self.mode = mode or os.environ.get('RB3_VISION_BACKEND', 'cpu')
         self._activate = {
             'cpu': lambda: None,
             'opencl': lambda: cv2.ocl.setUseOpenCL(True),
