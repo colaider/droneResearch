@@ -1,5 +1,7 @@
 """Temporal feature tracking and visual velocity estimation."""
 
+from collections import deque
+
 import cv2
 import numpy as np
 from swarm.visualization.display import draw_tracks
@@ -39,6 +41,7 @@ class VisualVelocityEstimator:
         self.tracking_view = None
         self.vkfs = {}
         self.camera_velocity = np.zeros(4)
+        self.camera_velocity_buffer = deque(maxlen=100)
 
     def aply_flow(self):
         """Track the left image, then publish observations for velocity fitting."""
@@ -80,8 +83,8 @@ class VisualVelocityEstimator:
         self.velocity_flows = flow
         self.velocity_points = new
        
-        keep = self.point_prediction_filtering(old, new)
-        self.velocity_point_mask = keep
+        #keep = self.point_prediction_filtering(old, new)
+        #self.velocity_point_mask = keep
 
     def lucas_kanade_flow(self, gray_prev, gray_curr):
         """Track seeds from the previous to the current left image.
@@ -110,9 +113,9 @@ class VisualVelocityEstimator:
 
     def _lose_tracks(self):
         """Clear the seeds and publish empty tracks for the current frame."""
+        self._reset_tracking_frame()
         self.tracked_points = np.empty((0, 2), np.float32)
         self._tracked_frame_idx = self.current_frame.idx
-        self.tracks = Tracks.empty(self.current_frame.idx)
 
     def _track_forward(self, gray_prev, gray_curr, seeds, width, height, lk):
         """Run forward LK and return valid (old, new) pairs or None."""
@@ -219,13 +222,18 @@ class VisualVelocityEstimator:
 
         return flow, points
 
+    def _average_camera_velocity(self, velocity):
+        self.camera_velocity_buffer.append(np.asarray(velocity, dtype=float).copy())
+        return np.mean(self.camera_velocity_buffer, axis=0)
+
     def estimate_velocities(self, flow, points):
         """Estimate [vx, vy, vz, yaw_rate]; vz is the sensor value."""
         vz = float(self.drone_vel[2])
 
         if len(points) < 2:
             self.estimated_height = np.nan
-            self.camera_velocity = np.array([0.0, 0.0, 0.0, 0.0])
+            fallback_velocity = np.array([0.0, 0.0, vz, 0.0])
+            self.camera_velocity = self._average_camera_velocity(fallback_velocity)
             self._log_velocity(np.full(3, np.nan), len(points), np.nan)
             return self.camera_velocity.copy()
 
@@ -267,7 +275,8 @@ class VisualVelocityEstimator:
         kf.update(measured)
 
         self.estimated_height = float(z_estimated)
-        self.camera_velocity = np.insert(kf.get(), 2, vz)
+        velocity = np.insert(kf.get(), 2, vz)
+        self.camera_velocity = self._average_camera_velocity(velocity)
 
         self._log_velocity(measured, n, z_estimated)
 
