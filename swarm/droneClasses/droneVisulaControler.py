@@ -74,7 +74,7 @@ class DroneVisulaCTRL(DronePositionCTRL):
         self.fused_yaw_rate = fused[7]
 
         # Closed loop control on fused state
-        U = self.position_control(setpoint, X_body=self.cam_pos[0:3], X_d_body=self.fused_vel)
+        U = self.position_control(setpoint, X_body=self.raw_cam_pos[0:3], X_d_body=self.fused_vel)
         self.lowLevelControl(U)
         return self.cam_pos
 

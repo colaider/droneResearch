@@ -240,7 +240,8 @@ class VisualVelocityEstimator:
         z_estimated = np.median(np.partition(z, -k)[-k:])
 
         v = flow * (z / (self.foc_l * self.dt))[:, None]
-        v_rot = z[:, None] / np.cos(att[[1, 0]]) ** 2 * w
+        ang_rot = ang_vel[[1, 0]] * np.array([1, 1])   # swapped
+        v_rot = z[:, None] / np.cos(att[[1, 0]]) ** 2 * ang_rot
 
         B = v - v_rot
 
