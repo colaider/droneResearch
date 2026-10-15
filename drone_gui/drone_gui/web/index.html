@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Drone Control Center</title>
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<header>
+  <h1>Drone Control Center</h1>
+  <div class="pills">
+    <span class="pill" id="pill-link">telemetry <b id="link-state">...</b></span>
+    <span class="pill" id="pill-board">board <b id="board-state">...</b></span>
+    <span class="pill" id="pill-armed">motors <b id="armed-state">...</b></span>
+    <span class="pill muted">domain <b id="domain">-</b> &middot; <b id="host">-</b></span>
+  </div>
+</header>
+
+<main>
+  <section class="card span2" id="flight">
+    <h2>Flight controller</h2>
+    <div class="banner" id="control-banner">waiting for telemetry</div>
+    <div class="readouts">
+      <div class="readout"><label>roll</label><span id="roll">--</span><i>deg</i></div>
+      <div class="readout"><label>pitch</label><span id="pitch">--</span><i>deg</i></div>
+      <div class="readout"><label>yaw</label><span id="yaw">--</span><i>deg</i></div>
+      <div class="readout"><label>altitude (FC)</label><span id="alt">--</span><i>m</i></div>
+      <div class="readout"><label>altitude (baro)</label><span id="baro">--</span><i>m</i></div>
+      <div class="readout"><label>battery</label><span id="batt">--</span><i>V</i></div>
+    </div>
+    <div class="flags" id="flags"></div>
+    <table class="sticks">
+      <thead><tr><th></th><th>roll</th><th>pitch</th><th>yaw</th><th>throttle</th></tr></thead>
+      <tbody>
+        <tr><td>sent by RB3</td><td id="s0">-</td><td id="s1">-</td><td id="s2">-</td><td id="s3">-</td></tr>
+        <tr><td>used by FC</td><td id="f0">-</td><td id="f1">-</td><td id="f2">-</td><td id="f3">-</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section class="card">
+    <h2>Board</h2>
+    <dl class="kv" id="board-kv"></dl>
+  </section>
+
+  <section class="card span3" id="camera-card">
+    <h2>Cameras <span class="sub" id="camera-sub"></span>
+      <button class="h2-action" id="camera-add">+ add view</button></h2>
+    <div class="camera-grid" id="camera-grid"></div>
+  </section>
+
+
+  <section class="card span3" id="position-card">
+    <h2>Position <span class="sub">stereo visual odometry &middot; the flight controller has no X/Y</span></h2>
+    <div class="sensor-grid">
+      <div class="sensor">
+        <label>position <i>m</i></label>
+        <div class="axes"><span><b>x</b><em id="pos-x">--</em></span><span><b>y</b><em id="pos-y">--</em></span><span><b>z</b><em id="pos-z">--</em></span></div>
+        <div class="stream" id="pos-source">--</div>
+      </div>
+      <div class="sensor">
+        <label>velocity <i>m/s</i></label>
+        <div class="axes"><span><b>vx</b><em id="vel-x">--</em></span><span><b>vy</b><em id="vel-y">--</em></span><span><b>vz</b><em id="vel-z">--</em></span></div>
+        <div class="stream" id="vel-source">--</div>
+      </div>
+      <div class="sensor">
+        <label>visual odometry</label>
+        <div class="axes"><span><b>tracked</b><em id="vo-tracked">--</em></span><span><b>depth m</b><em id="vo-depth">--</em></span><span><b>fps</b><em id="vo-fps">--</em></span></div>
+        <div class="stream" id="vo-source">--</div>
+      </div>
+      <div class="sensor">
+        <label>height <i>m</i></label>
+        <div class="axes"><span><b>FC</b><em id="pos-alt-fc">--</em></span><span><b>baro</b><em id="pos-alt-baro">--</em></span></div>
+        <div class="stream">fused baro+IMU from the FC</div>
+      </div>
+    </div>
+  </section>
+
+  <section class="card span3" id="sensors-card">
+    <h2>RB3 sensors <span class="sub">accelerometer, gyro and barometer from /drone/imu, /drone/baro_altitude</span></h2>
+    <div class="sensor-grid">
+      <div class="sensor">
+        <label>accelerometer <i>m/s&sup2;</i></label>
+        <div class="axes"><span><b>x</b><em id="accel-x">--</em></span><span><b>y</b><em id="accel-y">--</em></span><span><b>z</b><em id="accel-z">--</em></span></div>
+        <div class="stream" id="stream-accel">--</div>
+      </div>
+      <div class="sensor">
+        <label>gyro <i>rad/s</i></label>
+        <div class="axes"><span><b>x</b><em id="gyro-x">--</em></span><span><b>y</b><em id="gyro-y">--</em></span><span><b>z</b><em id="gyro-z">--</em></span></div>
+        <div class="stream" id="stream-gyro">--</div>
+      </div>
+      <div class="sensor">
+        <label>barometer</label>
+        <div class="axes"><span><b>hPa</b><em id="baro-p">--</em></span><span><b>alt m</b><em id="baro-h">--</em></span></div>
+        <div class="stream" id="stream-pressure">--</div>
+      </div>
+    </div>
+  </section>
+
+  <section class="card span3">
+    <h2>History <span class="sub" id="history-window">last 2 minutes</span></h2>
+    <div class="plots">
+      <figure><figcaption>altitude &mdash; FC (blue) / baro (green) [m]</figcaption>
+        <canvas id="plot-alt" height="120"></canvas></figure>
+      <figure><figcaption>attitude &mdash; roll (blue) / pitch (green) [deg]</figcaption>
+        <canvas id="plot-att" height="120"></canvas></figure>
+      <figure><figcaption>battery [V]</figcaption>
+        <canvas id="plot-batt" height="120"></canvas></figure>
+    </div>
+  </section>
+
+  <section class="card span3">
+    <h2>Processes <span class="sub">systemd on the board</span></h2>
+    <table class="units">
+      <thead><tr><th>unit</th><th>state</th><th>boot</th><th class="right">actions</th></tr></thead>
+      <tbody id="units"></tbody>
+    </table>
+    <div class="row-actions">
+      <button class="danger" id="reboot">Reboot board</button>
+      <span class="hint" id="action-hint"></span>
+    </div>
+  </section>
+
+  <section class="card span3">
+    <h2>Event log <span class="sub">kept on disk, survives restarts of this panel</span></h2>
+    <ul class="events" id="events"></ul>
+  </section>
+</main>
+
+<div class="modal" id="modal">
+  <div class="modal-box">
+    <h3 id="modal-title">Journal</h3>
+    <pre id="modal-body">loading...</pre>
+    <button id="modal-close">Close</button>
+  </div>
+</div>
+
+<script src="/app.js"></script>
+</body>
+</html>

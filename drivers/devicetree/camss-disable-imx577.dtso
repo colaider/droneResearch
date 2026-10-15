@@ -1,0 +1,37 @@
+// Disable the camss endpoint that waits for the (absent) IMX577 on the camera mezzanine.
+//
+// The stock DTB wires camss port@3 to sony,imx577 at cci1 i2c-bus@1 (camera@1a), a sensor the
+// drone does not have fitted. Its driver therefore fails to probe:
+//     imx412 21-001a: failed to find sensor: -5
+//     imx412: probe of 21-001a failed with error -5
+// camss registers its media device only from the async notifier's complete callback, i.e. once
+// EVERY endpoint's subdev has bound. One sensor that never binds therefore blocks the whole
+// media graph, including the OV9282 that is fitted, and rb3_stereo dies with:
+//     RuntimeError: camss media device not found
+// The symptom is confusing because camss itself probes fine and even registers its video nodes
+// (/dev/video0 = msm_vfe0_video0); only /dev/mediaN is missing.
+//
+// camss_of_parse_ports() skips an endpoint whose OWN node is unavailable:
+//     for_each_endpoint_of_node(dev->of_node, node)
+//             if (!of_device_is_available(node))
+//                     continue;
+// so disabling this endpoint is enough, and is the smallest change that works. Disabling the
+// sensor node instead would NOT help: the check is on the camss-side endpoint, not the remote.
+// The imx412 probe still fails harmlessly; camss simply no longer waits for it.
+//
+// Needed only on stock DTBs that carry this node - the build that shipped before the
+// 2026-10 reflash did not, which is why the camera worked then with ov9282-cam0a.dtso alone.
+//
+// Apply together with the camera overlay:
+//   ./dtb_apply.sh --dry-run ov9282-cam0a.dtso camss-disable-imx577.dtso
+//   ./dtb_apply.sh           ov9282-cam0a.dtso camss-disable-imx577.dtso
+// Verify after reboot:
+//   ls /dev/media*                      -> a camss media device appears
+//   media-ctl -d /dev/mediaN -p | head  -> driver qcom-camss
+
+/dts-v1/;
+/plugin/;
+
+&csiphy3_ep {
+	status = "disabled";
+};

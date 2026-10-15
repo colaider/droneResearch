@@ -1,0 +1,35 @@
+# Parameters for the rb3_control flight_controller node.
+# ros2 run rb3_control flight_controller --ros-args --params-file control.yaml
+/drone/flight_controller:
+  ros__parameters:
+    port: /dev/ttyACM0          # Betaflight USB CDC; check with: ls /dev/serial/by-id/
+    baud: 115200                # ignored by USB CDC, kept for UART fallback (/dev/ttyHS2)
+
+    rc_rate_hz: 50.0            # stick stream rate; Betaflight drops to the radio below ~10 Hz
+    telemetry_rate_hz: 20.0     # control loop rate: arm state + override switch + sticks
+    telemetry_poll_hz: 10.0     # attitude/altitude polling; each MSP request costs ~19 ms
+    battery_poll_hz: 2.0        # battery changes slowly
+    command_timeout: 0.5        # stop sending if no command arrives within this many seconds
+    odom_timeout: 0.5           # cmd_vel is ignored if odom feedback is older than this
+
+    require_armed: true         # never send sticks unless the radio armed the drone
+    require_override: true      # never send sticks unless the MSP OVERRIDE switch is on
+
+    max_tilt_deg: 15.0          # roll/pitch command that maps to full stick deflection
+    max_yaw_rate_deg: 120.0
+    throttle_min: 1000
+    throttle_max: 2000
+    hover_throttle: 0.55        # cmd_vel controller baseline; measure it in a manual hover
+
+    # --- RB3 on-board sensors (ICM-42688-P / ICP-10111 / AKM) through the sensor core.
+    # Needs qcom-sensors-test-apps installed and passwordless sudo; rates are snapped down
+    # to one the sensor supports (IMU 12.5/25/50/100/200/500, baro <=25, mag <=100).
+    see_enable: true
+    see_sudo: true
+    see_gyro_rate_hz: 200.0     # drives the imu topic
+    see_accel_rate_hz: 200.0    # merged into the imu topic
+    see_pressure_rate_hz: 25.0
+    see_mag_rate_hz: 50.0
+    see_publish_rate_hz: 50.0   # how often queued samples are drained and published
+    imu_frame: imu_link
+    baro_reference_hpa: 0.0     # 0 = zero on the ground at start-up (relative altitude)

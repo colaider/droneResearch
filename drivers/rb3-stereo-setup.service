@@ -1,0 +1,11 @@
+[Unit]
+Description=RB3 stereo camera kernel modules (patched qcom-camss combo mode + CAM0B bring-up)
+After=systemd-modules-load.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/rb3-stereo-setup
+
+[Install]
+WantedBy=multi-user.target

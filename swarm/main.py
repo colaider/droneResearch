@@ -1,83 +1,87 @@
+from pathlib import Path
+
 import genesis as gs
-from swarm.scene_builders.customScene import CustomScene
-from swarm.droneClasses.dronePositionCTRL import DronePositionCTRL
 import numpy as np
+
+from swarm.scene_builders.customScene import CustomScene
+from swarm.droneClasses.stateMachine import StateMachine
 from swarm.utilities.rtPlotter import LivePlotter
+from swarm.utilities.mapViewer import MapViewer
 
 
-dt = 0.01  # Simulation timestep
+dt = 0.01
 
-def main():    
-    gs.init(backend=gs.cpu)  
+
+def main():
+    gs.init(backend=gs.cpu)
     print("\n📍 Creating scene...")
-    scene = CustomScene( dt=dt, gravity=(0, 0, -9.81), show_viewer=True, camera_pos=(10, 10, 5), camera_lookat=(0, 0, 1))
+    scene = CustomScene(
+        dt=dt, gravity=(0, 0, -9.81), show_viewer=True,
+        camera_pos=(10, 10, 5), camera_lookat=(0, 0, 1),
+    )
 
     drone = scene.add_drone(
         name="drone_1",
-        urdf_path=r"C:\Users\penturas\Desktop\codits\Python\instullingGenesis\GenesisDroneEnv\genesis_drones\robots\assets\drone_urdf\drone.urdf",
+        urdf_path=str(
+            Path(__file__).resolve().parents[1]
+            / "genesis_drones" / "robots" / "assets" / "drone_urdf" / "drone.urdf"
+        ),
         position=(0, 0, 0),
-        orientation=(0,0,0)
+        orientation=(0, 0, 0),
     )
 
     plotter = LivePlotter(
         plots={
-            'Accelerometer (m/s²)': ['ax', 'ay', 'az'],
-            'Gyroscope (rad/s)':    ['gx', 'gy', 'gz'],
-            'Actual pos': ['x', 'y', 'z'],
+            'Cam Pos':    ['x', 'y', 'z', 'yaw'],
+            'Act Pos':    ['x', 'y', 'z'],
+            'Camera Vel': ['x', 'y', 'z'],
         },
         buffer_size=1000,
         title='IMU Live',
     )
+    depth_plotter = LivePlotter(
+        plots={
+            'Depth (m)':     ['stereo median'],
+            'Valid matches': ['fraction'],
+        },
+        buffer_size=1000,
+        title='Stereo Depth',
+    )
+    map_viewer = MapViewer(title='Stereo point map — simulation pose')
 
-    controller = DronePositionCTRL(drone_entity=drone, dt=dt)
+    sm = StateMachine(drone_entity=drone, dt=dt, camera_fps=30)
     scene.build()
 
-    import numpy as np
+    for step in range(100000):
+        sim_time = step * dt
 
+        sm.steping(step, sim_time)
+        map_viewer.update(drone.point_map, drone.map_pose_position)
 
-    # for step  in range(100000):
-    #     if controller.start(step) == 1:
-    #         controller.step()
-    #         controller.position_control(np.array([0,0,1,0]))
-    #         reading = controller.drone.imu.read()
-    #         acc  = reading.lin_acc.numpy()   # array shape (3,)
-    #         gyro = reading.ang_vel.numpy()   # array shape (3,)
-    #         mag  = reading.mag.numpy() 
+        if sm.stage >= 1:
+            ctrl = sm.controller
 
-    #         plotter.push('Accelerometer (m/s²)', acc)
-    #         plotter.push('Gyroscope (rad/s)',    gyro)
-    #         plotter.update()
-    #         controller.drone.camera_show()
-    #     scene.step()
+            real_pos = ctrl.get_position()
+            real_pos[1] = -1 * real_pos[1]
+            vid = ctrl.get_camera_lin_v()
 
-
-    for step in range(100000000000):
-        controller.step(step)
-        if controller.start(step) == 1:
-            t = (step - 500) * controller.dt   # time since startup finished
-            radius = 2.0
-            omega = 0.5   # rad/s → circle period = 2π/0.5 ≈ 12.5s
-            
-            x = radius * np.cos(omega * t)
-            y = radius * np.sin(omega * t)
-            z = 1.0
-            yaw = 0.0
-            
-            controller.position_control(np.array([x, y, z, yaw]))
-            reading = controller.drone.imu.read()
-            acc  = reading.lin_acc.numpy()   # array shape (3,)
-            gyro = reading.ang_vel.numpy()   # array shape (3,)
-            
-            pos= controller.get_position()
-            plotter.push('Accelerometer (m/s²)', acc)
-            plotter.push('Gyroscope (rad/s)',    gyro)
-            plotter.push('Actual pos', pos)
+            plotter.push('Cam Pos',    ctrl.cam_pos)
+            plotter.push('Act Pos',    real_pos)
+            plotter.push('Camera Vel', vid)
             plotter.update()
-            controller.drone.camera_show()
+
+            fp = ctrl.drone.frame_processor
+            # Optical-axis depth varies across roofs/ground; it is not drone altitude.
+            depth_plotter.push('Depth (m)',     fp.depth_median)
+            depth_plotter.push('Valid matches', fp.depth_valid_frac)
+            depth_plotter.update()
+
         scene.step()
-        
+
     print("\n✅ Simulation complete!")
+    map_viewer.close()
     scene.close()
+
 
 if __name__ == "__main__":
     main()

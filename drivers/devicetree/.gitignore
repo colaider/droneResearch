@@ -1,0 +1,5 @@
+# dtb_flash.sh work files and the partition backup (64 MB, keep it outside git)
+*.img
+*.dtb
+*.dtbo
+dtbmnt/

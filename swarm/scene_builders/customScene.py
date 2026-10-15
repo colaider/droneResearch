@@ -1,7 +1,8 @@
 import genesis as gs
 from pathlib import Path
-from typing import List, Tuple, Optional
+from typing import Tuple
 from swarm.droneClasses.droneStruct import DroneStruct
+from swarm.config.cameraConfig import StereoCameraConfig, STEREO_CAM
 
 
 class CustomScene:
@@ -10,7 +11,9 @@ class CustomScene:
    
         self.scene = gs.Scene(
             sim_options=gs.options.SimOptions( dt=dt, gravity=gravity),
-            viewer_options=gs.options.ViewerOptions(camera_pos=camera_pos, camera_lookat=camera_lookat, camera_fov=40),
+            # Help text off: its font texture fails glGenerateMipmap on AMD drivers, which makes Genesis retry the
+            # viewer with a fresh GL context while keeping stale shader ids, and the next draw crashes.
+            viewer_options=gs.options.ViewerOptions(camera_pos=camera_pos, camera_lookat=camera_lookat, camera_fov=40, enable_help_text=False),
             show_viewer=show_viewer,
         )
         
@@ -21,6 +24,28 @@ class CustomScene:
         
         # Add ground plane by default
         self.add_ground_plane()
+        self.add_mountain()
+
+        # Varied footprints and roof heights for tracking and depth comparisons.
+        # (x, y, footprint width, height), in metres; keep the takeoff area open.
+        blocks = (
+            (0.70, 0.55, 0.30, 0.25),
+            (-0.75, 0.45, 0.40, 0.40),
+            (0.55, -0.85, 0.35, 0.60),
+            (-0.80, -0.75, 0.50, 0.30),
+            (1.65, 0.20, 0.65, 0.80),
+            (-1.70, 0.00, 0.70, 0.55),
+            (0.15, 1.70, 0.80, 1.00),
+            (0.00, -1.85, 0.60, 0.45),
+            (1.65, 1.65, 0.90, 1.20),
+        )
+        for index, (x, y, size, height) in enumerate(blocks, start=1):
+            self.add_mountain(name=f"block_{index}", position=(x, y, 0.0),
+                              size=size, height=height)
+
+        self.add_mountain(name="small_cube_on_block_9",
+                          position=(1.65, 1.65, 1.20),
+                          size=0.30, height=0.30)
 
     
     def add_ground_plane(self, size: float = 50.0):
@@ -32,12 +57,39 @@ class CustomScene:
         ),
         surface=gs.surfaces.Rough(
             diffuse_texture=gs.textures.ImageTexture(
-                image_path=r".\swarm\objects\grass.jpg"
+                image_path=str(Path(__file__).resolve().parents[1] / "objects" / "grass.jpg")
             )
-        ))
+        )
+        # surface=gs.surfaces.Rough(
+        #     color=(1.0, 1.0, 1.0),
+        # )
+        )
         self.entities['ground_plane'] = plane
         self.static_objects.append(plane)
         return plane
+
+
+
+    def add_mountain(self, name: str = "mountain", position: Tuple[float, float, float] = (0.15, 0.0, 0.0), size: float = 0.1, height: float = 0.5):
+        """Add a mountain-like block: a cube STL scaled to (size, size, height), rock-textured."""
+        objects = Path(__file__).resolve().parents[1] / "objects"
+        mountain = self.scene.add_entity(
+            morph=gs.morphs.Mesh(
+                file=str(objects / "cube.obj"),           # centered unit cube (-0.5..0.5) with UVs
+                scale=(size, size, height),
+                pos=(position[0], position[1], position[2] + height / 2),
+                fixed=True,
+            ),
+            surface=gs.surfaces.Rough(
+                diffuse_texture=gs.textures.ImageTexture(
+                    image_path=str(objects / "box.jpg")
+                )
+            ),
+        )
+        self.entities[name] = mountain
+        self.static_objects.append(mountain)
+        print(f"✓ Added mountain: {name} at {position}")
+        return mountain
 
     
     def add_static_object( self, name: str, mesh_path: str, position: Tuple[float, float, float] = (0, 0, 0), scale: float = 1.0):
@@ -72,7 +124,7 @@ class CustomScene:
         return robot
 
     
-    def add_drone( self, name: str, urdf_path: str, position: Tuple[float, float, float] = (0, 0, 1), orientation = (0,0,0)) -> DroneStruct:
+    def add_drone( self, name: str, urdf_path: str, position: Tuple[float, float, float] = (0, 0, 1), orientation = (0,0,0), cam_cfg: StereoCameraConfig = STEREO_CAM) -> DroneStruct:
         drone = self.scene.add_entity(gs.morphs.Drone(file=urdf_path, pos=position, euler=orientation))
 
         imu = self.scene.add_sensor(
@@ -90,34 +142,19 @@ class CustomScene:
             )
         )
 
-        res = (500, 600)
-        fov = 85
-
+        # poses are relative to the link frame once attached
         left_cam = self.scene.add_sensor(
-            gs.sensors.RasterizerCameraOptions(
-                entity_idx=drone.idx,
-                res=res,
-                pos=(0.0, -0.01, 0.0),        # relative to the link frame once attached
-                up=(0, 0, 0),
-                fov=fov,
-           )
+            gs.sensors.RasterizerCameraOptions(entity_idx=drone.idx, **cam_cfg.camera_options('left'))
         )
         right_cam = self.scene.add_sensor(
-            gs.sensors.RasterizerCameraOptions(
-                entity_idx=drone.idx,
-                link_idx_local=0,
-                res=res,
-                pos=(0, 0.01, 0.0),        # relative to the link frame once attached
-                up=(0, 0, 0),
-                fov=fov,
-            )
+            gs.sensors.RasterizerCameraOptions(entity_idx=drone.idx, **cam_cfg.camera_options('right'))
         )
 
-        
+
         self.entities[name] = drone
-        self.drones.append(drone)      
+        self.drones.append(drone)
         print(f"✓ Added drone: {name} at {position}")
-        return DroneStruct(drone, imu, left_cam, right_cam, res, fov)
+        return DroneStruct(drone, imu, left_cam, right_cam, cam_cfg)
 
     
     def add_swarm(self): pass
