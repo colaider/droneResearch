@@ -4,7 +4,7 @@ import numpy as np
 class FusionKalmanFilter:
 
     def __init__(self,
-                 process_var=(10, 10, 10, 10),   # vx, vy, vz, yaw_rate  (per second)
+                 process_var=(10, 10, 10, 10000),   # vx, vy, vz, yaw_rate  (per second)
                  camera_var=(0.4, 0.4, 100),        # vx, vy, yaw_rate
                  baro_vel_var=0.1,                    # vz measurement variance
                  baro_pos_gain=0.1):                  # complementary pull of pz toward baro altitude
