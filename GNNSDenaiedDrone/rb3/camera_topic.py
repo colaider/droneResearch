@@ -50,7 +50,7 @@ class CameraTopic:
         # Separate topic for the PROCESSED image (your vision output). Left untouched by preview.
         self.pub_processed = node.create_publisher(CompressedImage, f"{ns}/processed/compressed",
                                                    qos_profile_sensor_data)
-        self.preview_fps = 10.0
+        self.preview_fps = 30.0
         self.preview_scale = 0.5
         self._t_prev = 0.0
 
