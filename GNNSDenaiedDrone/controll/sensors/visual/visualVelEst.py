@@ -237,7 +237,8 @@ class VisualVelocityEstimator:
         kalman.update(measured)
 
         self.estimated_height = float(estimated_height)
-        velocity = np.insert(kalman.get(), 2, vz)
+        #velocity = np.insert(kalman.get(), 2, vz)
+        velocity = measured
         self.camera_velocity = self._average_camera_velocity(velocity)
         return self.camera_velocity.copy()
 
