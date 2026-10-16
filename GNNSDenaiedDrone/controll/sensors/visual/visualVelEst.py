@@ -229,7 +229,7 @@ class VisualVelocityEstimator:
         measured, *_ = np.linalg.lstsq(
             matrix, np.concatenate((target[:, 0], target[:, 1])), rcond=None
         )
-        measured = -measured
+        measured[1] = -measured[1]
 
         kalman = self.vkfs.setdefault(0, VelocityKalmanFilter())
         if not kalman.started:
