@@ -235,7 +235,12 @@ class VisualVelocityEstimator:
             self.camera_velocity = self._average_camera_velocity(fallback_velocity)
             return self.camera_velocity.copy()
 
-        ang_vel, att = self.drone_ang_vel, self.imu_att
+        angular_velocity = np.asarray(self.drone_ang_vel, dtype=float).copy()
+        attitude = np.asarray(self.imu_att, dtype=float).copy()
+        angular_velocity[1], angular_velocity[2] = (
+            -angular_velocity[1], -angular_velocity[2]
+        )
+        attitude[1], attitude[2] = -attitude[1], -attitude[2]
         h, w = self.frame_size[:2]
         c = np.array([w / 2, h / 2])
 
@@ -246,8 +251,8 @@ class VisualVelocityEstimator:
         z_estimated = np.median(np.partition(z, -k)[-k:])
 
         v = flow * (z / (self.foc_l * self.dt))[:, None]
-        ang_rot = ang_vel[[1, 0]] * np.array([1, 1])   # swapped
-        v_rot = z[:, None] / np.cos(att[[1, 0]]) ** 2 * ang_rot
+        ang_rot = angular_velocity[[1, 0]] * np.array([1, 1])   # swapped
+        v_rot = z[:, None] / np.cos(attitude[[1, 0]]) ** 2 * ang_rot
 
         B = v - v_rot
 
