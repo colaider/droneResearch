@@ -88,6 +88,7 @@ Environment variables work too (`DRONE_HOST`, `DRONE_GUI_PORT`, `DRONE_GUI_BIND`
 | Panel | |
 | --- | --- |
 | Flight controller | who has control (radio or RB3), armed state, arming flags, roll/pitch/yaw, both altitudes, battery, and the sticks the RB3 sent next to the ones the FC used |
+| Orientation from IMU | roll/pitch/yaw from the RB3's own gyro + accelerometer: a live 3D view of the drone as an X (orange props = front, dashed line = up; drag to turn, optional camera that follows yaw) and plots of roll/pitch and yaw over the last 10 s - 2 min, with the FC's numbers alongside. See below |
 | RB3 sensors | the board's own IMU, barometer and magnetometer: gyro, accel, mag with field magnitude, pressure and baro altitude, each with its stream rate, sample count and restart count. The sensors are on the sensor core, but `rb3_control` publishes them, so they read "not streaming" while `drone-control` is down |
 | Position | x/y/z and velocity, each labelled with where it came from. The flight controller supplies height only - Betaflight has no X/Y without GPS and none is fitted - so x/y has to come from the stereo estimator |
 | Path | the position over time, from above (x/y, coloured by height) and in 3D (drag to turn, scroll to zoom), with the drone drawn as a box turned by the FC's roll/pitch/yaw. One track per flight run, saved to `~/.local/share/drone_gui/tracks/`; the list replays earlier runs, `new track` starts a fresh one |
@@ -97,6 +98,24 @@ Environment variables work too (`DRONE_HOST`, `DRONE_GUI_PORT`, `DRONE_GUI_BIND`
 | Processes | every unit's state, with start / stop / restart and a journal viewer |
 | Board | uptime, load, temperature, memory, disk, whether `/dev/ttyACM0` exists and **which PID holds it**, and how many of the 4 sensor-core streams are alive |
 | Event log | arm/disarm, node restarts, board reboots, unit state changes, every action taken from the panel — appended to `~/.local/share/drone_gui/events.jsonl`, so it survives restarts of the panel itself |
+
+## Orientation from the IMU
+
+`agent.py` runs a Mahony complementary filter (`AttitudeFilter`) on **every** `/drone/imu`
+message on the board (~125 Hz; the link only carries a 10 Hz snapshot of the IMU) and sends
+the result at ~30 Hz. The server forwards it as an `attitude` event on the page's existing
+state stream, so it costs no extra browser connection.
+
+* **Frames** are the control loop's (`Rb3ReadSend` negates y and z of `/drone/imu`): body x
+  forward, y right, z down. Roll > 0 is right side down, pitch > 0 nose up, yaw > 0 turning
+  right seen from above.
+* **Gyro bias** is learned whenever the drone sits still (the readout says "still, learning
+  gyro bias"). This board's raw bias is ~1 deg/s, which would otherwise turn straight into yaw
+  drift. Give it a second on the ground after power-up.
+* **Yaw is relative**: no magnetometer (it sits next to the motors), so yaw starts at 0 and
+  creeps slowly in flight. `zero yaw` makes the current heading 0. The FC's yaw shown alongside
+  is Betaflight's own gyro-only heading, which drifts much faster at rest.
+* With `--transport dds` the panel runs the same filter itself.
 
 ## start_rb3 and the control loop
 
@@ -166,7 +185,7 @@ run.sh                        start the panel
 service/drone-control.service flight controller bridge, as a supervised unit
 service/drone-stereo.service  stereo camera node
 service/install_board_units.sh
-drone_gui/agent.py            runs ON THE BOARD, piped in over SSH, emits JSON lines
+drone_gui/agent.py            runs ON THE BOARD, piped in over SSH, emits JSON lines; IMU attitude filter
 drone_gui/ssh_link.py         default transport: spawns the agent, parses it, reconnects
 drone_gui/ros_link.py         alternative transport: subscribe to DDS directly
 drone_gui/store.py            latest values + plot history, shared by both transports

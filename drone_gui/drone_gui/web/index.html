@@ -44,6 +44,29 @@
     <dl class="kv" id="board-kv"></dl>
   </section>
 
+  <section class="card span3" id="attitude-card">
+    <h2>Orientation from IMU <span class="sub">RB3 gyro + accelerometer on /drone/imu, complementary filter run on the board &middot; <span id="att-sub">--</span></span>
+      <button class="h2-action" id="att-zero-yaw" title="make the current heading yaw 0 (the IMU has no compass, so yaw is relative and creeps slowly)">zero yaw</button></h2>
+    <div class="attitude-layout">
+      <figure><figcaption>live &mdash; drag to turn the view, scroll to zoom, double-click to reset &middot;
+          <label class="inline"><input type="checkbox" id="att-chase"> camera follows yaw</label></figcaption>
+        <canvas id="att-3d"></canvas></figure>
+      <div class="attitude-side">
+        <div class="readouts">
+          <div class="readout"><label>roll</label><span id="att-roll">--</span><i>deg</i><small id="att-fc-roll">FC --</small></div>
+          <div class="readout"><label>pitch</label><span id="att-pitch">--</span><i>deg</i><small id="att-fc-pitch">FC --</small></div>
+          <div class="readout"><label>yaw</label><span id="att-yaw">--</span><i>deg</i><small id="att-fc-yaw">FC --</small></div>
+        </div>
+        <div class="stream" id="att-detail">--</div>
+        <figure><figcaption><b class="c-x">roll</b> / <b class="c-y">pitch</b> [deg] &middot; right side down / nose up is positive &middot; last
+            <select id="att-window"><option value="10">10 s</option><option value="30" selected>30 s</option><option value="60">60 s</option><option value="120">2 min</option></select></figcaption>
+          <canvas id="att-plot-rp"></canvas></figure>
+        <figure><figcaption><b class="c-z">yaw</b> [deg] &middot; relative to start / last "zero yaw", turning right is positive</figcaption>
+          <canvas id="att-plot-yaw"></canvas></figure>
+      </div>
+    </div>
+  </section>
+
   <!-- Cameras on the left half; the path from above and the camera position on the right. -->
   <div class="span3 split-row">
     <section class="card" id="camera-card">

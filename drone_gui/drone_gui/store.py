@@ -83,6 +83,11 @@ class Store:
         self.series = {name: Series(history_seconds) for name in
                        ("altitude", "baro_altitude", "battery", "roll", "pitch")
                        + CAMERA_SERIES}
+        # The IMU attitude (agent.AttitudeFilter), ~30 Hz: the latest drives the live view, and
+        # (stamp, roll, pitch, yaw) over the history window seeds the page's plot when it opens.
+        # Kept out of the 5 Hz state: at this rate it would make every tick ten times bigger.
+        self.history_seconds = history_seconds
+        self.attitude_history = collections.deque()
         self._last_vo = None
         self._last_armed = None
         self._last_frames_sent = None
@@ -136,6 +141,27 @@ class Store:
                 if self._last_frames_sent is not None and frames < self._last_frames_sent:
                     self.on_event("flight controller node restarted", "warning")
                 self._last_frames_sent = frames
+
+    def apply_attitude(self, attitude):
+        """One AttitudeFilter.state() from the agent (or ros_link's own filter)."""
+        now = time.monotonic()
+        rpy = attitude.get("rpy") if isinstance(attitude, dict) else None
+        if not isinstance(rpy, list) or len(rpy) != 3:
+            return
+        with self.lock:
+            self.values["imu_attitude"] = (attitude, now)
+            self.counts["imu_attitude"] += 1
+            self.attitude_history.append((now, rpy[0], rpy[1], rpy[2]))
+            cutoff = now - self.history_seconds
+            while self.attitude_history and self.attitude_history[0][0] < cutoff:
+                self.attitude_history.popleft()
+
+    def attitude_plot(self):
+        """[[seconds ago, roll, pitch, yaw] in degrees], oldest first."""
+        origin = time.monotonic()
+        with self.lock:
+            return [[round(t - origin, 3), round(math.degrees(r), 2), round(math.degrees(p), 2),
+                     round(math.degrees(y), 2)] for t, r, p, y in self.attitude_history]
 
     def apply_frame(self, topic, jpeg):
         now = time.monotonic()

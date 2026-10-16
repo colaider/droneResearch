@@ -4,7 +4,12 @@ Three kinds of traffic, each matched to a plain-HTTP mechanism that needs no fra
 
   GET  /api/stream          Server-Sent Events, one JSON state object per tick. One-way push
                             is all a dashboard needs, and unlike WebSocket it is a few lines
-                            of stdlib and reconnects on its own.
+                            of stdlib and reconnects on its own. The IMU attitude rides on the
+                            same connection as its own `attitude` event at ~30 Hz: a second
+                            stream would take one of the 6 connections the cameras need.
+  GET  /api/attitude/history, POST /api/attitude/zero_yaw
+                            the IMU attitude over the history window (to seed the plot), and
+                            making the current heading yaw 0.
   GET  /camera/stream?topic=/stereo/preview/compressed
                             multipart/x-mixed-replace MJPEG of one camera topic, built from
                             JPEG frames - the browser does the decoding, so no image library
@@ -35,6 +40,7 @@ from .tracks import ODOM_MAX_AGE, VO_MAX_AGE, displayed_position
 
 WEB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web")
 STREAM_HZ = 5.0
+ATTITUDE_STREAM_HZ = 30.0
 BOARD_POLL_SECONDS = 3.0
 MJPEG_HZ = 12.0
 CONTENT_TYPES = {".html": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8",
@@ -162,6 +168,9 @@ class State:
                 "mag_ut": list(mag) if mag else None,
                 "sensors": status.get("rb3_sensors") if live else None,
             },
+            # Orientation from the RB3's own IMU (agent.AttitudeFilter); the live view gets it
+            # at 30 Hz from the `attitude` events, this copy says whether there is one at all.
+            "attitude": ros.get("imu_attitude", 1.0),
             # Where the drone thinks it is. Z comes from the flight controller (fused
             # baro+IMU); there is no X/Y from it at all, since Betaflight only knows position
             # with GPS and none is configured. X/Y has to come from the stereo estimator.
@@ -277,6 +286,9 @@ class Handler(BaseHTTPRequestHandler):
             if frame is None:
                 return self._send(503, b"no frame (only topics an open stream shows are received)")
             return self._send(200, frame, "image/jpeg")
+        if path == "/api/attitude/history":
+            return self._json({"window": self.state.cfg.history_seconds,
+                               "samples": self.state.ros.attitude_plot()})
         if path == "/api/tracks":
             if not self.state.tracks:
                 return self._json({"live": None, "tracks": []})
@@ -334,6 +346,10 @@ class Handler(BaseHTTPRequestHandler):
             result = self.state.board.reboot()
             return self._json({"ok": result.ok, "err": result.err})
 
+        if path == "/api/attitude/zero_yaw":
+            ok = self.state.ros.zero_yaw()
+            return self._json({"ok": ok, "err": "" if ok else "telemetry link is down"})
+
         if path == "/api/tracks/split" and self.state.tracks:
             self.state.tracks.split()
             return self._json({"ok": True})
@@ -349,14 +365,25 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.send_header("Connection", "keep-alive")
         self.end_headers()
-        period = 1.0 / STREAM_HZ
+        state_period = 1.0 / STREAM_HZ
+        next_state = 0.0
+        last_attitude = None
         try:
             while True:
-                payload = json.dumps(self.state.snapshot())
-                self.wfile.write(b"data: " + payload.encode("utf-8") + b"\n\n")
+                now = time.monotonic()
+                if now >= next_state:
+                    next_state = now + state_period
+                    payload = json.dumps(self.state.snapshot())
+                    self.wfile.write(b"data: " + payload.encode("utf-8") + b"\n\n")
+                # Each new filter output is a new dict, so identity says whether it changed.
+                attitude = self.state.ros.get("imu_attitude", 1.0)
+                if attitude is not None and attitude is not last_attitude:
+                    last_attitude = attitude
+                    self.wfile.write(b"event: attitude\ndata: " +
+                                     json.dumps(attitude).encode("utf-8") + b"\n\n")
                 self.wfile.flush()
-                time.sleep(period)
-        except (BrokenPipeError, ConnectionResetError, socket.timeout):
+                time.sleep(1.0 / ATTITUDE_STREAM_HZ)
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, socket.timeout):
             pass        # the tab was closed or reloaded
 
     def _mjpeg(self, topic):

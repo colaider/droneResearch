@@ -109,16 +109,21 @@ class SshLink:
 
     def _send_watch(self):
         """Tell the running agent which camera topics to subscribe to and send."""
+        self._send({"type": "watch", "topics": self.store.watched()})
+
+    def _send(self, command):
+        """One command line to the running agent. False if no agent is running."""
         process = self.process
         if process is None or process.poll() is not None:
-            return                          # the next agent gets the list when it starts
-        line = json.dumps({"type": "watch", "topics": self.store.watched()}) + "\n"
+            return False                    # the next agent gets the watch list when it starts
+        line = json.dumps(command) + "\n"
         with self._stdin_lock:
             try:
                 process.stdin.write(line.encode("utf-8"))
                 process.stdin.flush()
             except OSError:
-                pass
+                return False
+        return True
 
     def _read(self, process):
         stdout = io.TextIOWrapper(process.stdout, encoding="utf-8", errors="replace")
@@ -136,6 +141,9 @@ class SshLink:
             kind = message.get("type")
             if kind == "telemetry":
                 self.store.apply(message.get("values") or {})
+            elif kind == "attitude":
+                message.pop("type")
+                self.store.apply_attitude(message)
             elif kind == "frame":
                 try:
                     self.store.apply_frame(message["topic"], base64.b64decode(message["jpeg"]))
@@ -185,6 +193,13 @@ class SshLink:
 
     def plot(self, *names):
         return self.store.plot(*names)
+
+    def attitude_plot(self):
+        return self.store.attitude_plot()
+
+    def zero_yaw(self):
+        """The IMU attitude's current heading becomes yaw 0 (the filter runs in the agent)."""
+        return self._send({"type": "zero_yaw"})
 
     def link_info(self):
         return {"transport": "ssh", "connected": self.connected,

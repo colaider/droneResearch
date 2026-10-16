@@ -237,3 +237,22 @@ figcaption b.c-x { color: #ff5f56; } figcaption b.c-y { color: #3ecf8e; } figcap
 @media (max-width: 1100px) {
   .split-row { grid-template-columns: minmax(0, 1fr); }
 }
+
+/* --- orientation from the IMU ------------------------------------------------------------ */
+.attitude-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr); gap: 14px; }
+.attitude-side { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.attitude-side .stream { margin-top: 0; }
+#att-3d { height: 400px; display: block; cursor: grab; touch-action: none; }
+#att-3d:active { cursor: grabbing; }
+#att-plot-rp, #att-plot-yaw { height: 140px; display: block; }
+.readout small { display: block; font: 500 11px var(--mono); color: var(--muted); margin-top: 2px; }
+figcaption label.inline { cursor: pointer; white-space: nowrap; }
+figcaption label.inline input { vertical-align: -2px; margin: 0 3px 0 0; }
+figcaption select {
+  font: 500 11px var(--mono); color: var(--text); background: var(--panel-2);
+  border: 1px solid var(--line); border-radius: 5px; padding: 1px 4px;
+}
+@media (max-width: 1100px) {
+  .attitude-layout { grid-template-columns: minmax(0, 1fr); }
+  #att-3d { height: 340px; }
+}

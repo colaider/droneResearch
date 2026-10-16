@@ -73,6 +73,7 @@ function render(state) {
   }
 
   renderSensors(flight, link);
+  renderAttitudeFc(flight);
   renderPosition(state.position);
   updateTrack(state.track);
 
@@ -554,11 +555,16 @@ function connect() {
     // instead of failing, so reopen them all.
     if (reconnecting && views) views.forEach(startStream);
     reconnecting = false;
+    seedAttitudeHistory();
   };
   source.onmessage = (event) => {
     document.body.classList.remove('stale');
     try { render(JSON.parse(event.data)); } catch (error) { /* ignore a torn frame */ }
   };
+  // The IMU attitude, ~30 Hz, on the same connection (see server.py).
+  source.addEventListener('attitude', (event) => {
+    try { onAttitude(JSON.parse(event.data)); } catch (error) { /* ignore a torn frame */ }
+  });
   source.onerror = () => {
     document.body.classList.add('stale');
     source.close();
@@ -570,6 +576,7 @@ connect();
 window.addEventListener('resize', () => {
   if (lastState) drawPlots(lastState.plots, lastState.window_seconds);
   drawTrack();
+  scheduleAttitudeDraw();
 });
 
 // --- position track: the path from above and in 3D -------------------------------------
@@ -996,7 +1003,9 @@ function drawCameraMotion() {
 // left axis with the first sample and grows to the right until the window is full, then
 // scrolls; times are labelled with the clock. Without a range it spans the run (replay),
 // labelled in seconds since the run started.
-function drawRunPlot(canvas, samples, first, minSpan, emptyText, range) {
+// axes: [[name, colour], ...] for the columns from `first` on; x / y / z by default.
+const XYZ_AXES = [['x', AXIS_COLOURS[0]], ['y', AXIS_COLOURS[1]], ['z', AXIS_COLOURS[2]]];
+function drawRunPlot(canvas, samples, first, minSpan, emptyText, range, axes = XYZ_AXES) {
   const {context, width, height} = prepareCanvas(canvas);
   const value = (s, axis) => {
     const v = s[first + axis];
@@ -1004,7 +1013,7 @@ function drawRunPlot(canvas, samples, first, minSpan, emptyText, range) {
   };
   let min = Infinity, max = -Infinity;
   samples.forEach((s) => {
-    for (let axis = 0; axis < 3; axis++) {
+    for (let axis = 0; axis < axes.length; axis++) {
       const v = value(s, axis);
       if (v !== null) { min = Math.min(min, v); max = Math.max(max, v); }
     }
@@ -1058,8 +1067,8 @@ function drawRunPlot(canvas, samples, first, minSpan, emptyText, range) {
 
   context.lineWidth = 1.6;
   context.lineJoin = 'round';
-  for (let axis = 0; axis < 3; axis++) {
-    context.strokeStyle = AXIS_COLOURS[axis];
+  for (let axis = 0; axis < axes.length; axis++) {
+    context.strokeStyle = axes[axis][1];
     context.beginPath();
     let drawing = false;
     samples.forEach((s) => {
@@ -1076,11 +1085,14 @@ function drawRunPlot(canvas, samples, first, minSpan, emptyText, range) {
   const last = samples[samples.length - 1];
   context.font = '10px ui-monospace, monospace';
   context.textAlign = 'right';
-  ['x', 'y', 'z'].forEach((name, axis) => {
+  let labelX = width - right - 4;
+  for (let axis = axes.length - 1; axis >= 0; axis--) {
     const v = value(last, axis);
-    context.fillStyle = AXIS_COLOURS[axis];
-    context.fillText(name + ' ' + (v === null ? '--' : v.toFixed(2)), width - right - 4 - (2 - axis) * 62, top + 10);
-  });
+    const label = axes[axis][0] + ' ' + (v === null ? '--' : v.toFixed(2));
+    context.fillStyle = axes[axis][1];
+    context.fillText(label, labelX, top + 10);
+    labelX -= Math.max(62, context.measureText(label).width + 12);
+  }
   context.textAlign = 'left';
 }
 
@@ -1159,5 +1171,330 @@ $('track-fit').onclick = fitTrack;
   });
 })();
 
+// --- orientation from the IMU ------------------------------------------------------------
+// The agent on the board runs a complementary filter on every /drone/imu message
+// (agent.py AttitudeFilter) and the server forwards each result as an `attitude` event on the
+// state stream, ~30 Hz. Frames: body x forward, y right, z down; world x = yaw 0, z down. So
+// roll > 0 is right side down, pitch > 0 nose up, yaw > 0 turning right (seen from above).
+const ATT_VIEW = {azimuth: Math.PI - 0.5, elevation: 0.5, zoom: 1};
+const ATT_HISTORY = 120;          // seconds of samples kept (the server keeps as much)
+const ATT_STALE = 1.0;            // seconds without an update before the view greys out
+const ATT_PREFS_KEY = 'drone_gui.attitude';
+const attitude = {
+  latest: null,                   // the last AttitudeFilter state: q, rpy, rate, bias, rest, ...
+  at: 0,                          // when it arrived, performance clock [s]
+  samples: [],                    // [t (performance clock, s), roll, pitch, yaw] in degrees
+  window: 30,
+  chase: false,
+  view: {...ATT_VIEW},
+  note: null,                     // {text, until}: a short message after "zero yaw"
+  pending: false,
+};
+const nowSeconds = () => performance.now() / 1000;
+const deg = (rad) => rad * 180 / Math.PI;
+
+try {
+  const saved = JSON.parse(localStorage.getItem(ATT_PREFS_KEY) || 'null');
+  if (saved) {
+    attitude.window = [10, 30, 60, 120].includes(saved.window) ? saved.window : 30;
+    attitude.chase = !!saved.chase;
+  }
+} catch (error) { /* defaults */ }
+$('att-window').value = String(attitude.window);
+$('att-chase').checked = attitude.chase;
+
+function saveAttitudePrefs() {
+  try {
+    localStorage.setItem(ATT_PREFS_KEY, JSON.stringify({window: attitude.window, chase: attitude.chase}));
+  } catch (error) { /* not kept */ }
+}
+
+function onAttitude(data) {
+  if (!data || !Array.isArray(data.rpy) || !Array.isArray(data.q)) return;
+  attitude.latest = data;
+  attitude.at = nowSeconds();
+  attitude.samples.push([attitude.at, deg(data.rpy[0]), deg(data.rpy[1]), deg(data.rpy[2])]);
+  const cutoff = attitude.at - ATT_HISTORY;
+  let drop = 0;
+  while (drop < attitude.samples.length && attitude.samples[drop][0] < cutoff) drop++;
+  if (drop) attitude.samples.splice(0, drop);
+  scheduleAttitudeDraw();
+}
+
+// What the server recorded before this page opened (or while it was disconnected), so the plot
+// does not start empty. Only samples older than the ones already here are added.
+async function seedAttitudeHistory() {
+  try {
+    const data = await (await fetch('/api/attitude/history')).json();
+    const now = nowSeconds();
+    const oldest = attitude.samples.length ? attitude.samples[0][0] : Infinity;
+    const older = data.samples.map(([ago, r, p, y]) => [now + ago, r, p, y])
+      .filter((s) => s[0] < oldest - 0.02);
+    if (older.length) attitude.samples = older.concat(attitude.samples);
+    scheduleAttitudeDraw();
+  } catch (error) { /* the plot just starts from now */ }
+}
+
+function scheduleAttitudeDraw() {
+  if (attitude.pending) return;
+  attitude.pending = true;
+  requestAnimationFrame(() => {
+    attitude.pending = false;
+    drawAttitude();
+  });
+}
+
+function drawAttitude() {
+  const stale = !attitude.latest || nowSeconds() - attitude.at > ATT_STALE;
+  drawAttitude3D($('att-3d'), attitude.latest, attitude.view, attitude.chase, stale);
+  drawAttitudePlots();
+  renderAttitudeReadouts(stale);
+}
+
+function renderAttitudeReadouts(stale) {
+  const a = attitude.latest;
+  ['roll', 'pitch', 'yaw'].forEach((name, i) => {
+    $('att-' + name).textContent = a && !stale ? fmt(deg(a.rpy[i]), 1) : '--';
+  });
+  const detail = $('att-detail');
+  let text;
+  if (!a) {
+    text = 'no IMU attitude yet: it needs /drone/imu, published by drone-rb3 or drone-control';
+  } else if (stale) {
+    text = 'no update for ' + Math.round(nowSeconds() - attitude.at) + ' s: is /drone/imu still publishing?';
+  } else {
+    const dps = (v) => v.map((x) => fmt(deg(x), 1)).join(' / ');
+    text = (a.hz ? fmt(a.hz, 0) + ' Hz · ' : '') +
+      (a.rest ? 'still, learning gyro bias' : 'moving') +
+      ' · rates ' + dps(a.rate) + ' deg/s · gyro bias ' + dps(a.bias) + ' deg/s' +
+      ' · accel trust ' + Math.round(a.trust * 100) + '%';
+  }
+  detail.textContent = text;
+  detail.classList.toggle('dead', !a || stale);
+  const note = attitude.note && attitude.note.until > nowSeconds() ? attitude.note.text : null;
+  $('att-sub').textContent = note || (a && !stale ? 'live' : 'no data');
+}
+
+// The flight controller's own attitude next to each number, from the 5 Hz state. Betaflight
+// has its own IMU, mounting and sign conventions, and its yaw is a heading, not relative.
+function renderAttitudeFc(flight) {
+  [['roll', flight.roll_deg, 1], ['pitch', flight.pitch_deg, 1], ['yaw', flight.yaw_deg, 0]]
+    .forEach(([name, value, digits]) => {
+      $('att-fc-' + name).textContent = 'FC ' + fmt(value, digits);
+    });
+  scheduleAttitudeDraw();         // keeps the plots scrolling, and greys out a stale view
+}
+
+function drawAttitudePlots() {
+  const now = nowSeconds(), from = -attitude.window;
+  const rows = [];
+  attitude.samples.forEach((s) => { if (s[0] - now >= from) rows.push([s[0] - now, s[1], s[2], s[3]]); });
+  const empty = attitude.latest ? 'no samples in this window' : 'no IMU attitude yet';
+  drawRunPlot($('att-plot-rp'), rows, 1, 4, empty, [from, 0],
+    [['roll', AXIS_COLOURS[0]], ['pitch', AXIS_COLOURS[1]]]);
+  // yaw wraps at +-180: break the line there instead of drawing a vertical stroke across.
+  const yaw = [];
+  rows.forEach((r, i) => {
+    if (i && Math.abs(r[3] - rows[i - 1][3]) > 180) yaw.push([r[0], null]);
+    yaw.push([r[0], r[3]]);
+  });
+  drawRunPlot($('att-plot-yaw'), yaw, 1, 10, empty, [from, 0], [['yaw', AXIS_COLOURS[2]]]);
+}
+
+// Rotate a body-frame vector into the world frame by a body-to-world quaternion [w, x, y, z].
+function qrotate(q, v) {
+  const [w, x, y, z] = q;
+  const tx = 2 * (y * v[2] - z * v[1]), ty = 2 * (z * v[0] - x * v[2]), tz = 2 * (x * v[1] - y * v[0]);
+  return [v[0] + w * tx + y * tz - z * ty, v[1] + w * ty + z * tx - x * tz, v[2] + w * tz + x * ty - y * tx];
+}
+
+// The drone as an X: four arms at 45 degrees, front props orange, rear props blue, a nose
+// arrow, and a thin line along its "up" (the thrust direction). Drawn in a display frame with
+// z up (world x forward, y left), so the world's y and z are negated. Perspective camera
+// orbiting the drone; in "follow yaw" it stays behind the drone's heading, so only roll and
+// pitch move the model.
+function drawAttitude3D(canvas, data, view, chase, stale) {
+  const {context, width, height} = prepareCanvas(canvas);
+  const q = data ? data.q : [1, 0, 0, 0];
+  const yaw = data ? data.rpy[2] : 0;
+  const display = (v) => [v[0], -v[1], -v[2]];
+  const toWorld = (v) => display(qrotate(q, v));        // body (x fwd, y right, z down) -> display
+
+  const az = view.azimuth - (chase ? yaw : 0), el = view.elevation, dist = 6;
+  const ca = Math.cos(az), sa = Math.sin(az), ce = Math.cos(el), se = Math.sin(el);
+  const cam = [dist * ce * ca, dist * ce * sa, dist * se];
+  const fwd = [-ce * ca, -ce * sa, -se], right = [-sa, ca, 0], up = [-se * ca, -se * sa, ce];
+  const focal = Math.min(width, height) * 1.75 * view.zoom;
+  const project = (p) => {
+    const d = [p[0] - cam[0], p[1] - cam[1], p[2] - cam[2]];
+    const depth = Math.max(0.05, d[0] * fwd[0] + d[1] * fwd[1] + d[2] * fwd[2]);
+    return [width / 2 + focal * (d[0] * right[0] + d[1] * right[1]) / depth,
+            height / 2 + 20 - focal * (d[0] * up[0] + d[1] * up[1] + d[2] * up[2]) / depth, depth];
+  };
+  const path = (points) => {
+    context.beginPath();
+    points.forEach((p, i) => (i ? context.lineTo(p[0], p[1]) : context.moveTo(p[0], p[1])));
+  };
+  const segment = (a, b, colour, widthPx, dash) => {
+    const p = project(a), r = project(b);
+    context.strokeStyle = colour;
+    context.lineWidth = widthPx;
+    context.setLineDash(dash || []);
+    context.beginPath(); context.moveTo(p[0], p[1]); context.lineTo(r[0], r[1]); context.stroke();
+    context.setLineDash([]);
+  };
+
+  // ground grid, and an arrow on it pointing at yaw 0
+  const ground = -1.0;
+  for (let i = -3; i <= 3; i += 0.5) {
+    const colour = i === 0 ? '#3a4150' : '#2a2f3a';
+    segment([i, -3, ground], [i, 3, ground], colour, 1);
+    segment([-3, i, ground], [3, i, ground], colour, 1);
+  }
+  segment([0, 0, ground], [1.9, 0, ground], '#8b93a7', 1.5, [5, 4]);
+  const tip = project([2.05, 0, ground]);
+  context.fillStyle = '#8b93a7';
+  context.font = '10px ui-monospace, monospace';
+  context.textAlign = 'center';
+  context.fillText('yaw 0', tip[0], tip[1] + 3);
+  context.textAlign = 'left';
+
+  const c = Math.SQRT1_2;
+  const motors = [[c, c, true], [c, -c, true], [-c, -c, false], [-c, c, false]];   // FR FL RL RR
+  const disc = (cx, cy, z, radius, n) => Array.from({length: n}, (_, k) => {
+    const a = 2 * Math.PI * k / n;
+    return toWorld([cx + radius * Math.cos(a), cy + radius * Math.sin(a), z]);
+  });
+
+  // shadow straight below, for depth
+  context.globalAlpha = stale ? 0.3 : 1;
+  const shadow = (p) => [p[0], p[1], ground];
+  motors.forEach(([mx, my]) => {
+    segment(shadow(toWorld([0, 0, 0])), shadow(toWorld([mx, my, 0])), 'rgba(0, 0, 0, .28)', 4);
+    context.fillStyle = 'rgba(0, 0, 0, .16)';
+    path(disc(mx, my, 0, 0.42, 20).map((p) => project(shadow(p))));
+    context.fill();
+  });
+
+  // the drone, far parts first
+  const items = [];
+  const centre = toWorld([0, 0, 0]);
+  motors.forEach(([mx, my, front]) => {
+    const end = toWorld([mx, my, 0]);
+    const mid = project([(centre[0] + end[0]) / 2, (centre[1] + end[1]) / 2, (centre[2] + end[2]) / 2]);
+    items.push({depth: mid[2], draw: () => {
+      const a = project(centre), b = project(end);
+      context.strokeStyle = '#c9d1e0';
+      context.lineCap = 'round';
+      context.lineWidth = Math.max(3, focal * 0.075 / mid[2]);
+      context.beginPath(); context.moveTo(a[0], a[1]); context.lineTo(b[0], b[1]); context.stroke();
+    }});
+    const hub = project(toWorld([mx, my, -0.06]));
+    items.push({depth: hub[2] - 0.01, draw: () => {
+      const colour = front ? '255, 138, 61' : '77, 163, 255';
+      path(disc(mx, my, -0.08, 0.42, 28).map(project));
+      context.fillStyle = 'rgba(' + colour + ', .28)';
+      context.fill();
+      context.strokeStyle = 'rgba(' + colour + ', .95)';
+      context.lineWidth = 1.5;
+      context.stroke();
+      path(disc(mx, my, -0.07, 0.09, 12).map(project));
+      context.fillStyle = '#1e222b';
+      context.fill();
+      context.strokeStyle = '#c9d1e0';
+      context.lineWidth = 1;
+      context.stroke();
+    }});
+  });
+  const plate = [[0.34, 0.2, -0.03], [0.34, -0.2, -0.03], [-0.34, -0.2, -0.03], [-0.34, 0.2, -0.03]];
+  items.push({depth: project(centre)[2], draw: () => {
+    path(plate.map((p) => project(toWorld(p))));
+    context.closePath();
+    context.fillStyle = '#2b3242';
+    context.fill();
+    context.strokeStyle = '#8b93a7';
+    context.lineWidth = 1.2;
+    context.stroke();
+    path([[0.66, 0, -0.05], [0.38, 0.14, -0.05], [0.38, -0.14, -0.05]].map((p) => project(toWorld(p))));
+    context.closePath();
+    context.fillStyle = '#ff8a3d';
+    context.fill();
+  }});
+  const upEnd = toWorld([0, 0, -0.95]);
+  items.push({depth: project(upEnd)[2], draw: () => {
+    segment(centre, upEnd, 'rgba(230, 233, 239, .55)', 1.5, [3, 3]);
+    const p = project(upEnd);
+    context.fillStyle = 'rgba(230, 233, 239, .7)';
+    context.beginPath(); context.arc(p[0], p[1], 2.5, 0, 2 * Math.PI); context.fill();
+  }});
+  items.sort((a, b) => b.depth - a.depth).forEach((item) => item.draw());
+  context.globalAlpha = 1;
+  context.lineCap = 'butt';
+
+  context.fillStyle = '#8b93a7';
+  context.font = '10px ui-monospace, monospace';
+  context.fillText('orange = front · dashed line = up (thrust)', 8, height - 8);
+  if (stale) {
+    context.fillStyle = '#ff5f56';
+    context.font = '12px system-ui';
+    context.textAlign = 'center';
+    context.fillText(data ? 'IMU attitude stale' : 'no IMU attitude yet', width / 2, 22);
+    context.textAlign = 'left';
+  }
+}
+
+(() => {
+  const canvas = $('att-3d');
+  let drag = null;
+  canvas.addEventListener('pointerdown', (event) => {
+    drag = {x: event.clientX, y: event.clientY};
+    canvas.setPointerCapture(event.pointerId);
+  });
+  canvas.addEventListener('pointermove', (event) => {
+    if (!drag) return;
+    attitude.view.azimuth -= (event.clientX - drag.x) * 0.01;
+    attitude.view.elevation = Math.max(-0.3, Math.min(1.45,
+      attitude.view.elevation + (event.clientY - drag.y) * 0.01));
+    drag = {x: event.clientX, y: event.clientY};
+    scheduleAttitudeDraw();
+  });
+  canvas.addEventListener('pointerup', () => { drag = null; });
+  canvas.addEventListener('wheel', (event) => {
+    event.preventDefault();
+    attitude.view.zoom = Math.max(0.4, Math.min(4, attitude.view.zoom * Math.exp(-event.deltaY * 0.001)));
+    scheduleAttitudeDraw();
+  }, {passive: false});
+  canvas.addEventListener('dblclick', () => {
+    attitude.view = {...ATT_VIEW};
+    scheduleAttitudeDraw();
+  });
+})();
+
+$('att-chase').onchange = (event) => {
+  attitude.chase = event.target.checked;
+  saveAttitudePrefs();
+  scheduleAttitudeDraw();
+};
+$('att-window').onchange = (event) => {
+  attitude.window = Number(event.target.value) || 30;
+  saveAttitudePrefs();
+  scheduleAttitudeDraw();
+};
+$('att-zero-yaw').onclick = async () => {
+  const button = $('att-zero-yaw');
+  button.disabled = true;
+  let text;
+  try {
+    const data = await (await fetch('/api/attitude/zero_yaw', {method: 'POST'})).json();
+    text = data.ok ? 'yaw zeroed' : 'zero yaw failed: ' + (data.err || '?');
+  } catch (error) {
+    text = 'zero yaw failed: ' + error;
+  }
+  attitude.note = {text, until: nowSeconds() + 3};
+  scheduleAttitudeDraw();
+  setTimeout(() => { button.disabled = false; }, 800);
+};
+
 refreshTrackList();
 drawTrack();
+drawAttitude();

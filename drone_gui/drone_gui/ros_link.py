@@ -15,7 +15,8 @@ import os
 import threading
 import time
 
-from .agent import DISCOVER_SECONDS, FRAME_HZ, camera_topics, raw_to_jpeg
+from .agent import (ATTITUDE_HZ, DISCOVER_SECONDS, FRAME_HZ, AttitudeFilter, camera_topics,
+                    imu_attitude_input, raw_to_jpeg)
 from .store import Store
 
 
@@ -33,12 +34,14 @@ class RosLink:
         self._raw_sent = {}                 # topic -> when a raw frame was last encoded
         self._camera_lock = threading.Lock()
         self._msg_types = None
+        self.attitude = AttitudeFilter()        # the same filter the SSH agent runs
+        self._attitude_sent = 0.0
 
     def start(self):
         import rclpy
         from geometry_msgs.msg import Vector3Stamped
         from rclpy.node import Node
-        from rclpy.qos import qos_profile_sensor_data
+        from rclpy.qos import QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
         from sensor_msgs.msg import (BatteryState, CompressedImage, FluidPressure, Image, Imu,
                                      MagneticField)
         from std_msgs.msg import Bool, Float32, String
@@ -70,10 +73,19 @@ class RosLink:
         sub(Float32, drone + "/baro_altitude", lambda m: apply("baro_altitude", m.data), 10)
         sub(BatteryState, drone + "/battery",
             lambda m: apply("battery", [m.voltage, -m.current, bool(m.present)]), 10)
-        sub(Imu, drone + "/imu", lambda m: apply("imu", [
-            [m.angular_velocity.x, m.angular_velocity.y, m.angular_velocity.z],
-            [m.linear_acceleration.x, m.linear_acceleration.y, m.linear_acceleration.z]]),
-            qos_profile_sensor_data)
+        def on_imu(m):
+            apply("imu", [[m.angular_velocity.x, m.angular_velocity.y, m.angular_velocity.z],
+                          [m.linear_acceleration.x, m.linear_acceleration.y,
+                           m.linear_acceleration.z]])
+            self.attitude.update(*imu_attitude_input(m))
+            now = time.monotonic()
+            if now - self._attitude_sent >= 1.0 / ATTITUDE_HZ and self.attitude.updates:
+                self._attitude_sent = now
+                self.store.apply_attitude(self.attitude.state())
+
+        # Depth 50: the attitude filter integrates every message (see agent.py).
+        sub(Imu, drone + "/imu", on_imu,
+            QoSProfile(depth=50, reliability=ReliabilityPolicy.BEST_EFFORT))
         sub(MagneticField, drone + "/mag", lambda m: apply("mag", [
             m.magnetic_field.x * 1e6, m.magnetic_field.y * 1e6, m.magnetic_field.z * 1e6]),
             qos_profile_sensor_data)
@@ -190,6 +202,13 @@ class RosLink:
 
     def plot(self, *names):
         return self.store.plot(*names)
+
+    def attitude_plot(self):
+        return self.store.attitude_plot()
+
+    def zero_yaw(self):
+        self.attitude.zero_yaw()
+        return True
 
     def link_info(self):
         return {"transport": "dds", "connected": self.connected,
