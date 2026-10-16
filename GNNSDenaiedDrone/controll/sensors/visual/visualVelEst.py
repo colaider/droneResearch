@@ -29,7 +29,7 @@ class VisualVelocityEstimator:
         self.tracking_view = None
         self.vkfs = {}
         self.camera_velocity = np.zeros(4)
-        self.camera_velocity_buffer = deque(maxlen=10)
+        self.camera_velocity_buffer = deque(maxlen=5)
 
     def aply_flow(self):
         """Track the left image, then publish observations for velocity fitting."""
