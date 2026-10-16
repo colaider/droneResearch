@@ -29,8 +29,8 @@ class VisualVelocityEstimator:
         self.tracked_points = np.empty((0, 2), np.float32)
         self.tracks = Tracks.empty(0)
         self._tracked_frame_idx = None
-        self.max_feature_points = 1500
-        self.feature_min_distance = 30.0
+        self.max_feature_points = 501
+        self.feature_min_distance = 21.0
         self.velocity_flows = np.empty((0, 2), np.float32)
         self.velocity_points = np.empty((0, 3), np.float32)
         self.velocity_point_mask = np.empty(0, bool)
@@ -40,7 +40,7 @@ class VisualVelocityEstimator:
         self.tracking_view = None
         self.vkfs = {}
         self.camera_velocity = np.zeros(4)
-        self.camera_velocity_buffer = deque(maxlen=100)
+        self.camera_velocity_buffer = deque(maxlen=3)
 
     def aply_flow(self):
         """Track the left image, then publish observations for velocity fitting."""

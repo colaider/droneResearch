@@ -22,7 +22,7 @@ from rb3_stereo.stereo import AutoExposure, StereoCamera
 
 
 class CameraTopic:
-    def __init__(self, node, ns="/stereo", resolution=(640, 400), fps=30,
+    def __init__(self, node, ns="/stereo", resolution=(640, 400), fps=120,
                  vfov_deg=85.0, baseline_m=0.05, calibration="auto", auto_exposure=True,
                  ae_target=100.0):
         """calibration: "auto" = config/stereo_calib.npz if it exists, "" = raw images, or a path.
@@ -50,7 +50,7 @@ class CameraTopic:
         # Separate topic for the PROCESSED image (your vision output). Left untouched by preview.
         self.pub_processed = node.create_publisher(CompressedImage, f"{ns}/processed/compressed",
                                                    qos_profile_sensor_data)
-        self.preview_fps = 10.0
+        self.preview_fps = 0
         self.preview_scale = 0.5
         self._t_prev = 0.0
 

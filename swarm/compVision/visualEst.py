@@ -124,6 +124,17 @@ class VisulaEst(VisualVelocityEstimator):
             )
         self.vision_backend.begin_frame(prepared)
         self.frame_size = prepared.frames[0].shape
+        if self.buffer:
+            previous = self.buffer[-1]
+            if (previous.left_timestamp is not None
+                    and prepared.left_timestamp is not None):
+                if (previous.left_timestamp_ns is not None
+                        and prepared.left_timestamp_ns is not None):
+                    dt = (prepared.left_timestamp_ns - previous.left_timestamp_ns) / 1e9
+                else:
+                    dt = prepared.left_timestamp - previous.left_timestamp
+                if np.isfinite(dt) and dt > 0:
+                    self.dt = float(dt)
         self.buffer.append(prepared)
         self.current_frame = prepared.display_copy()
 
@@ -135,8 +146,8 @@ class VisulaEst(VisualVelocityEstimator):
         latest supplied sensor values are used directly without averaging.
         Returns the display Frame. Read camera_velocity ([vx, vy, vz, yaw_rate]),
         depth_points ([u, v, optical_depth]), depth_colors, and depth_sigma on
-        this estimator.         Capture metadata is on current_frame. The configured dt is used for
-        typed and legacy frames; capture timestamps remain metadata only.
+        this estimator. Capture timestamps on consecutive typed frames determine dt;
+        the configured dt is retained when timestamps are missing or invalid.
         """
         sensor_values = (drone_pos, drone_vel, drone_ang_vel, imu_att)
         if any(value is not None for value in sensor_values):
