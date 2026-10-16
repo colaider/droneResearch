@@ -222,9 +222,9 @@ class VisualVelocityEstimator:
         estimated_height = np.median(np.partition(z, -k)[-k:])
 
         visual_flow = flow * (z / (self.foc_l * self.dt))[:, None]
-        rotation = z[:, None] / np.cos(attitude[[1,0]]) ** 2
+        rotation = z[:, None] / np.cos(attitude[[1,1]]) ** 2
 
-        rotation *= angular_velocity[[1, 0]]
+        rotation *= angular_velocity[[1,1]]
         
         target = visual_flow - rotation
         position = (
