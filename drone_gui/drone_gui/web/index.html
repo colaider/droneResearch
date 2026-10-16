@@ -102,6 +102,13 @@
     </div>
   </section>
 
+  <section class="card span3" id="cloud-card">
+    <h2>3D reconstruction <span class="sub">camera depth points (/vo/points) placed with the fused pose, 5 cm voxels &middot; follows the path selection above</span></h2>
+    <div class="track-bar"><span class="stream" id="cloud-info">--</span></div>
+    <figure><figcaption>points coloured by height &middot; drone path in white &middot; drag to turn, scroll to zoom, double-click to reset</figcaption>
+      <canvas id="cloud-3d"></canvas></figure>
+  </section>
+
   <section class="card span3" id="position-card">
     <h2>Position <span class="sub">stereo visual odometry &middot; the flight controller has no X/Y</span></h2>
     <div class="sensor-grid">

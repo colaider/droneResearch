@@ -613,6 +613,7 @@ function updateTrack(status) {
     loadTrack(track.id, track.samples.length);
   }
   if (!track.id) setTrackInfo();
+  refreshCloud(status);
 }
 
 async function loadTrack(id, from) {
@@ -700,6 +701,8 @@ function drawTrack() {
   drawTrack2D($('track-2d'), track.samples, track.view2d);
   drawTrack3D($('track-3d'), track.samples, track.view);
   drawCameraMotion();
+  if (cloud.id !== track.id) loadCloud(track.id);
+  else drawCloud();
 }
 
 function prepareCanvas(canvas) {
@@ -1494,6 +1497,158 @@ $('att-zero-yaw').onclick = async () => {
   scheduleAttitudeDraw();
   setTimeout(() => { button.disabled = false; }, 800);
 };
+
+// --- 3D reconstruction: the run's depth points (cloud.py) ---------------------------------
+// The server keeps each run's voxel map; the page fetches the one for the run on screen (the
+// path dropdown), again while live whenever more frames arrived, at most every CLOUD_REFRESH_MS.
+const CLOUD_REFRESH_MS = 1500;
+const cloud = {id: undefined, points: [], info: null, loading: false, fetched: 0, view: {...VIEW3D}};
+
+function refreshCloud(status) {
+  if (!track.follow || !status || !status.live || cloud.loading) return;
+  if (cloud.id === status.live && (status.cloud_frames || 0) <= ((cloud.info && cloud.info.frames) || 0)) return;
+  if (Date.now() - cloud.fetched < CLOUD_REFRESH_MS) return;
+  loadCloud(status.live);
+}
+
+async function loadCloud(id) {
+  if (!id) {
+    cloud.id = id;
+    cloud.points = [];
+    cloud.info = null;
+    drawCloud();
+    return;
+  }
+  cloud.loading = true;
+  cloud.fetched = Date.now();
+  try {
+    const response = await fetch('/api/cloud/' + id);
+    if (!response.ok) return;
+    const data = await response.json();
+    if (track.id !== id) return;                  // switched while this was loading
+    if (cloud.id !== id) cloud.view = {...VIEW3D};
+    cloud.id = id;
+    cloud.points = data.points || [];
+    cloud.info = data;
+    drawCloud();
+  } catch (error) {
+    /* the next state tick retries */
+  } finally {
+    cloud.loading = false;
+  }
+}
+
+function drawCloud() {
+  const data = cloud.info;
+  $('cloud-info').textContent = !track.id ? 'no run yet'
+    : !data ? 'loading...'
+    : !data.points.length ? (track.follow
+        ? 'no depth points yet: they arrive on /vo/points while drone-gnss-control runs'
+        : 'no depth points in this run (recorded before /vo/points existed, or no depth)')
+    : (track.follow ? 'live · ' : 'replay · ') + data.points.length + ' voxels from ' +
+      data.frames + ' frames (' + data.raw_points + ' points)';
+  drawCloud3D($('cloud-3d'), cloud.points, track.samples, cloud.view);
+}
+
+// Same orthographic view as the 3D path; the points are drawn far to near so nearer ones cover.
+function drawCloud3D(canvas, points, samples, view) {
+  const {context, width, height} = prepareCanvas(canvas);
+  if (!points.length && !samples.length) return noTrack(context, height, 'no depth points yet');
+  const b = {x0: Infinity, x1: -Infinity, y0: Infinity, y1: -Infinity, z0: Infinity, z1: -Infinity};
+  const grow = (x, y, z) => {
+    b.x0 = Math.min(b.x0, x); b.x1 = Math.max(b.x1, x);
+    b.y0 = Math.min(b.y0, y); b.y1 = Math.max(b.y1, y);
+    b.z0 = Math.min(b.z0, z); b.z1 = Math.max(b.z1, z);
+  };
+  points.forEach((p) => grow(p[0], p[1], p[2]));
+  samples.forEach((s) => grow(s[X], s[Y], s[Z]));
+  let zMin = Infinity, zMax = -Infinity;            // colours span the points' own heights
+  points.forEach((p) => { zMin = Math.min(zMin, p[2]); zMax = Math.max(zMax, p[2]); });
+  const ground = b.z0;
+  const cx = (b.x0 + b.x1) / 2, cy = (b.y0 + b.y1) / 2, cz = (b.z0 + b.z1) / 2;
+  const span = Math.max(b.x1 - b.x0, b.y1 - b.y0, b.z1 - b.z0, 1) * 1.1;
+  const scale = Math.min(width, height) / span / 1.3 * view.zoom;
+  const ca = Math.cos(view.azimuth), sa = Math.sin(view.azimuth);
+  const ce = Math.cos(view.elevation), se = Math.sin(view.elevation);
+  const project = (x, y, z) => {
+    x -= cx; y -= cy; z -= cz;
+    const x1 = x * ca - y * sa, y1 = x * sa + y * ca;
+    return [width / 2 + x1 * scale, height / 2 - (z * ce + y1 * se) * scale, y1 * ce - z * se];
+  };
+  const line = (a, c, colour, widthPx) => {
+    const p = project(...a), q = project(...c);
+    context.strokeStyle = colour;
+    context.lineWidth = widthPx;
+    context.beginPath(); context.moveTo(p[0], p[1]); context.lineTo(q[0], q[1]); context.stroke();
+  };
+
+  // ground grid under the lowest point, and the axes
+  const step = niceStep(span, 8);
+  const gx0 = Math.floor((cx - span / 2) / step) * step, gx1 = Math.ceil((cx + span / 2) / step) * step;
+  const gy0 = Math.floor((cy - span / 2) / step) * step, gy1 = Math.ceil((cy + span / 2) / step) * step;
+  for (let x = gx0; x <= gx1 + 1e-9; x += step) line([x, gy0, ground], [x, gy1, ground], '#2a2f3a', 1);
+  for (let y = gy0; y <= gy1 + 1e-9; y += step) line([gx0, y, ground], [gx1, y, ground], '#2a2f3a', 1);
+  context.font = '11px ui-monospace, monospace';
+  [[[step, 0, 0], '#ff5f56', 'x'], [[0, step, 0], '#3ecf8e', 'y'], [[0, 0, step], '#4da3ff', 'z']]
+    .forEach(([end, colour, name]) => {
+      line([0, 0, ground], [end[0], end[1], ground + end[2]], colour, 2);
+      const p = project(end[0] * 1.15, end[1] * 1.15, ground + end[2] * 1.15);
+      context.fillStyle = colour;
+      context.fillText(name, p[0] - 3, p[1] + 4);
+    });
+  context.fillStyle = '#8b93a7';
+  context.font = '10px ui-monospace, monospace';
+  context.fillText('grid ' + +step.toFixed(3) + ' m', 8, height - 6);
+
+  // the points, far to near, about one voxel big on screen (1.5..4 px)
+  const size = Math.max(1.5, Math.min(4, 0.05 * scale));
+  points.map((p) => [project(p[0], p[1], p[2]), p[2]])
+    .sort((a, c) => c[0][2] - a[0][2])
+    .forEach(([q, z]) => {
+      context.fillStyle = heightColour(z, zMin, zMax);
+      context.fillRect(q[0] - size / 2, q[1] - size / 2, size, size);
+    });
+
+  // the drone's path, and where it is now
+  for (let i = 1; i < samples.length; i++) {
+    const a = samples[i - 1], c = samples[i];
+    line([a[X], a[Y], a[Z]], [c[X], c[Y], c[Z]], 'rgba(230, 233, 239, .8)', 1.5);
+  }
+  if (samples.length) {
+    const last = samples[samples.length - 1];
+    const at = project(last[X], last[Y], last[Z]);
+    context.strokeStyle = '#4da3ff';
+    context.lineWidth = 2;
+    context.beginPath(); context.arc(at[0], at[1], 6, 0, 2 * Math.PI); context.stroke();
+  }
+  if (points.length) heightLegend(context, width, {z0: zMin, z1: zMax});
+}
+
+(() => {
+  const canvas = $('cloud-3d');
+  let drag = null;
+  canvas.addEventListener('pointerdown', (event) => {
+    drag = {x: event.clientX, y: event.clientY};
+    canvas.setPointerCapture(event.pointerId);
+  });
+  canvas.addEventListener('pointermove', (event) => {
+    if (!drag) return;
+    cloud.view.azimuth += (event.clientX - drag.x) * 0.01;
+    cloud.view.elevation = Math.max(0, Math.min(Math.PI / 2, cloud.view.elevation + (event.clientY - drag.y) * 0.01));
+    drag = {x: event.clientX, y: event.clientY};
+    drawCloud3D(canvas, cloud.points, track.samples, cloud.view);
+  });
+  canvas.addEventListener('pointerup', () => { drag = null; });
+  canvas.addEventListener('wheel', (event) => {
+    event.preventDefault();
+    cloud.view.zoom = Math.max(0.2, Math.min(50, cloud.view.zoom * Math.exp(-event.deltaY * 0.0015)));
+    drawCloud3D(canvas, cloud.points, track.samples, cloud.view);
+  }, {passive: false});
+  canvas.addEventListener('dblclick', () => {
+    cloud.view = {...VIEW3D};
+    drawCloud3D(canvas, cloud.points, track.samples, cloud.view);
+  });
+})();
 
 refreshTrackList();
 drawTrack();

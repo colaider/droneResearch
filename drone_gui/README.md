@@ -93,6 +93,7 @@ Environment variables work too (`DRONE_HOST`, `DRONE_GUI_PORT`, `DRONE_GUI_BIND`
 | Position | x/y/z and velocity, each labelled with where it came from. The flight controller supplies height only - Betaflight has no X/Y without GPS and none is fitted - so x/y has to come from the stereo estimator |
 | Path | the position over time, from above (x/y, coloured by height) and in 3D (drag to turn, scroll to zoom), with the drone drawn as a box turned by the FC's roll/pitch/yaw. One track per flight run, saved to `~/.local/share/drone_gui/tracks/`; the list replays earlier runs, `new track` starts a fresh one |
 | Position and velocity from camera | the camera's own estimate: x/y/z and vx/vy/vz (world frame) from `visual_position` / `visual_velocity` on `/vo/status`, computed by the control loop's visual estimator from the stereo pairs `CameraStreamReceiver` delivers. Live, it plots every `/vo/status` message over the last history window; with an earlier run picked in the path dropdown it replays that run's copy. A gap means the camera had no measurement on that axis (vz without depth velocity) |
+| 3D reconstruction | the camera's depth points as a 3D point cloud, with the drone's path: the control loop (`communication/PointsPublisher.py`) back-projects each new depth frame's points (`depth_points` of the visual estimator, up to ~300) and places them with the fused pose of that frame, publishing world x/y/z as `sensor_msgs/PointCloud2` on `/vo/points` (at most 5 Hz). The panel merges them into 5 cm voxels, like `swarm/mapping/terrainMap.py`'s `PointMap` (`cloud.py`, at most 50 000), and saves each run's frames next to its track (`<run>.cloud.jsonl`), so the path dropdown replays them too. Coloured by height; drag to turn, scroll to zoom |
 | Cameras | up to 4 views, each showing any image topic on the board (`CompressedImage` as published, raw `Image` encoded to JPEG on the board), e.g. `/stereo/preview/compressed` next to `/stereoVisualReturn/processed/compressed`. Only topics a view shows are subscribed and sent over the link |
 | History | 2 minutes of altitude, attitude and battery |
 | Processes | every unit's state, with start / stop / restart and a journal viewer |
@@ -129,6 +130,34 @@ Two more units run the `GNNSDenaiedDrone` code from the board's checkout at `~/d
 
 The page asks for confirmation before starting or restarting either one, and says why. Neither
 is enabled at boot; `sudo systemctl enable drone-rb3` on the board changes that.
+
+## 3D reconstruction: setting it up
+
+The window needs the control loop to publish `/vo/points` (`GNNSDenaiedDrone/controll/communication/PointsPublisher.py`,
+created in `controllers/control_loop.py`). Once per board, and after changing those files:
+
+1. **Get the code onto the board.** After this branch is merged: `cd ~/droneResearch && git pull`. To
+   test before that, copy the two files:
+   ```bash
+   cd GNNSDenaiedDrone/controll
+   scp communication/PointsPublisher.py ubuntu@<board>:~/droneResearch/GNNSDenaiedDrone/controll/communication/
+   scp controllers/control_loop.py ubuntu@<board>:~/droneResearch/GNNSDenaiedDrone/controll/controllers/
+   ```
+2. **Install the units**, if `systemctl status drone-gnss-control` says "not-found" on the board:
+   `./service/install_board_units.sh ubuntu@<board>`. It uses the panel's key `~/.ssh/rb3_drone` when
+   it exists (`DRONE_SSH_KEY` overrides; see "First run on a new machine").
+3. **Stop anything started by hand.** A `main.py` or `start_rb3.py` running in a terminal on the board
+   keeps the old code and holds `/dev/ttyACM0`: Ctrl+C it (`pgrep -af "main.py|start_rb3"` lists them).
+4. **Restart the panel** on this machine, so it runs the new agent and `cloud.py`.
+5. **Start `drone-gnss-control`** in Processes (it starts `drone-rb3` too), with the props off or the
+   drone ready to fly - it can command the motors once armed with OVERRIDE on.
+6. **Check:** on the board `ros2 topic hz /vo/points` shows ~2-5 Hz while features are tracked (frames
+   with no depth points are not sent); in the panel the window's line counts voxels and frames.
+
+The points are placed with the fused pose, so the cloud is only as good as that estimate: if the
+position drifts, the points smear along the drift (seen on the bench: hundreds of metres within a
+minute with the drone standing still). With the drone resting on the ground the camera also sees
+few features (0-17 depth points per frame at 0.2-0.8 m).
 
 ## Position, and what is missing for it
 
@@ -192,6 +221,7 @@ drone_gui/store.py            latest values + plot history, shared by both trans
 drone_gui/board.py            systemctl and health probes over SSH
 drone_gui/events.py           the on-disk event log
 drone_gui/tracks.py           position tracks, one file per flight run
+drone_gui/cloud.py            the 3D reconstruction: /vo/points merged into a voxel map, per run
 drone_gui/server.py           HTTP: SSE for state, MJPEG for the camera, POST for actions
 drone_gui/web/                the page (hand-written; no framework, no build step)
 ```
@@ -213,5 +243,7 @@ switch to go off and on again before it sends anything.
 | `telemetry no data`, board unreachable | the board is off, rebooting, or on another address |
 | link flaps | check the SSH key is mode 600 (a key on `/mnt/c` is 0777 and ssh refuses it) |
 | `no frames` in the camera panel | `drone-stereo` is not running (start it from Processes), or camss registered no media device - check `ls /dev/media*` for one whose driver is `qcom-camss`, see `drivers/devicetree/camss-disable-imx577.dtso` |
+| 3D reconstruction stays empty | `/vo/points` is not published: the board runs an older `control_loop.py`, or a hand-started `main.py` (see "3D reconstruction: setting it up"); or no live run yet - points need x/y/z in the Position card |
+| 3D points smeared into a line | the fused position is drifting; the points follow it |
 | port `8080` in use | an older panel is still running; the error message says how to find it |
 | `ros2 topic list` empty in WSL | unrelated to this panel: the ros2 CLI daemon is broken there, use `--no-daemon` |

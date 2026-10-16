@@ -6,6 +6,7 @@ import rclpy
 from rclpy.executors import SingleThreadedExecutor
 
 from communication.EstimatePublisher import EstimatePublisher
+from communication.PointsPublisher import PointsPublisher
 from communication.Rb3ReadSend import ReaderSender
 from sensors.sensors import Sensors
 from controllers.controller import Controller
@@ -28,6 +29,7 @@ class ControlLoop:
         self.reader = ReaderSender(node=self.node, ns=ns)
         self.sensors = Sensors(node=self.node, async_visual_processing=True)
         self.estimates = EstimatePublisher(self.node)     # /vo/status, for drone_gui
+        self.points = PointsPublisher(self.node)          # /vo/points, depth points for drone_gui
         self.controller = Controller(dt=dt)
         self.sm = StateMachine(self.sensors, self.controller, self.reader,
                                altitude=altitude, warmup_steps=WARMUP_STEPS,
@@ -53,6 +55,7 @@ class ControlLoop:
         )
         self.sm.step()                                      # WARMUP -> CALIBRATE -> HOVER
         self.estimates.publish(self.sensors, self.sm.stage)
+        self.points.publish(self.sensors)
 
 
     def run(self):
@@ -127,6 +130,7 @@ class ControlLoop:
         self._spin.join(timeout=1.0)
         self.sensors.close()
         self.estimates.close()
+        self.points.close()
         if self.show_camera:
             cv2.destroyAllWindows()
         if rclpy.ok():

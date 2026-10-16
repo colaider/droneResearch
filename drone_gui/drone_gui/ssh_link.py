@@ -144,6 +144,9 @@ class SshLink:
             elif kind == "attitude":
                 message.pop("type")
                 self.store.apply_attitude(message)
+            elif kind == "points":
+                message.pop("type")
+                self.store.apply({"vo_points": message})
             elif kind == "frame":
                 try:
                     self.store.apply_frame(message["topic"], base64.b64decode(message["jpeg"]))

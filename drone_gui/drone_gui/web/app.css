@@ -256,3 +256,7 @@ figcaption select {
   .attitude-layout { grid-template-columns: minmax(0, 1fr); }
   #att-3d { height: 340px; }
 }
+
+/* --- 3D reconstruction ---------------------------------------------------------------- */
+#cloud-3d { height: 460px; display: block; cursor: grab; touch-action: none; }
+#cloud-3d:active { cursor: grabbing; }

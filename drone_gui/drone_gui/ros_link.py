@@ -16,7 +16,7 @@ import threading
 import time
 
 from .agent import (ATTITUDE_HZ, DISCOVER_SECONDS, FRAME_HZ, AttitudeFilter, camera_topics,
-                    imu_attitude_input, raw_to_jpeg)
+                    cloud_points, imu_attitude_input, raw_to_jpeg)
 from .store import Store
 
 
@@ -97,6 +97,10 @@ class RosLink:
         # (EstimatePublisher), and whatever publishes odometry - the same as the SSH agent.
         sub(String, self.cfg.vo_ns.rstrip("/") + "/status",
             lambda m: apply("vo_status", json_or_none(m.data)), 10)
+        from sensor_msgs.msg import PointCloud2
+        sub(PointCloud2, self.cfg.vo_ns.rstrip("/") + "/points", lambda m: apply("vo_points", {
+            "stamp": m.header.stamp.sec + m.header.stamp.nanosec * 1e-9,
+            "points": cloud_points(m)}), 10)
         try:
             from nav_msgs.msg import Odometry
 
