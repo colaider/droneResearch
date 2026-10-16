@@ -4,6 +4,7 @@ import threading
 from filters.FKF import FusionKalmanFilter
 from sensors.IMU.IMU import IMU
 from sensors.IMU.IMUBridge import IMUBridge
+from sensors.barometer import Barometer
 from sensors.visual.config.cameraConfig import STEREO_CAM
 
 
@@ -35,14 +36,8 @@ class Sensors:
         self.fkf = FusionKalmanFilter()
         self._pending_cam = None          # one unconsumed camera measurement: (v4_world, t_s, idx)
 
-        # barometer (kept here; it is not part of the IMU)
-        self.baro_vel_ema = baro_vel_ema
-        self._baro = 0.0
-        self._baro_vel = 0.0
-        self._prev_baro = None
-        self._prev_baro_timestamp_ns = None
-        self.baro_timestamp_ns = None
-        self._last_imu_timestamp_ns = None
+        # barometer: own class, calibrated with the IMU (zeroed at start), feeds the FKF
+        self.barometer = Barometer(baro_vel_ema)
         self.latest_camera_frame = None
         self._visual_position = None
         self._visual_velocity_world = None     # latest camera velocity in world frame (nan axis = no measurement)
@@ -86,7 +81,7 @@ class Sensors:
             self._reset_fkf()
 
 
-        self._update_baro_velocity(float(baro), dt)   # baro vz; fused into the FKF below, not the IMU
+        self.barometer.update(float(baro), dt)   # altitude + vz; fused into the FKF below, not the IMU
 
         self._push_visual_sensor_sample(command_velocity)
         if self.camera_receiver is not None:
@@ -105,7 +100,7 @@ class Sensors:
         if not self.imu.is_calibrating():
             v_cam, cam_id = self._pop_camera_measurement()
             self.fkf.step(self.imu.get_body_accel(), dt, self.imu.get_attitude(), v_camera=v_cam, camera_id=cam_id)
-            self.fkf.update_baro(self._baro, self._baro_vel)
+            self.fkf.update_baro(self.barometer.get_altitude(), self.barometer.get_velocity())
 
     def _visual_worker_loop(self):
         while True:
@@ -220,31 +215,14 @@ class Sensors:
             self.visual_frame_bridge.close()
             self.visual_frame_bridge = None
 
-    def _update_baro_velocity(self, baro, dt, timestamp_ns=None):
-        if timestamp_ns is not None and self._prev_baro_timestamp_ns is not None:
-            timestamp_delta_ns = int(timestamp_ns) - self._prev_baro_timestamp_ns
-            if timestamp_delta_ns <= 0:
-                return False
-            dt = timestamp_delta_ns * 1e-9
-
-        self._baro = baro
-        if self._prev_baro is not None and dt > 0:
-            raw = (baro - self._prev_baro) / dt
-            b = self.baro_vel_ema
-            self._baro_vel = b * self._baro_vel + (1 - b) * raw
-        self._prev_baro = baro
-        self._prev_baro_timestamp_ns = (
-            None if timestamp_ns is None else int(timestamp_ns)
-        )
-        return True
-
-    # ---------------- calibration (forwarded to the IMU) ----------------
+    # ---------------- calibration (IMU + barometer, zeroed together at start) ----------------
     def start_calibration(self, n=400):
         with self._visual_state_lock:
             self._visual_position = None
             self._visual_velocity_world = None
             self._last_visual_frame_idx = None
         self.imu.start_calibration(n)
+        self.barometer.start_calibration(n)
 
     def is_calibrating(self):
         return self.imu.is_calibrating()
@@ -270,10 +248,10 @@ class Sensors:
 
     # ---------------- barometer ----------------
     def get_baro_position(self):
-        return self._baro                 # barometer altitude [m]
+        return self.barometer.get_altitude()   # zeroed altitude [m]
 
     def get_baro_velocity(self):
-        return self._baro_vel             # vertical velocity from the barometer
+        return self.barometer.get_velocity()   # vertical velocity from the barometer
 
     # ---------------- fused (Kalman filter, not a low-pass blend) ----------------
     def _pop_camera_measurement(self):
