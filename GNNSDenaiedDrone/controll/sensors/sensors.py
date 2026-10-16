@@ -136,7 +136,7 @@ class Sensors:
         processed = self.visual_estimator.processing(frame, idx)
         if self.visual_frame_bridge is not None:
             self.visual_frame_bridge.publish( processed, self.visual_estimator.tracks,
-            self.visual_estimator.point_depth, )
+            self.visual_estimator.point_depth, self.visual_estimator, )
         frame_idx = processed.idx
 
         with self._visual_state_lock:

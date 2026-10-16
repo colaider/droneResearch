@@ -6,6 +6,7 @@ import numpy as np
 _RIGHT_MESH_COLOR = (110, 110, 110)
 _NO_DEPTH_COLOR = (170, 170, 170)
 _TURBO_START = 25           # skip TURBO's near-black end, it vanishes on dark image areas
+_VELOCITY_PX_PER_MPS = 200  # camera velocity arrow length: 100 px = 0.5 m/s
 
 
 def _turbo(level):
@@ -33,7 +34,14 @@ def frame_depth_range(stereo):
 
 
 def _outlined_text(image, text, origin, scale=.4):
-    cv2.putText(image, text, origin, cv2.FONT_HERSHEY_SIMPLEX, scale, (0, 0, 0), 3, cv2.LINE_AA)
+    """White text with a black outline. The outline is thin text offset by 1 px, because
+    thicker putText strokes also widen the letter spacing and drift off the white text."""
+    x, y = origin
+    for dx in (-1, 0, 1):
+        for dy in (-1, 0, 1):
+            if dx or dy:
+                cv2.putText(image, text, (x + dx, y + dy), cv2.FONT_HERSHEY_SIMPLEX, scale,
+                            (0, 0, 0), 1, cv2.LINE_AA)
     cv2.putText(image, text, origin, cv2.FONT_HERSHEY_SIMPLEX, scale, (255, 255, 255), 1, cv2.LINE_AA)
 
 
@@ -49,12 +57,48 @@ def _draw_depth_legend(image, depth_range):
     _outlined_text(image, far_label, (x0 + width - far_width, y0 - 5))
 
 
-def render_visual_frame(frame, tracks, stereo, depth_range=None):
+def camera_velocity_estimate(estimator):
+    """The visual estimator's own [vx, vy, vz, yaw_rate] (image axes right/down, m/s, rad/s),
+    not the fused one. All NaN when this frame had fewer than 2 tracked points with stereo
+    depth (the estimator then only repeats a fallback). vz is the stereo-depth rate alone, NaN
+    when unavailable, never the IMU velocity the estimator substitutes for it."""
+    _, points = estimator.velocity_inputs()
+    if len(points) < 2:
+        return np.full(4, np.nan)
+    velocity = np.asarray(estimator.camera_velocity, float)
+    return np.array([velocity[0], velocity[1], estimator.depth_velocity_z, velocity[-1]])
+
+
+def _draw_camera_velocity(image, velocity):
+    """Arrow from the image centre along the camera's (vx, vy): the way the camera moves in
+    the image (opposite to the scene's flow); the values are written under the title."""
+    vx, vy, vz, yaw_rate = (float(value) for value in velocity)
+    if not (np.isfinite(vx) and np.isfinite(vy)):
+        _outlined_text(image, "camera velocity: n/a (< 2 depth points)", (8, 40), .45)
+        return
+    height, width = image.shape[:2]
+    center = np.array([width / 2, height / 2])
+    vector = np.array([vx, vy]) * _VELOCITY_PX_PER_MPS
+    limit = min(width, height) / 2 - 10
+    if np.linalg.norm(vector) > limit:
+        vector *= limit / np.linalg.norm(vector)
+    start, tip = tuple(np.rint(center).astype(int)), tuple(np.rint(center + vector).astype(int))
+    for color, thickness in (((0, 0, 0), 5), ((255, 255, 255), 2)):
+        cv2.circle(image, start, thickness, color, -1, cv2.LINE_AA)
+        if start != tip:
+            cv2.arrowedLine(image, start, tip, color, thickness, cv2.LINE_AA, tipLength=.25)
+    vz_text = f"{vz:+.2f}" if np.isfinite(vz) else "n/a"
+    _outlined_text(image, f"cam vel vx {vx:+.2f} vy {vy:+.2f} vz {vz_text} m/s"
+                          f"  yaw {yaw_rate:+.2f} rad/s", (8, 40), .45)
+
+
+def render_visual_frame(frame, tracks, stereo, depth_range=None, camera_velocity=None):
     """Render tracked features and stereo matches side by side.
 
     Right-image matches are coloured by their stereo depth over depth_range (near, far) metres,
     or over this frame's own depth spread when it is None; matches without a valid depth are
-    grey rings.
+    grey rings. camera_velocity ([vx, vy, vz, yaw_rate], see camera_velocity_estimate) adds a
+    velocity arrow on the right image; None leaves it out.
     """
     if len(frame.gray_frames) != 2:
         raise ValueError("Processed stereo frame must contain two grayscale images")
@@ -100,6 +144,8 @@ def render_visual_frame(frame, tracks, stereo, depth_range=None):
             cv2.circle(right, tuple(np.rint(point).astype(int)), 3, tuple(map(int, dot_color)), -1)
     if depth_range is not None:
         _draw_depth_legend(right, depth_range)
+    if camera_velocity is not None:
+        _draw_camera_velocity(right, camera_velocity)
 
     cv2.putText(left, "Left: tracked feature mesh", (8, 20),
                 cv2.FONT_HERSHEY_SIMPLEX, .5, (255, 255, 255), 1, cv2.LINE_AA)
@@ -127,8 +173,10 @@ class VisualFrameBridge:
             CompressedImage, self.topic, qos_profile_sensor_data
         )
 
-    def publish(self, frame, tracks, stereo):
-        """Render the completed estimator outputs and publish one side-by-side JPEG."""
+    def publish(self, frame, tracks, stereo, estimator=None):
+        """Render the completed estimator outputs and publish one side-by-side JPEG.
+
+        estimator: the visual estimator, to draw its camera velocity on the right image."""
         current = frame_depth_range(stereo)
         if current is not None:
             if self._depth_range is not None:
@@ -136,7 +184,8 @@ class VisualFrameBridge:
                 current = tuple(a * old + (1 - a) * new
                                 for old, new in zip(self._depth_range, current))
             self._depth_range = current
-        visual = render_visual_frame(frame, tracks, stereo, self._depth_range)
+        velocity = None if estimator is None else camera_velocity_estimate(estimator)
+        visual = render_visual_frame(frame, tracks, stereo, self._depth_range, velocity)
         ok, encoded = cv2.imencode(".jpg", visual)
         if not ok:
             raise RuntimeError("OpenCV failed to encode the visualized stereo frame")
