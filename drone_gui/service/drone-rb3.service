@@ -3,15 +3,15 @@
 # every 5 s. This key is only honoured in [Unit] - systemd ignores it in [Service].
 StartLimitIntervalSec=0
 # All RB3 topics on one node (GNNSDenaiedDrone/rb3/start_rb3.py): the board's IMU and barometer,
-# the stereo cameras, and the flight controller bridge (cmd_attitude in, FC telemetry out).
-Description=RB3 topics (start_rb3: IMU, baro, stereo cameras, flight controller bridge)
-After=rb3-usb-host.service sscrpcd.service rb3-stereo-setup.service
+# stereo image processing, and the flight controller bridge (cmd_attitude in, FC telemetry out).
+Description=RB3 topics (start_rb3: IMU, baro, stereo processing, flight controller bridge)
+After=rb3-usb-host.service sscrpcd.service rb3-stereo-setup.service drone-stereo.service
 # Wants, not Requires: start_rb3 treats a missing camera or FC as a warning and brings the
 # rest up, so neither should stop it from starting.
-Wants=rb3-usb-host.service rb3-stereo-setup.service
-# It opens /dev/ttyACM0 (like drone-control) and the cameras (like drone-stereo and drone-vo).
-# Only one process may hold each, so systemd stops those when this starts, and the other way round.
-Conflicts=drone-control.service drone-stereo.service drone-vo.service
+Wants=rb3-usb-host.service rb3-stereo-setup.service drone-stereo.service
+# The stereo service owns the camera devices; this service subscribes to its ROS image topics.
+# Only the flight-controller serial device conflicts with the other FC owners.
+Conflicts=drone-control.service drone-vo.service
 
 [Service]
 Type=simple
