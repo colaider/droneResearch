@@ -178,7 +178,8 @@ class Sensors:
         v4 = np.array([visual_velocity_world[0], visual_velocity_world[1], visual_velocity_world[2], yaw_rate])
 
         with self._visual_state_lock:
-            visual_position = self._visual_position.copy()
+            visual_position = (imu_position.copy() if self._visual_position is None
+                               else self._visual_position.copy())
             visual_position += visual_velocity_world * dt
 
             self._visual_position = visual_position
