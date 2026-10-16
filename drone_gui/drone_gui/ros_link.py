@@ -81,6 +81,22 @@ class RosLink:
             lambda m: apply("pressure", m.fluid_pressure / 100.0), qos_profile_sensor_data)
         sub(String, stereo + "/status",
             lambda m: apply("stereo_status", json_or_none(m.data)), 10)
+        # The control loop's estimates, including the camera's own x/y/z and velocity
+        # (EstimatePublisher), and whatever publishes odometry - the same as the SSH agent.
+        sub(String, self.cfg.vo_ns.rstrip("/") + "/status",
+            lambda m: apply("vo_status", json_or_none(m.data)), 10)
+        try:
+            from nav_msgs.msg import Odometry
+
+            def on_odom(m):
+                p, t = m.pose.pose.position, m.twist.twist
+                apply("odom", {"position": [p.x, p.y, p.z],
+                               "velocity": [t.linear.x, t.linear.y, t.linear.z],
+                               "yaw_rate": t.angular.z, "frame": m.header.frame_id})
+
+            sub(Odometry, drone + "/odom", on_odom, 10)
+        except ImportError:
+            pass
         self.node.create_timer(DISCOVER_SECONDS, self._discover_cameras)
 
         self.executor = rclpy.executors.SingleThreadedExecutor()

@@ -21,6 +21,22 @@ SERIES_SOURCES = {
     "attitude_pitch": ("attitude", lambda v: math.degrees(v[1])),
 }
 
+# The camera's own estimate from /vo/status: visual_position and visual_velocity (world frame).
+# All six are added together on every new message, so they share one time axis; an axis the
+# camera has no measurement for is stored as NaN and sent as null, a gap in the plot.
+CAMERA_SERIES = ("cam_x", "cam_y", "cam_z", "cam_vx", "cam_vy", "cam_vz")
+
+
+def _axes(values):
+    out = []
+    for i in range(3):
+        try:
+            v = float(values[i])
+        except (TypeError, ValueError, IndexError):
+            v = math.nan
+        out.append(v if math.isfinite(v) else math.nan)
+    return out
+
 
 class Series:
     """A fixed-span ring buffer of (t, value) for the plots."""
@@ -41,7 +57,8 @@ class Series:
         if not self.points:
             return [], []
         origin = origin if origin is not None else time.monotonic()
-        return ([round(t - origin, 2) for t, _ in self.points], [v for _, v in self.points])
+        return ([round(t - origin, 2) for t, _ in self.points],
+                [None if math.isnan(v) else v for _, v in self.points])
 
 
 class Frame:
@@ -64,7 +81,9 @@ class Store:
         self.watchers = collections.Counter()   # camera topic -> open streams showing it
         self.started = time.monotonic()
         self.series = {name: Series(history_seconds) for name in
-                       ("altitude", "baro_altitude", "battery", "roll", "pitch")}
+                       ("altitude", "baro_altitude", "battery", "roll", "pitch")
+                       + CAMERA_SERIES}
+        self._last_vo = None
         self._last_armed = None
         self._last_frames_sent = None
         self.transport_note = ""
@@ -92,6 +111,14 @@ class Store:
                     self.series[series_name].add(extract(value), now)
                 except (TypeError, IndexError, ValueError):
                     continue
+            vo = values.get("vo_status")
+            # The SSH agent re-sends the latest value on every tick: only a new message counts.
+            if isinstance(vo, dict) and vo != self._last_vo:
+                self._last_vo = vo
+                camera = _axes(vo.get("visual_position")) + _axes(vo.get("visual_velocity"))
+                if any(math.isfinite(v) for v in camera):
+                    for name, value in zip(CAMERA_SERIES, camera):
+                        self.series[name].add(value, now)
 
         # Events worth keeping: these are the things you want to know about after the fact.
         armed = values.get("armed")
