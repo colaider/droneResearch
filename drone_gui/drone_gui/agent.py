@@ -16,6 +16,7 @@ Output is newline-delimited JSON on stdout, one object per line:
     {"type": "telemetry", "values": {...}}      ~10 Hz, stale entries sent as null
     {"type": "attitude",  "q": [w, x, y, z], "rpy": [...], ...}   ~30 Hz, see AttitudeFilter
     {"type": "frame",     "topic": "/stereo/preview/compressed", "jpeg": "<base64>"}
+    {"type": "points",    "stamp": 12.3, "points": [[x, y, z], ...]}   each /vo/points message once
     {"type": "error",     "message": "..."}
 
 Input, one JSON object per line on stdin:
@@ -289,6 +290,24 @@ def imu_attitude_input(msg):
     return stamp, gyro, accel
 
 
+def cloud_points(msg, digits=3):
+    """sensor_msgs/PointCloud2 with float32 x, y, z fields -> [[x, y, z], ...] (finite only).
+    Shared with ros_link, so both transports read /vo/points the same way."""
+    import struct
+
+    offsets = {f.name: f.offset for f in msg.fields if f.datatype == 7}     # 7 = FLOAT32
+    if not all(axis in offsets for axis in "xyz"):
+        return []
+    order = "<" if not msg.is_bigendian else ">"
+    data, step = bytes(msg.data), msg.point_step
+    points = []
+    for base in range(0, msg.width * msg.height * step, step):
+        p = [struct.unpack_from(order + "f", data, base + offsets[a])[0] for a in "xyz"]
+        if all(math.isfinite(v) for v in p):
+            points.append([round(v, digits) for v in p])
+    return points
+
+
 def emit(obj):
     sys.stdout.write(json.dumps(obj) + "\n")
     sys.stdout.flush()
@@ -301,7 +320,7 @@ def main():
         from rclpy.node import Node
         from rclpy.qos import QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
         from sensor_msgs.msg import (BatteryState, CompressedImage, FluidPressure, Image, Imu,
-                                     MagneticField)
+                                     MagneticField, PointCloud2)
         from std_msgs.msg import Bool, Float32, String
     except ImportError as exc:
         emit({"type": "error", "message": "rclpy not importable on the board: %s" % exc})
@@ -357,6 +376,11 @@ def main():
         lambda m: put("pressure", m.fluid_pressure / 100.0), qos_profile_sensor_data)
     sub(String, stereo + "/status", lambda m: put("stereo_status", json_or_none(m.data)), 10)
     sub(String, vo + "/status", lambda m: put("vo_status", json_or_none(m.data)), 10)
+    # The 3D reconstruction's depth points: sent once per message (not with the 10 Hz
+    # telemetry snapshot, which would repeat the same few hundred points every tick).
+    sub(PointCloud2, vo + "/points", lambda m: emit({
+        "type": "points", "stamp": m.header.stamp.sec + m.header.stamp.nanosec * 1e-9,
+        "points": cloud_points(m)}), 10)
 
     # Whatever eventually estimates position publishes it here; rb3_control already consumes
     # the same topic for its cmd_vel feedback. Nothing publishes it yet - see the README.

@@ -17,6 +17,7 @@ Three kinds of traffic, each matched to a plain-HTTP mechanism that needs no fra
                             watched topics are subscribed on the board and sent over the link.
   POST /api/unit/...        process control, forwarded to systemd on the board over SSH.
   GET  /api/tracks[/<id>?from=N], POST /api/tracks/split
+  GET  /api/cloud/<id>      the run's 3D reconstruction (voxel map of /vo/points, cloud.py).
                             position tracks, one per flight run (tracks.py).
 
 Board polling runs in its own thread, so an SSH call that hangs slows the health panel down
@@ -289,6 +290,11 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/attitude/history":
             return self._json({"window": self.state.cfg.history_seconds,
                                "samples": self.state.ros.attitude_plot()})
+        if path.startswith("/api/cloud/") and self.state.tracks:
+            cloud = self.state.tracks.cloud(path.rsplit("/", 1)[-1])
+            if cloud is None:
+                return self._json({"ok": False, "error": "unknown track"}, 404)
+            return self._json(cloud)
         if path == "/api/tracks":
             if not self.state.tracks:
                 return self._json({"live": None, "tracks": []})

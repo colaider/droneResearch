@@ -15,6 +15,9 @@ flight controller is not publishing it), mode the control loop's stage. cam_* is
 own estimate from /vo/status (visual_position, and visual_velocity in the world frame); an
 axis is null while the camera has no measurement for it. Tracks recorded before the camera
 fields existed simply have shorter rows.
+
+The depth points of the same run (/vo/points, the 3D reconstruction) go to <run id>.cloud.jsonl
+next to it, see cloud.py.
 """
 from __future__ import annotations
 
@@ -24,6 +27,8 @@ import os
 import re
 import threading
 import time
+
+from .cloud import CloudMap, decode_points
 
 SAMPLE_HZ = 10.0
 FRESH_SECONDS = 1.0         # a position older than this is not the drone's position any more
@@ -83,7 +88,9 @@ class TrackLog:
         self.ros = ros
         self.on_event = on_event or (lambda *a, **k: None)
         self.lock = threading.Lock()
-        self.live = None                # {"id", "start", "source", "samples": [...]}
+        self.live = None                # {"id", "start", "source", "samples": [...], "cloud"}
+        self._last_points_stamp = None
+        self._replay_cloud = (None, None)   # (track id, CloudMap) of the last replayed run
         self._last_sample_at = 0.0      # monotonic
         self._last_mode = None
         self._split = False
@@ -127,6 +134,27 @@ class TrackLog:
 
     def sample(self, now=None):
         now = now if now is not None else time.monotonic()
+        self._sample_position(now)
+        self._sample_points()
+
+    def _sample_points(self):
+        """Each new /vo/points frame into the live run's map and file (needs a live run)."""
+        decoded = decode_points(self.ros.get("vo_points", FRESH_SECONDS))
+        if decoded is None:
+            return
+        stamp, points = decoded
+        with self.lock:
+            if stamp == self._last_points_stamp or self.live is None or self._split:
+                return
+            self._last_points_stamp = stamp
+            if not points:
+                return
+            live = self.live
+            live["cloud"].add(points)
+            t = round(time.time() - live["start"], 2)
+            self._append(live["id"], [t, [[round(v, 3) for v in p] for p in points]], ".cloud.jsonl")
+
+    def _sample_position(self, now):
         current = self._current()
         if current is None:
             return
@@ -157,7 +185,8 @@ class TrackLog:
         while os.path.exists(os.path.join(self.dir, track_id + ".jsonl")):
             n += 1
             track_id = "%s-%d" % (base, n)
-        self.live = {"id": track_id, "start": start, "source": source, "samples": []}
+        self.live = {"id": track_id, "start": start, "source": source, "samples": [],
+                     "cloud": CloudMap()}
         self._split = False
         self._last_mode = None
         self._append(track_id, {"start": start, "source": source,
@@ -166,9 +195,9 @@ class TrackLog:
                                            "cam_vx", "cam_vy", "cam_vz"]})
         self.on_event("position track %s started (%s)" % (track_id, source))
 
-    def _append(self, track_id, entry):
+    def _append(self, track_id, entry, suffix=".jsonl"):
         try:
-            with open(os.path.join(self.dir, track_id + ".jsonl"), "a", encoding="utf-8") as handle:
+            with open(os.path.join(self.dir, track_id + suffix), "a", encoding="utf-8") as handle:
                 handle.write(json.dumps(entry) + "\n")
         except OSError:
             pass                # a full or read-only disk must not take the panel down
@@ -182,9 +211,29 @@ class TrackLog:
     def status(self):
         with self.lock:
             if self.live is None:
-                return {"live": None, "samples": 0}
+                return {"live": None, "samples": 0, "cloud_frames": 0, "cloud_points": 0}
+            cloud = self.live["cloud"]
             return {"live": self.live["id"], "samples": len(self.live["samples"]),
-                    "split": self._split}
+                    "split": self._split, "cloud_frames": cloud.frames,
+                    "cloud_points": len(cloud._cells)}
+
+    def cloud(self, track_id):
+        """The run's 3D reconstruction: {"id", "frames", "points": [[x, y, z], ...], ...}.
+        The live run's map is in memory; an earlier run's is rebuilt from its file (cached)."""
+        if not TRACK_ID.match(track_id or ""):
+            return None
+        with self.lock:
+            if self.live is not None and self.live["id"] == track_id:
+                cloud = self.live["cloud"]
+                return dict(cloud.summary(), id=track_id, live=not self._split,
+                            points=cloud.points())
+            cached_id, cloud = self._replay_cloud
+        if cached_id != track_id:
+            cloud = CloudMap.from_file(os.path.join(self.dir, track_id + ".cloud.jsonl"))
+            if cloud is None:
+                cloud = CloudMap()          # a run without depth points
+            self._replay_cloud = (track_id, cloud)
+        return dict(cloud.summary(), id=track_id, live=False, points=cloud.points())
 
     def list(self):
         tracks = []
