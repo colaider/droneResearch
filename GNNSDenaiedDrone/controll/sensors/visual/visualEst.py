@@ -123,6 +123,17 @@ class VisulaEst(VisualVelocityEstimator):
         height, width = prepared.frames[0].shape[:2]
         self.frame_size = prepared.frames[0].shape
         self.vision_backend.begin_frame(prepared)
+        if self.buffer:
+            previous = self.buffer[-1]
+            if (previous.left_timestamp is not None
+                    and prepared.left_timestamp is not None):
+                if (previous.left_timestamp_ns is not None
+                        and prepared.left_timestamp_ns is not None):
+                    dt = (prepared.left_timestamp_ns - previous.left_timestamp_ns) / 1e9
+                else:
+                    dt = prepared.left_timestamp - previous.left_timestamp
+                if np.isfinite(dt) and dt > 0:
+                    self.dt = float(dt)
         self.buffer.append(prepared)
         self.current_frame = prepared.display_copy()
 
@@ -136,8 +147,8 @@ class VisulaEst(VisualVelocityEstimator):
         Returns the display Frame. Read camera_velocity ([vx, vy, vz, yaw_rate]),
         depth_points ([u, v, optical_depth]), depth_colors, and depth_sigma on
         this estimator. Capture metadata is on current_frame.
-        Capture metadata is retained on current_frame; velocity fitting uses
-        the configured dt for typed and legacy frames.
+        Capture timestamps on consecutive frames determine dt when available;
+        the configured dt is retained for legacy frames or invalid intervals.
         """
         sensor_values = (drone_pos, drone_vel, drone_ang_vel, imu_att)
         if any(value is not None for value in sensor_values):
