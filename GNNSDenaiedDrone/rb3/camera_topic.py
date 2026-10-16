@@ -22,7 +22,7 @@ from rb3_stereo.stereo import AutoExposure, StereoCamera
 
 
 class CameraTopic:
-    def __init__(self, node, ns="/stereo", resolution=(640, 400), fps=100,
+    def __init__(self, node, ns="/stereo", resolution=(640, 400), fps=120,
                  vfov_deg=85.0, baseline_m=0.05, calibration="auto", auto_exposure=True,
                  ae_target=100.0):
         """calibration: "auto" = config/stereo_calib.npz if it exists, "" = raw images, or a path.
