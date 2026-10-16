@@ -252,7 +252,6 @@ class Sensors:
         return self.imu.is_calibrating()
 
     def get_sample(self):
-        """Latest fully timestamped ImuSample (accel + gyro + baro + sensor-core t), or None."""
         return self.sample
 
     # ---------------- forwarded IMU estimates ----------------

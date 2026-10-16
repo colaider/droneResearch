@@ -63,8 +63,8 @@ class Controller:
 
         v = S_dd + self.kp_pos @ X_err + self.kd_pos @ X_err_d    
         U = np.linalg.inv(self.f1(yaw)) @ (v + self.f2(yaw) @ X_d_body)  # target vel [vx,vy,vz,yaw_rate]
-        # U[:3] = np.clip(U[:3], -0.05, 0.05)                        
-        # U[3] = np.clip(U[3], 0,  0.5)
+
+
         self.posCMD = U
         self._pr_setpoint = setpoint.copy()
         self._pr_dr_setpoint = S_d
@@ -84,14 +84,15 @@ class Controller:
 
         # provisional output with the EXISTING integral -> see which axes are already railed
         out = P + self.ki_vel * self._vel_err_sum + D
-        self._vel_err_sum = self._anti_windup(
-            self._vel_err_sum, err, self.dt, out >= hi, out <= lo, self.i_limit)
+        self._vel_err_sum = self._anti_windup(self._vel_err_sum, err, self.dt, out >= hi, out <= lo, self.i_limit)
 
-        # recompute with the (possibly frozen / clamped) integral
+
         out = P + self.ki_vel * self._vel_err_sum + D
         pitch = float(np.clip(out[0], -self.max_tilt, self.max_tilt))
         roll = float(np.clip(-out[1], -self.max_tilt, self.max_tilt))
+
         throttle = float(np.clip(self.hover_throttle + out[2], 0.2, 0.63))
+
         return np.array([roll, pitch, yaw_rate_target, throttle])
 
 

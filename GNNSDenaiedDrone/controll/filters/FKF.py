@@ -2,23 +2,11 @@ import numpy as np
 
 
 class FusionKalmanFilter:
-    """Simple in-sequence fusion kept in TWO separate vectors.
-
-        velocity  v = [vx, vy, vz, yaw_rate]   -- Kalman-filtered (world frame; yaw_rate body)
-        position  p = [px, py, pz, yaw]         -- integrated from v (pz also pulled toward baro)
-
-    IMU acceleration drives the velocity predict; the camera corrects vx, vy and yaw_rate; the
-    barometer corrects vz and pulls pz. Position has no direct x/y sensor, so px/py integrate and
-    will drift -- that is expected without a position fix.
-
-    No out-of-sequence handling, no history, no command prediction: each measurement is applied
-    in the order it arrives.
-    """
 
     def __init__(self,
-                 process_var=(0.6, 0.6, 0.4, 1.0),   # vx, vy, vz, yaw_rate  (per second)
+                 process_var=(1, 1, 0.5, 1.0),   # vx, vy, vz, yaw_rate  (per second)
                  camera_var=(0.4, 0.4, 0.25),        # vx, vy, yaw_rate
-                 baro_vel_var=0.4,                    # vz measurement variance
+                 baro_vel_var=0.2,                    # vz measurement variance
                  baro_pos_gain=0.1):                  # complementary pull of pz toward baro altitude
         # --- two state vectors ---
         self.v = np.zeros(4)          # [vx, vy, vz, yaw_rate]
