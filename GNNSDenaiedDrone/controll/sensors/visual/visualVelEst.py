@@ -210,10 +210,11 @@ class VisualVelocityEstimator:
         if angular_velocity is not None:
             angular_velocity[1],  angular_velocity[2] =  - angular_velocity[1], - angular_velocity[2]
 
+        attitude = getattr(self, 'avg_att', self.imu_att)
+        
         if  attitude is not None:
             attitude[1], attitude[2] = -attitude[1], -attitude[2] 
 
-        attitude = getattr(self, 'avg_att', self.imu_att)
         height, width = self.frame_size[:2]
         center = np.array([width / 2, height / 2])
         z = points[:, 2]
