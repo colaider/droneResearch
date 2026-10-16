@@ -205,6 +205,9 @@ class VisualVelocityEstimator:
             return velocity.copy()
 
         angular_velocity = getattr(self, 'avg_ang_vel', self.drone_ang_vel)
+        angular_velocity[1],  angular_velocity[2] =  - angular_velocity[1], - angular_velocity[2]
+        attitude[1], attitude[2] = -attitude[1], -attitude[2] 
+
         attitude = getattr(self, 'avg_att', self.imu_att)
         height, width = self.frame_size[:2]
         center = np.array([width / 2, height / 2])
