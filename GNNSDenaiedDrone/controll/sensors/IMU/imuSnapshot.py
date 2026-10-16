@@ -10,9 +10,10 @@ Vector3 = tuple[float, float, float]
 
 @dataclass(frozen=True)
 class IMUSnapshot:
-    """One IMU reading and state snapshot at an exact ROS timestamp.
+    """One IMU reading and state snapshot at a host-monotonic timestamp.
 
-    Timestamp is integer nanoseconds in the ROS message's clock domain.
+    Timestamp is integer nanoseconds in the host monotonic clock domain, used
+    internally to match IMU readings with camera frames.
     Acceleration is the latest body-frame sensor reading; angular velocity is
     bias-corrected. Attitude is [roll, pitch, yaw] in radians; velocity and
     position are in the IMU's world frame.

@@ -1,12 +1,6 @@
-"""IMU topic: the RB3's OWN accelerometer + gyro, from the sensor core (see.py).
+"""Publish the RB3 IMU with SSC capture time mapped through host monotonic to ROS time."""
+import time
 
-Only the RB3 IMU is used here (not Betaflight's), published as sensor_msgs/Imu on <ns>/imu.
-
-header.stamp is the RB3 sensor-core INTERNAL clock (SSC/QTimer time, seconds) of the reading --
-NOT ROS/system time and NOT publish time. This is the true capture time, so it carries no timer
-jitter and lets consumers window IMU samples by the exact interval between readings. For visual
-fusion the camera (and baro) must be stamped on this SAME sensor-core clock to be comparable.
-"""
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Imu
 
@@ -19,6 +13,7 @@ class ImuTopic:
         self.node = node
         self.frame = frame
         self._pending_accel = []
+        self._ssc_clock = see.SscClockMapper()
         self.pub = node.create_publisher(Imu, f"{ns}/imu", qos_profile_sensor_data)
         self.sensors = see.SensorSet({"gyro": gyro_hz, "accel": accel_hz},
                                      sudo=sudo, logger=node.get_logger())
@@ -50,11 +45,21 @@ class ImuTopic:
 
             msg = Imu()
             msg.header.frame_id = self.frame
-            # Stamp from the sensor-core internal clock of THIS gyro reading (g[1], seconds).
-            # Fall back to ROS time only if the sample carried no sensor timestamp.
+            # Convert SSC capture time to host monotonic using its paired SEE event time,
+            # then map that monotonic time into the ROS clock domain for the message header.
             ssc_seconds = g[1]
             if ssc_seconds is not None:
-                self._set_stamp(msg.header.stamp, ssc_seconds)
+                self._ssc_clock.observe(g[0], ssc_seconds)
+                monotonic_seconds = self._ssc_clock.to_monotonic(ssc_seconds)
+                if monotonic_seconds is None:
+                    msg.header.stamp = self.node.get_clock().now().to_msg()
+                else:
+                    mono_before_ns = time.monotonic_ns()
+                    ros_now_ns = self.node.get_clock().now().nanoseconds
+                    mono_after_ns = time.monotonic_ns()
+                    mono_mid_ns = (mono_before_ns + mono_after_ns) // 2
+                    ros_seconds = monotonic_seconds + (ros_now_ns - mono_mid_ns) * 1e-9
+                    self._set_stamp(msg.header.stamp, ros_seconds)
             else:
                 msg.header.stamp = self.node.get_clock().now().to_msg()
 
@@ -74,7 +79,7 @@ class ImuTopic:
 
     @staticmethod
     def _set_stamp(stamp, seconds):
-        """Write float seconds (sensor-core internal clock) into a builtin_interfaces/Time.
+        """Write float ROS-clock seconds into a builtin_interfaces/Time.
 
         Splits into whole seconds + nanoseconds, guarding the rounding case where the
         fractional part rounds up to a full second (nanosec must stay < 1e9).

@@ -9,7 +9,7 @@ G = 9.81
 class ImuSample:
     """One timestamped sensor reading.
 
-    Built by the IMU from accel + gyro + the sensor-core timestamp (baro left empty);
+    Built by the IMU from accel + gyro + the topic timestamp (baro left empty);
     the Sensors facade fills in the barometer afterwards. This is the single timestamped
     record that later feeds time-windowed fusion.
     """

@@ -1,5 +1,6 @@
 import numpy as np
 import threading
+import time
 
 from filters.FKF import FusionKalmanFilter
 from sensors.IMU.IMU import IMU
@@ -19,6 +20,7 @@ class Sensors:
 
         self.camera_receiver = None
         self.visual_frame_bridge = None
+        self.node = node
         if node is not None:
             from communication.CameraStreamReceiver import CameraStreamReceiver
             from communication.VisualFrameBridge import VisualFrameBridge
@@ -72,6 +74,10 @@ class Sensors:
 
         was_calibrating = self.imu.is_calibrating()
         self.imu.update(accel, gyro, dt)
+        if t is not None and np.isfinite(t):
+            timestamp_ns = int(round(float(t) * 1_000_000_000))
+            timestamp_ns = self._ros_to_monotonic_ns(timestamp_ns)
+            self.imu_bridge.capture(self.imu, timestamp_ns)
         if was_calibrating and not self.imu.is_calibrating():
             with self._visual_state_lock:
                 self._visual_position = None
@@ -128,7 +134,12 @@ class Sensors:
 
     def process_visual_frame(self, frame, idx=None):
         """Process a stereo capture and integrate valid visual velocity into position."""
-        processed = self.visual_estimator.processing(frame, idx)
+        snapshot = None
+        frame_timestamp_ns = getattr(frame, "left_timestamp_ns", None)
+        if frame_timestamp_ns is not None:
+            monotonic_timestamp_ns = self._ros_to_monotonic_ns(frame_timestamp_ns)
+            snapshot = self.imu_bridge.closest(monotonic_timestamp_ns, max_delta_ns=25_000_000)
+        processed = self.visual_estimator.processing(frame, idx, imu_snapshot=snapshot)
         if self.visual_frame_bridge is not None:
             self.visual_frame_bridge.publish( processed, self.visual_estimator.tracks,
             self.visual_estimator.point_depth, self.visual_estimator, )
@@ -229,6 +240,19 @@ class Sensors:
 
     def get_sample(self):
         return self.sample
+
+    def get_imu_snapshots(self):
+        """Return retained IMU state snapshots, timestamped in host monotonic time."""
+        return self.imu_bridge.snapshots
+
+    def _ros_to_monotonic_ns(self, timestamp_ns):
+        if self.node is None:
+            return timestamp_ns
+        mono_before_ns = time.monotonic_ns()
+        ros_now_ns = self.node.get_clock().now().nanoseconds
+        mono_after_ns = time.monotonic_ns()
+        mono_mid_ns = (mono_before_ns + mono_after_ns) // 2
+        return int(timestamp_ns - (ros_now_ns - mono_mid_ns))
 
     # ---------------- forwarded IMU estimates ----------------
     def get_attitude(self):

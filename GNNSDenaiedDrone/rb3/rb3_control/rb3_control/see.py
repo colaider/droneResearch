@@ -23,6 +23,7 @@ Units as delivered by SEE: accel m/s^2, gyro rad/s, pressure hPa, mag uT.
 from __future__ import annotations
 
 import collections
+from math import isfinite
 import re
 import shutil
 import subprocess
@@ -49,6 +50,36 @@ _TIMESTAMP = re.compile(r'"timestamp"\s*:\s*(\d+)')
 
 # Seconds to wait before respawning a stream that died (duration elapsed, ADSP restart, ...).
 RESPAWN_DELAY = 1.0
+
+
+class SscClockMapper:
+    """Map SSC capture seconds onto host monotonic time from paired SEE events.
+
+    Host event times include delivery latency. A low-percentile offset estimate
+    tracks the low-latency edge of those observations instead of their average.
+    """
+
+    def __init__(self, capacity=256, quantile=0.1):
+        if (isinstance(capacity, bool) or not isinstance(capacity, int) or capacity <= 0
+                or not isfinite(quantile) or not 0.0 <= quantile <= 1.0):
+            raise ValueError("capacity must be positive and quantile must be in [0, 1]")
+        self._offsets = collections.deque(maxlen=capacity)
+        self.quantile = float(quantile)
+
+    def observe(self, host_monotonic_s, ssc_s):
+        if host_monotonic_s is None or ssc_s is None:
+            return
+        host_monotonic_s, ssc_s = float(host_monotonic_s), float(ssc_s)
+        if not (isfinite(host_monotonic_s) and isfinite(ssc_s)):
+            return
+        self._offsets.append(host_monotonic_s - ssc_s)
+
+    def to_monotonic(self, ssc_s):
+        if not self._offsets:
+            return None
+        offsets = sorted(self._offsets)
+        index = int(round((len(offsets) - 1) * self.quantile))
+        return float(ssc_s) + offsets[index]
 
 
 def available() -> bool:
