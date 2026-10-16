@@ -20,10 +20,10 @@ so drone_gui and the control loop see the same topics whichever of the two owns 
 """
 import json
 import math
+import threading
 import time
 
 from geometry_msgs.msg import PointStamped, Twist, Vector3Stamped
-from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import BatteryState
 from std_msgs.msg import Bool, Float32, String
@@ -89,20 +89,20 @@ class CommandTopic:
         # it to ImuTopic/BaroTopic); the panel's "RB3 sensors" box reads it from there.
         self.sensors_info = sensors_info
 
-        # The gate loop makes two BLOCKING MSP round-trips (status + RC, ~28 ms each). Put it in
-        # its own callback group so that, under the node's MultiThreadedExecutor, it runs
-        # concurrently with _on_cmd instead of starving it. Sharing one (default) group serialises
-        # them: while the gate is blocked on serial, commands queue and go stale, the freshness
-        # check trips, and the stream pauses then resumes -> motors pulse full/stop periodically.
-        self._serial_group = MutuallyExclusiveCallbackGroup()
-        self._cmd_group = MutuallyExclusiveCallbackGroup()
+        # Keep the depth-10 default QoS (matches the publisher; proven working). The gate thread
+        # below -- not the QoS -- is what fixes the full/stop pulsing.
+        node.create_subscription(Twist, f"{ns}/cmd_attitude", self._on_cmd, 10)
 
-        # Keep the depth-10 default QoS (matches the publisher; proven working). The callback-group
-        # split below -- not the QoS -- is what fixes the full/stop pulsing.
-        node.create_subscription(Twist, f"{ns}/cmd_attitude", self._on_cmd, 10,
-                                 callback_group=self._cmd_group)
-        self.timer = node.create_timer(1.0 / loop_hz, self._loop,
-                                       callback_group=self._serial_group)
+        # The gate loop makes two BLOCKING MSP round-trips (status + RC, ~28 ms each). It runs in
+        # its own thread, like RcStream, so it never blocks the executor: if it starved _on_cmd,
+        # commands would queue and go stale, the freshness check would trip, and the stream would
+        # pause then resume -> motors pulse full/stop periodically. With nothing blocking in a
+        # callback, start_rb3 can spin a single-threaded executor.
+        self.error = None                # set if the gate loop died; start_rb3 re-raises it
+        self._period = 1.0 / loop_hz
+        self._running = True
+        self._gate = threading.Thread(target=self._gate_loop, daemon=True, name="msp-gate")
+        self._gate.start()
 
     def _on_cmd(self, m):
         self.command = (m.angular.x, m.angular.y, m.angular.z, m.linear.z)
@@ -119,6 +119,25 @@ class CommandTopic:
             roll, pitch, yaw_rate, throttle, self.max_tilt, self.max_yaw_rate,
             throttle_min=self.throttle_min, throttle_max=self.throttle_max))
         self.rc.paused = False
+
+    def _gate_loop(self):
+        """Run _loop at loop_hz until stop() or shutdown. If it raises (e.g. the FC re-enumerated
+        on USB), shut the node down so start_rb3 exits non-zero and drone-rb3.service restarts it,
+        as it did when this was a timer callback. The sticks are released either way."""
+        next_tick = time.monotonic()
+        try:
+            while self._running and self.node.context.ok():
+                self._loop()
+                next_tick = max(next_tick + self._period, time.monotonic())
+                time.sleep(max(0.0, next_tick - time.monotonic()))
+        except Exception as exc:                           # noqa: BLE001 - reported via self.error
+            # A shutdown already under way also makes the publishers raise; that is not a failure.
+            if self._running and self.node.context.ok():
+                self.error = exc
+                self.node.get_logger().error("command gate failed: %r" % (exc,))
+                self.node.context.try_shutdown()
+        finally:
+            self._release()
 
     def _loop(self):
         now = time.monotonic()
@@ -234,6 +253,8 @@ class CommandTopic:
         self.rc.paused = True
 
     def stop(self):
+        self._running = False
+        self._gate.join(timeout=2.0)       # before closing the port it may be mid-request on
         try:
             self.rc.stop()
         finally:

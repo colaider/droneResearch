@@ -49,10 +49,11 @@ class _WindowAverage:
 
 class ImuTopic:
     def __init__(self, node, ns="/drone", gyro_hz=500.0, accel_hz=500.0, average=4,
-                 publish_hz=250.0, frame="imu_link", sudo=True):
+                 publish_hz=125.0, frame="imu_link", sudo=True):
         """average: consecutive readings averaged into each message, so <ns>/imu runs at
         gyro_hz / average (1 = every reading as it comes). publish_hz: how often the streams
-        are drained and finished windows published; it bounds the added latency."""
+        are drained and finished windows published; it bounds the added latency (up to
+        1 / publish_hz, 8 ms at the default, which matches the 125 Hz output rate)."""
         self.node = node
         self.frame = frame
         self._pending_gyro = []

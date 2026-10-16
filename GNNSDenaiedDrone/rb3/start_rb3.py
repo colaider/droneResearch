@@ -19,7 +19,15 @@ for _pkg in ("rb3_control", "rb3_stereo"):
         sys.path.insert(0, _root)
 
 import rclpy
-from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
+from rclpy.executors import ExternalShutdownException
+
+# No callback blocks (CommandTopic's serial gate loop has its own thread), so one executor thread
+# is enough. The events executor dispatches in C++: the Python MultiThreadedExecutor spent ~70%
+# of a core just dispatching the ~400 callbacks/s here, more than the callbacks themselves.
+try:
+    from rclpy.experimental import EventsExecutor as Executor
+except ImportError:                    # rclpy without the experimental events executor
+    from rclpy.executors import SingleThreadedExecutor as Executor
 
 try:                                   # works both as a package and when run directly
     from .imu_topic import ImuTopic
@@ -60,7 +68,7 @@ def main(args=None):
     add("CommandTopic", lambda: CommandTopic(node, sensors_info=sensors_info))
 
     log.info("RB3 up with: " + ", ".join(t.__class__.__name__ for t in topics))
-    executor = MultiThreadedExecutor()
+    executor = Executor()
     executor.add_node(node)
     try:
         executor.spin()
@@ -77,6 +85,10 @@ def main(args=None):
         node.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()
+    # A topic thread that died shut the node down; exit non-zero so the service restarts us.
+    for t in topics:
+        if getattr(t, "error", None) is not None:
+            raise t.error
 
 
 if __name__ == "__main__":
