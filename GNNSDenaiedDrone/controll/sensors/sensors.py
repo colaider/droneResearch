@@ -84,9 +84,13 @@ class Sensors:
                 self._last_visual_frame_idx = None
                 self._pending_cam = None
             self._reset_fkf()
+
+
         self._update_baro_velocity(float(baro), dt)
         if not self.imu.is_calibrating():
             self.imu.fuse_vertical_velocity(self._baro_vel, 0.9)   # vz = 0.9 accel + 0.1 baro
+
+
         self._push_visual_sensor_sample(command_velocity)
         if self.camera_receiver is not None:
             frame = self.camera_receiver.get_frame()
@@ -103,8 +107,7 @@ class Sensors:
         # horizontal (with its timestamp for out-of-sequence replay). Replaces the old low-pass. ---
         if not self.imu.is_calibrating():
             v_cam, cam_id = self._pop_camera_measurement()
-            self.fkf.step(self.imu.get_body_accel(), dt, self.imu.get_attitude(),
-                          v_camera=v_cam, camera_id=cam_id)
+            self.fkf.step(self.imu.get_body_accel(), dt, self.imu.get_attitude(), v_camera=v_cam, camera_id=cam_id)
             self.fkf.update_baro(self._baro, self._baro_vel)
 
     def _visual_worker_loop(self):
