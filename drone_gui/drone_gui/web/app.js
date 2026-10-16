@@ -97,6 +97,7 @@ function render(state) {
   renderUnits(state.units);
   renderEvents(state.events);
   drawPlots(state.plots, state.window_seconds);
+  if (track.follow) drawCameraMotion();
   const label = $('history-window');
   if (label) label.textContent = 'last ' + Math.round((state.window_seconds || 120) / 60 * 10) / 10 + ' minutes';
 }
@@ -953,23 +954,49 @@ function drawTrack3D(canvas, samples, view) {
   });
 })();
 
-// --- position and velocity from the camera, over the run -----------------------------
-// The camera's own estimate, saved in the same track samples as the path (columns 8-13),
-// so these plots follow the path dropdown: the live run, or a replayed one.
+// --- position and velocity from the camera ---------------------------------------------
+// The camera's own estimate (visual_position / visual_velocity on /vo/status). While the path
+// dropdown shows the live run, these plot the server's rolling history of every /vo/status
+// message (state.plots.cam_*), so they show data even before a path is being recorded. A
+// replayed run plots the copy saved in its track samples (columns 8-13).
 const CAM_X = 8, CAM_VX = 11;
+const CAM_SERIES = ['cam_x', 'cam_y', 'cam_z', 'cam_vx', 'cam_vy', 'cam_vz'];
 const AXIS_COLOURS = ['#ff5f56', '#3ecf8e', '#4da3ff'];
 
+// The live series as rows shaped like track samples: [t, ..., cam_x..cam_vz at 8-13], t in
+// seconds ago (newest at 0). All six are added together on the server, so they share x.
+function liveCameraSamples(plots) {
+  const xs = plots && plots.cam_x ? plots.cam_x.x : [];
+  return xs.map((t, i) => {
+    const row = new Array(CAM_X + 6).fill(null);
+    row[T] = t;
+    CAM_SERIES.forEach((name, k) => { row[CAM_X + k] = plots[name].y[i]; });
+    return row;
+  });
+}
+
 function drawCameraMotion() {
-  const samples = track.samples;
-  drawRunPlot($('camera-position'), samples, CAM_X, 0.5,
-    'no camera position yet: it appears once the visual estimator has usable tracks');
-  drawRunPlot($('camera-velocity'), samples, CAM_VX, 0.2,
-    'no camera velocity yet: it appears once the visual estimator has usable tracks');
+  const live = track.follow;
+  const windowSeconds = (lastState && lastState.window_seconds) || 120;
+  const samples = live ? liveCameraSamples(lastState && lastState.plots) : track.samples;
+  const range = live ? [-windowSeconds, 0] : null;
+  const waiting = live
+    ? ' yet: waiting for visual_position on /vo/status (start drone-gnss-control)'
+    : ' in this run';
+  drawRunPlot($('camera-position'), samples, CAM_X, 0.5, 'no camera position' + waiting, range);
+  drawRunPlot($('camera-velocity'), samples, CAM_VX, 0.2, 'no camera velocity' + waiting, range);
+  $('camera-motion-sub').textContent = live
+    ? 'live, last ' + Math.round(windowSeconds) + ' s of /vo/status · ' + samples.length + ' samples'
+    : 'replay of run ' + trackLabel(track.id);
 }
 
 // Three columns (x, y, z) against run time. A null value (no camera measurement on that axis)
 // breaks the line instead of being drawn as zero.
-function drawRunPlot(canvas, samples, first, minSpan, emptyText) {
+// range [t0, t1] is the live window in seconds ago (e.g. [-120, 0]): the plot starts at the
+// left axis with the first sample and grows to the right until the window is full, then
+// scrolls; times are labelled with the clock. Without a range it spans the run (replay),
+// labelled in seconds since the run started.
+function drawRunPlot(canvas, samples, first, minSpan, emptyText, range) {
   const {context, width, height} = prepareCanvas(canvas);
   const value = (s, axis) => {
     const v = s[first + axis];
@@ -991,7 +1018,15 @@ function drawRunPlot(canvas, samples, first, minSpan, emptyText) {
   const pad = (max - min) * 0.1;
   min -= pad; max += pad;
 
-  const t0 = samples[0][T], t1 = Math.max(samples[samples.length - 1][T], t0 + 1);
+  let t0, t1;
+  if (range) {
+    const span = range[1] - range[0];
+    t0 = Math.max(range[0], samples[0][T]);      // oldest sample, until the window is full
+    t1 = t0 + span;
+  } else {
+    t0 = samples[0][T];
+    t1 = Math.max(samples[samples.length - 1][T], t0 + 1);
+  }
   const left = 44, right = 8, top = 10, bottom = 20;
   const plotW = width - left - right, plotH = height - top - bottom;
   const sx = (t) => left + plotW * (t - t0) / (t1 - t0);
@@ -1007,12 +1042,17 @@ function drawRunPlot(canvas, samples, first, minSpan, emptyText) {
     context.textAlign = 'right';
     context.fillText(+v.toFixed(3) + '', left - 4, sy(v) + 3);
   }
-  const tStep = niceStep(t1 - t0, 8);
+  // Live: ticks on whole clock seconds, labelled HH:MM:SS (t is seconds ago, so now + t).
+  const now = Date.now() / 1000;
+  const base = range ? now : 0;
+  const tStep = niceStep(t1 - t0, Math.max(2, Math.floor(plotW / (range ? 90 : 60))));
+  const clock = (a) => new Date(a * 1000).toTimeString().slice(0, 8);
   context.textAlign = 'center';
-  for (let t = Math.ceil(t0 / tStep) * tStep; t <= t1; t += tStep) {
+  for (let a = Math.ceil((base + t0) / tStep) * tStep; a <= base + t1; a += tStep) {
+    const t = a - base;
     context.strokeStyle = '#2a2f3a';
     context.beginPath(); context.moveTo(sx(t), top); context.lineTo(sx(t), top + plotH); context.stroke();
-    context.fillText(+t.toFixed(1) + '', sx(t), height - 6);
+    context.fillText(range ? clock(a) : +t.toFixed(1) + '', sx(t), height - 6);
   }
   context.textAlign = 'left';
 

@@ -30,6 +30,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 
+from .store import CAMERA_SERIES
 from .tracks import ODOM_MAX_AGE, VO_MAX_AGE, displayed_position
 
 WEB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web")
@@ -124,7 +125,7 @@ class State:
         mag = ros.get("mag", 2.0)
         health = self.board.health
 
-        plots = ros.plot("altitude", "baro_altitude", "battery", "roll", "pitch")
+        plots = ros.plot("altitude", "baro_altitude", "battery", "roll", "pitch", *CAMERA_SERIES)
 
         # "live" means the flight controller node is publishing right now; the panel has to
         # distinguish that from "the board is up but nothing is running".
