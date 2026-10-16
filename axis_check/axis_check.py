@@ -125,19 +125,23 @@ def camera_config():
 
 
 def estimator_dt():
-    """(the dt VisulaEst starts with, whether anything in the control loop calls set_dt)."""
+    """(the dt VisulaEst starts with, whether anything ever changes it): changed means a set_dt()
+    call or any other assignment to its dt, such as the per-frame one from capture stamps."""
     try:
         with open(os.path.join(CONTROLL, "sensors", "visual", "visualEst.py"), encoding="utf-8") as handle:
             match = re.search(r"self\.dt\s*=\s*([0-9.eE+-]+)", handle.read())
     except OSError:
         return None, None
-    called = False
-    for root, _, files in os.walk(CONTROLL):
+    changed = False
+    for root, _, files in os.walk(os.path.join(CONTROLL, "sensors")):
         for name in files:
             if name.endswith(".py"):
                 with open(os.path.join(root, name), encoding="utf-8", errors="replace") as handle:
-                    called = called or bool(re.search(r"\.set_dt\(", handle.read()))
-    return (float(match.group(1)) if match else None), called
+                    text = handle.read()
+                assignments = re.findall(r"self\.dt\s*=\s*(\S+)", text)
+                changed = changed or bool(re.search(r"\.set_dt\(", text)) or any(
+                    not re.fullmatch(r"[0-9.eE+-]+", value) for value in assignments)
+    return (float(match.group(1)) if match else None), changed
 
 
 def repo_commit():
@@ -767,14 +771,18 @@ def analyze(rec):
                 % (scale, depth, "" if measured else " assumed", run.focal))
         fps = run.vo[:, Run.VO_FPS] if len(run.vo) else np.empty(0)
         fps = fps[np.isfinite(fps) & (fps > 0)]
-        fixed, called = estimator_dt()
+        fixed, changed = estimator_dt()
         if 0.7 < scale < 1.4:
             ok(text)
-        elif len(fps) and fixed and called is False:
+        elif len(fps) and fixed and changed is False:
             frame_dt = 1.0 / float(np.median(fps))
             bad(text + "; the estimator processes a frame every %.2f s but VisulaEst.dt stays %g s "
-                "(nothing calls set_dt), which alone makes its velocities %.0fx too big"
+                "(nothing changes it), which alone makes its velocities %.0fx too big"
                 % (frame_dt, fixed, frame_dt / fixed))
+        elif len(fps) and float(np.median(fps)) < 5:
+            bad(text + "; the estimator only manages %.1f frames/s, so a fast slide moves the image "
+                "too far between frames for its tracker (look at 'tracked' on /vo/status)"
+                % float(np.median(fps)))
         else:
             bad(text)
 
@@ -833,8 +841,8 @@ def analyze(rec):
     for source, label in att_sources:
         signs = {}
         for name in ROT_STEPS:
-            # judged only where the gyro saw the rotation: no motion is not a sign error
-            if not run.has(name) or axis_of(run.turn("ctrl", name), FLOOR["rad"]) is None:
+            # judged only where the gyro saw a real rotation: a wobble is not a sign error
+            if not run.has(name) or axis_of(run.turn("ctrl", name), math.radians(10)) is None:
                 continue
             change = run.attitude_change(source, name)
             if change is None:
@@ -871,17 +879,28 @@ def quick_look(rec, name):
     parts = ["imu %d, camera %d, vo %d samples" % tuple(
         int(rows[run.window(rows[:, 0], name, "all")].shape[0]) if len(rows) else 0
         for rows in (run.imu, run.image, run.vo))]
+    moved = True
     if kind == "still":
         parts.append("gravity on control-loop %s" % cell(run.gravity("ctrl"), 1.0))
     elif kind == "rot":
-        parts.append("gyro %s" % cell(run.turn("ctrl", name), FLOOR["rad"], 180 / math.pi, " deg"))
+        turn = run.turn("ctrl", name)
+        moved = axis_of(turn, FLOOR["rad"]) is not None
+        parts.append("gyro %s" % cell(turn, FLOOR["rad"], 180 / math.pi, " deg"))
         parts.append("camera %s" % cell(run.camera(name)[0], FLOOR["rad"], 180 / math.pi, " deg"))
     else:
-        parts.append("accel %s" % cell(run.push("ctrl", name), FLOOR["m/s"], 1.0, " m/s"))
-        parts.append("camera %s" % cell(run.camera(name)[0], FLOOR["m"], 1.0, " m"))
+        camera, push = run.camera(name)[0], run.push("ctrl", name)
+        # the camera is the reliable judge of a slide; the accel only when there is no camera
+        moved = axis_of(camera if camera is not None else push,
+                        FLOOR["m"] if camera is not None else FLOOR["m/s"]) is not None
+        parts.append("accel %s" % cell(push, FLOOR["m/s"], 1.0, " m/s"))
+        parts.append("camera %s" % cell(camera, FLOOR["m"], 1.0, " m"))
         parts.append("vo %s" % (cell(run.vo_move(Run.VO_BODY, name), FLOOR["m"], 1.0, " m")
                                   if len(run.vo) else "no data"))
-    return " | ".join(parts)
+    text = " | ".join(parts)
+    if not moved:
+        text += ("\n      !! NOTHING MOVED between GO and done. Press r to redo it, and do the "
+                 "motion only AFTER it says GO.")
+    return text
 
 
 # --- recording on the drone --------------------------------------------------------------------
@@ -1014,22 +1033,28 @@ def record(args):
         print("  -> no /vo/status, so the estimator rows stay empty. To test the estimator too, run\n"
               "     main.py (keep the drone DISARMED, props off) and start this again.")
     print("\nHold the drone with the cameras 0.5-1.5 m above a textured floor, props OFF.\n"
-          "Each step: press Enter, keep it still until GO, do the motion, hold until it says done.")
+          "Every step goes: drone still at its START position -> Enter -> wait for GO -> do the\n"
+          "motion -> hold the end position until 'done' -> only then bring it back.\n"
+          "Moving before GO records nothing.")
 
     try:
         for i, (name, prompt, kind, _) in enumerate(STEPS):
             while True:
-                input("\n[%d/%d] %s.\n      Press Enter, keep it still until GO ... "
-                      % (i + 1, len(STEPS), prompt))
+                if kind == "still":
+                    input("\n[%d/%d] %s, then press Enter ... " % (i + 1, len(STEPS), prompt))
+                else:
+                    input("\n[%d/%d] NEXT: %s.\n      Hold it still at the START position and "
+                          "press Enter. Do NOT move until GO ... " % (i + 1, len(STEPS), prompt))
                 t0 = now()
                 if kind == "still":
                     print("      recording, keep it still ...", flush=True)
                     time.sleep(STILL)
                 else:
+                    print("      wait ...", flush=True)
                     time.sleep(LEAD)
-                    print("      GO", flush=True)
+                    print("      GO! %s now (%.0f s)" % (prompt.split(",")[0], MOTION), flush=True)
                     time.sleep(MOTION)
-                    print("      hold it ...", flush=True)
+                    print("      stop and hold it there ...", flush=True)
                     time.sleep(HOLD)
                 print("      done", flush=True)
                 step = {"name": name, "t0": t0, "go": round(t0 + LEAD, 4), "t1": now()}

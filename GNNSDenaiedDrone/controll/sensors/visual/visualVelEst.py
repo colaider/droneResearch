@@ -10,6 +10,11 @@ from .estimatorTypes import Tracks
 from .gpuVision import VisionBackend
 from .smallFeatures import TRACK_COLOR, build_triangles, filter_by_neighbors, replenish
 
+# Camera axes (x image right, y image down, z optical axis) from the body frame the gyro is in
+# (x forward, y right, z down). Measured on the drone with axis_check: the left camera looks down
+# with image right = backwards and image down = left, i.e. turned 180 deg from cameraConfig.py.
+CAM_FROM_BODY = np.diag([-1.0, -1.0, 1.0])
+
 
 class VisualVelocityEstimator:
     """Single-resolution LK tracking and image-flow velocity estimation."""
@@ -204,16 +209,10 @@ class VisualVelocityEstimator:
             self.camera_velocity = velocity
             return velocity.copy()
 
-        angular_velocity = getattr(self, 'avg_ang_vel', self.drone_ang_vel)
-
-
-        if angular_velocity is not None:
-            angular_velocity[1],  angular_velocity[2] =  - angular_velocity[1], - angular_velocity[2]
-
-        attitude = getattr(self, 'avg_att', self.imu_att)
-        
-        if  attitude is not None:
-            attitude[1], attitude[2] = -attitude[1], -attitude[2] 
+        # Body-frame gyro averaged over this frame interval. Read, never modified: Sensors uses
+        # the same avg_ang_vel / avg_att arrays after this to turn the velocity into the world.
+        angular_velocity = np.asarray(getattr(self, 'avg_ang_vel', self.drone_ang_vel), dtype=float)
+        w = CAM_FROM_BODY @ angular_velocity
 
         height, width = self.frame_size[:2]
         center = np.array([width / 2, height / 2])
@@ -222,10 +221,17 @@ class VisualVelocityEstimator:
         estimated_height = np.median(np.partition(z, -k)[-k:])
 
         visual_flow = flow * (z / (self.foc_l * self.dt))[:, None]
-        rotation = z[:, None] / np.cos(attitude[[1,1]]) ** 2
+        # A camera that only rotates still moves the image: subtract that motion (in m/s at each
+        # point's depth) so a tilt in place reads as zero velocity. x, y are the points'
+        # normalised image coordinates; the effect grows towards the edges. The rotation about the
+        # optical axis (yaw) is left to the fit below.
+        x = (points[:, 0] - center[0]) / self.foc_l
+        y = (points[:, 1] - center[1]) / self.foc_l
+        rotation = z[:, None] * np.column_stack((
+            x * y * w[0] - (1 + x * x) * w[1],
+            (1 + y * y) * w[0] - x * y * w[1],
+        ))
 
-        rotation *= angular_velocity[[1,1]]
-        
         target = visual_flow - rotation
         position = (
             (z[:, None] / self.foc_l) * (points[:, :2] - center)
@@ -238,7 +244,10 @@ class VisualVelocityEstimator:
         measured, *_ = np.linalg.lstsq(
             matrix, np.concatenate((target[:, 0], target[:, 1])), rcond=None
         )
-        measured[1] = -measured[1]
+        # The fit gives how the picture moves. With this mount that already is the body velocity
+        # (camera forward -> picture moves right = +x, camera right -> picture moves down = +y);
+        # the picture turns the opposite way to the drone, so only the yaw rate flips.
+        measured[2] = -measured[2]
 
         kalman = self.vkfs.setdefault(0, VelocityKalmanFilter())
         if not kalman.started:
