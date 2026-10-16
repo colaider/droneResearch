@@ -212,6 +212,18 @@ class VisualVelocityEstimator:
         k = max(1, int(len(z) * .1))
         estimated_height = np.median(np.partition(z, -k)[-k:])
 
+        # Tilt-compensate the depth BEFORE the fit. z is the drone HEIGHT; with the camera tilted
+        # the true range to the flat ground is not the height but varies across the image. Scale
+        # each feature's depth by its viewing ray's angle to the ground normal (reduces to z when
+        # level). flow, rotation and the LS geometry below then all use the real range.
+        # Convention: image-x <-> pitch, image-y <-> roll (matches the rotation term's [[1,0]]);
+        # flip a sign in `tilt` if the correction goes the wrong way on real data.
+        roll, pitch = attitude[0], attitude[1]
+        u = (points[:, 0] - center[0]) / self.foc_l
+        v = (points[:, 1] - center[1]) / self.foc_l
+        tilt = np.cos(pitch) * np.cos(roll) - np.sin(pitch) * u + np.cos(pitch) * np.sin(roll) * v
+        z = z / np.clip(tilt, 1e-3, None)
+
         visual_flow = flow * (z / (self.foc_l * self.dt))[:, None]
         rotation = z[:, None] / np.cos(attitude[[1,0]]) ** 2
 
@@ -229,7 +241,7 @@ class VisualVelocityEstimator:
         measured, *_ = np.linalg.lstsq(
             matrix, np.concatenate((target[:, 0], target[:, 1])), rcond=None
         )
-        measured = -measured
+        measured[1] = -measured[1]
 
         kalman = self.vkfs.setdefault(0, VelocityKalmanFilter())
         if not kalman.started:
