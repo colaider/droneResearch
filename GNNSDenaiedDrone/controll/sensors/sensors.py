@@ -134,12 +134,23 @@ class Sensors:
 
     def process_visual_frame(self, frame, idx=None):
         """Process a stereo capture and integrate valid visual velocity into position."""
-        snapshot = None
+        imu_snapshots = ()
         frame_timestamp_ns = getattr(frame, "left_timestamp_ns", None)
         if frame_timestamp_ns is not None:
             monotonic_timestamp_ns = self._ros_to_monotonic_ns(frame_timestamp_ns)
-            snapshot = self.imu_bridge.closest(monotonic_timestamp_ns, max_delta_ns=25_000_000)
-        processed = self.visual_estimator.processing(frame, idx, imu_snapshot=snapshot)
+            previous_frame = self.visual_estimator.buffer[-1] if self.visual_estimator.buffer else None
+            previous_timestamp_ns = getattr(previous_frame, "left_timestamp_ns", None)
+            if previous_timestamp_ns is not None:
+                previous_monotonic_ns = self._ros_to_monotonic_ns(previous_timestamp_ns)
+                imu_snapshots = self.imu_bridge.between(
+                    previous_monotonic_ns, monotonic_timestamp_ns
+                )
+            if not imu_snapshots:
+                closest = self.imu_bridge.closest(
+                    monotonic_timestamp_ns, max_delta_ns=25_000_000
+                )
+                imu_snapshots = () if closest is None else (closest,)
+        processed = self.visual_estimator.processing(frame, idx, imu_snapshots=imu_snapshots)
         if self.visual_frame_bridge is not None:
             self.visual_frame_bridge.publish( processed, self.visual_estimator.tracks,
             self.visual_estimator.point_depth, self.visual_estimator, )
@@ -155,10 +166,10 @@ class Sensors:
         if (np.count_nonzero(estimator.velocity_point_mask) < 2 or not np.isfinite(estimator.camera_velocity[:3]).all()):
             return processed
 
-        imu_position = self.get_acc_position()
+        imu_position = estimator.avg_pos.copy()
         dt = float(estimator.dt)
 
-        roll, pitch, yaw = self.get_attitude()
+        roll, pitch, yaw = estimator.avg_att
         cr, sr = np.cos(roll), np.sin(roll)
         cp, sp = np.cos(pitch), np.sin(pitch)
         cy, sy = np.cos(yaw), np.sin(yaw)

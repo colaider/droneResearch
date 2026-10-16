@@ -15,7 +15,6 @@ from .visualDepthEst import (
 )
 from .visualVelEst import VisualVelocityEstimator
 from .smallFeatures import TRACK_COLOR
-from sensors.IMU.imuSnapshot import IMUSnapshot
 from visualization.display import compose_tracking_display
 
 
@@ -128,13 +127,12 @@ class VisulaEst(VisualVelocityEstimator):
         self.current_frame = prepared.display_copy()
 
     def processing(self, frame, idx=None, *, drone_pos=None, drone_vel=None,
-                   drone_ang_vel=None, imu_att=None,
-                   imu_snapshot: IMUSnapshot | None = None):
+                   drone_ang_vel=None, imu_att=None, imu_snapshots=()):
         """Process StereoFrame, or legacy [left,right] plus idx.
 
         Sensor values may be supplied together to update the estimator and
-        use the latest sensor sample for this call. A matched IMU snapshot
-        overrides window-averaged angular velocity, attitude, and velocity.
+        use the latest sensor sample for this call. Timestamp-matched IMU
+        snapshots are averaged for this frame's visual velocity estimate.
         Returns the display Frame. Read camera_velocity ([vx, vy, vz, yaw_rate]),
         depth_points ([u, v, optical_depth]), depth_colors, and depth_sigma on
         this estimator. Capture metadata is on current_frame.
@@ -152,7 +150,7 @@ class VisulaEst(VisualVelocityEstimator):
             self.drone_ang_vel = np.asarray(drone_ang_vel, dtype=float)
             self.imu_att = np.asarray(imu_att, dtype=float)
 
-        self._take_sensor_window(imu_snapshot)
+        self._take_sensor_window(imu_snapshots)
         self.update_frame(frame, idx)
         self.aply_flow()
         self.estimate_depth()
@@ -201,13 +199,23 @@ class VisulaEst(VisualVelocityEstimator):
             self.buf_pos.append(np.array(self.drone_pos, dtype=float))
             self.buf_cmd_vel.append(np.array(self.drone_cmd_vel, dtype=float))
 
-    def _take_sensor_window(self, imu_snapshot=None):
+    def _take_sensor_window(self, imu_snapshots=()):
         with self._sensor_buffer_lock:
-            if imu_snapshot is not None:
-                self.avg_ang_vel = np.asarray(imu_snapshot.angular_velocity, dtype=float)
-                self.avg_att = np.asarray(imu_snapshot.attitude, dtype=float)
-                self.avg_pos = np.asarray(imu_snapshot.position, dtype=float)
-                self.drone_vel = np.asarray(imu_snapshot.velocity, dtype=float)
+            if imu_snapshots:
+                self.avg_ang_vel = np.mean(
+                    [snapshot.angular_velocity for snapshot in imu_snapshots], axis=0
+                )
+                self.avg_att = np.mean(
+                    [snapshot.attitude for snapshot in imu_snapshots], axis=0
+                )
+                self.avg_pos = np.mean(
+                    [snapshot.position for snapshot in imu_snapshots], axis=0
+                )
+                self.drone_vel = np.mean(
+                    [snapshot.velocity for snapshot in imu_snapshots], axis=0
+                )
+                if self.buf_cmd_vel:
+                    self.previous_cmd_vel = np.mean(np.asarray(self.buf_cmd_vel), axis=0)
                 self.buf_ang_vel.clear()
                 self.buf_att.clear()
                 self.buf_pos.clear()

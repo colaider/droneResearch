@@ -32,6 +32,16 @@ class IMUBridge:
             return None
         return snapshot
 
+    def between(self, start_timestamp_ns, end_timestamp_ns):
+        """Return snapshots in the monotonic interval (start, end], oldest first."""
+        if end_timestamp_ns <= start_timestamp_ns:
+            return ()
+        with self._lock:
+            return tuple(
+                snapshot for snapshot in self._snapshots
+                if start_timestamp_ns < snapshot.timestamp_ns <= end_timestamp_ns
+            )
+
     def capture(self, imu, timestamp_ns):
         """Capture one new monotonic-stamped reading; ignore repeated timestamps."""
         if timestamp_ns is None:
