@@ -1,0 +1,2 @@
+# axis_check.py runs on the drone (./axis_check.py needs an LF shebang)
+* text=auto eol=lf
