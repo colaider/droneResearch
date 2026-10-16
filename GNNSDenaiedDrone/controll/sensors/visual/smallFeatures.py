@@ -15,14 +15,19 @@ from scipy.spatial import Delaunay, QhullError
 TRACK_COLOR = (255, 0, 0)
 
 
-def replenish(gray, pts, max_points=300, min_distance=100, *, backend=cv2):
-    pts = np.asarray(pts, np.float32).reshape(-1, 2)[:max_points]
-    if len(pts) >= max_points:
-        return pts.copy()
+def replenish(gray, pts, max_points=700, min_distance=50, *, backend=cv2):
+    pts = np.asarray(pts, dtype=np.float32).reshape(-1, 2)
     h, w = gray.shape
+    border_x, border_y = max(1, int(w * 0.05)), max(1, int(h * 0.05))
+    inside = ((pts[:, 0] >= border_x) & (pts[:, 0] < w - border_x)
+              & (pts[:, 1] >= border_y) & (pts[:, 1] < h - border_y))
+    pts = pts[inside][:max_points]
     mask = np.full((h, w), 255, np.uint8)
+    mask[:border_y, :] = mask[-border_y:, :] = 0
+    mask[:, :border_x] = mask[:, -border_x:] = 0
+
     for x, y in pts.astype(int):
-        cv2.circle(mask, (x, y), max(1, int(np.ceil(min_distance))), 0, -1)
+        cv2.circle(mask, (x, y), 7, 0, -1)
 
     cand = backend.goodFeaturesToTrack(gray, maxCorners=500, qualityLevel=0.005, minDistance=min_distance, blockSize=11, mask=mask)
     if cand is None: return pts
@@ -61,6 +66,9 @@ def replenish(gray, pts, max_points=300, min_distance=100, *, backend=cv2):
         take.extend(remaining[:remaining_need])
 
     if not take: return pts
+
+    
+
     return np.vstack([pts, cand[take]]).astype(np.float32)
 
 

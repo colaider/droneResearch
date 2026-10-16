@@ -16,8 +16,15 @@ TRACK_COLOR = (255, 0, 0)
 
 
 def replenish(gray, pts, max_points=300):
+    pts = np.asarray(pts, dtype=np.float32).reshape(-1, 2)
     h, w = gray.shape
+    border_x, border_y = max(1, int(w * 0.05)), max(1, int(h * 0.05))
+    inside = ((pts[:, 0] >= border_x) & (pts[:, 0] < w - border_x)
+              & (pts[:, 1] >= border_y) & (pts[:, 1] < h - border_y))
+    pts = pts[inside][:max_points]
     mask = np.full((h, w), 255, np.uint8)
+    mask[:border_y, :] = mask[-border_y:, :] = 0
+    mask[:, :border_x] = mask[:, -border_x:] = 0
 
     for x, y in pts.astype(int):
         cv2.circle(mask, (x, y), 7, 0, -1)
