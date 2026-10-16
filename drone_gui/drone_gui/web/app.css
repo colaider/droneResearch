@@ -226,3 +226,14 @@ figcaption b.c-x { color: #ff5f56; } figcaption b.c-y { color: #3ecf8e; } figcap
 #camera-motion-card canvas { height: 240px; }
 #track-2d { cursor: grab; touch-action: none; }
 #track-2d:active { cursor: grabbing; }
+
+/* --- cameras | map, side by side ------------------------------------------------------ */
+.split-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: inherit; min-width: 0; }
+.split-row > .card { min-width: 0; }
+#map-card { display: flex; flex-direction: column; gap: 10px; }
+#map-card canvas { display: block; }
+#map-card #track-2d { height: 340px; }
+#map-card #camera-position { height: 200px; }
+@media (max-width: 1100px) {
+  .split-row { grid-template-columns: minmax(0, 1fr); }
+}
