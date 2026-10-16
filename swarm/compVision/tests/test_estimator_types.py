@@ -65,19 +65,22 @@ class EstimatorTypesTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             processor.process(pair, 8)
 
-    def test_capture_order_and_skew_are_metadata_but_resolution_remains_validated(self):
+    def test_capture_timestamps_update_dt_and_invalid_intervals_keep_last_dt(self):
         estimator = make_estimator((160, 120), 60)
         estimator.processing(self.pair())
         estimator.set_dt(.125)
         estimator.processing(self.pair(0, 1.1, 1.12))
+        self.assertAlmostEqual(estimator.dt, .1)
         estimator.processing(self.pair(0, .9, 1.1))
         self.assertEqual(len(estimator.buffer), 3)
-        self.assertEqual(estimator.dt, .125)
+        self.assertAlmostEqual(estimator.dt, .1)
+        estimator.processing([self.image, self.image], 3)
+        self.assertAlmostEqual(estimator.dt, .1)
         with self.assertRaises(ValueError):
             estimator.processing(
                 types.StereoFrame(self.image[:10], self.image[:10], 1.1, 1.1, 1)
             )
-        self.assertEqual(len(estimator.buffer), 3)
+        self.assertEqual(len(estimator.buffer), 4)
 
     def test_timestamped_pipeline_matches_legacy_and_exposes_state(self):
         size = (321, 241)
@@ -92,12 +95,15 @@ class EstimatorTypesTests(unittest.TestCase):
             est.feature_min_distance = 15
         typed.set_dt(.125)
         legacy.set_dt(.125)
-        for index, timestamp in enumerate((1., 1.125, 1.375)):
+        timestamps = (1., 1.125, 1.375)
+        for index, timestamp in enumerate(timestamps):
             def shift(x, y):
                 return cv2.warpAffine(image, np.float32([[1, 0, x], [0, 1, y]]), size,
                                       borderMode=cv2.BORDER_REFLECT)
             images = [shift(2 * index, 0), shift(2 * index, 4)]
             typed.processing(types.StereoFrame(*images, timestamp, timestamp, index))
+            if index > 0:
+                legacy.set_dt(timestamp - timestamps[index - 1])
             legacy.processing(images, index)
             np.testing.assert_allclose(typed.camera_velocity, legacy.camera_velocity)
             np.testing.assert_allclose(typed.depth_points, legacy.depth_points)
@@ -111,7 +117,7 @@ class EstimatorTypesTests(unittest.TestCase):
             if index == 1:
                 self.assertAlmostEqual(typed.dt, .125)
                 self.assertGreater(len(typed.depth_points), 5)
-        self.assertAlmostEqual(typed.dt, .125)
+        self.assertAlmostEqual(typed.dt, .25)
 
     def test_processing_accepts_sensor_sample_with_frame(self):
         estimator = make_estimator((160, 120), 60)
@@ -141,7 +147,7 @@ class EstimatorTypesTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Provide drone_pos"):
             estimator.processing([image, image], 0, drone_ang_vel=np.zeros(3))
 
-    def test_drone_passes_capture_time_without_changing_configured_dt(self):
+    def test_drone_capture_times_determine_dt(self):
         from swarm.droneClasses.droneStruct import DroneStruct
         drone = DroneStruct.__new__(DroneStruct)
         sim = SimpleNamespace(get_time=Mock(side_effect=[np.array([3.]), np.array([3.2])]))
@@ -168,7 +174,7 @@ class EstimatorTypesTests(unittest.TestCase):
             self.assertEqual([pair.sequence_id for pair in pairs], [0, 1])
             self.assertEqual([pair.timestamp for pair in pairs], [3., 3.2])
             self.assertTrue(all(pair.stereo_skew == 0 for pair in pairs))
-            self.assertAlmostEqual(drone.frame_processor.dt, .125)
+            self.assertAlmostEqual(drone.frame_processor.dt, .2)
             self.assertEqual(drone.frame_processor.current_frame.idx, 1)
             self.assertEqual(drone.point_map.add.call_args.kwargs['frame_idx'], 1)
             explicit = drone.get_stereo_frame(timestamp=4.)
