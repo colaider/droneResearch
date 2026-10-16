@@ -215,7 +215,7 @@ class VisualVelocityEstimator:
         visual_flow = flow * (z / (self.foc_l * self.dt))[:, None]
         rotation = z[:, None] / np.cos(attitude[[1, 0]]) ** 2
 
-        rotation *= angular_velocity
+        rotation *= angular_velocity[[1, 0]]
 
         target = visual_flow - rotation
         position = (
