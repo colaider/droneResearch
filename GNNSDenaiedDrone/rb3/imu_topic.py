@@ -14,8 +14,8 @@ from rb3_control import see
 
 
 class ImuTopic:
-    def __init__(self, node, ns="/drone", gyro_hz=200.0, accel_hz=200.0,
-                 publish_hz=100.0, frame="imu_link", sudo=True):
+    def __init__(self, node, ns="/drone", gyro_hz=120.0, accel_hz=120.0,
+                 publish_hz=120.0, frame="imu_link", sudo=True):
         self.node = node
         self.frame = frame
         self._pending_accel = []
