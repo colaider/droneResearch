@@ -86,10 +86,7 @@ class Sensors:
             self._reset_fkf()
 
 
-        self._update_baro_velocity(float(baro), dt)
-        if not self.imu.is_calibrating():
-            self.imu.fuse_vertical_velocity(self._baro_vel, 0.9)   # vz = 0.9 accel + 0.1 baro
-
+        self._update_baro_velocity(float(baro), dt)   # baro vz; fused into the FKF below, not the IMU
 
         self._push_visual_sensor_sample(command_velocity)
         if self.camera_receiver is not None:

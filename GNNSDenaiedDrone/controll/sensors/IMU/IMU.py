@@ -38,7 +38,6 @@ class IMU:
         self.gyro_bias = np.zeros(3)     # mean(gyro)
         self._calib = None
 
-        self.att_tau = 0.5
 
         self.zupt_acc_tol = 0.3          # |‖accel_c‖ - g| below this = no net acceleration [m/s^2]
         self.zupt_gyro_tol = 0.05        # ‖gyro_c‖ below this = not rotating [rad/s] (~3 deg/s)
@@ -59,28 +58,28 @@ class IMU:
     @staticmethod
     def build_sample(accel, gyro, t):
         """Construct a timestamped ImuSample from a reading (barometer left empty)."""
-        return ImuSample(t=t,
-                         accel=accel,
-                         gyro=gyro)
+        return ImuSample(t=t, accel=accel, gyro=gyro)
 
-    # ---------------- update ----------------
     def update(self, accel, gyro, dt):
-        self._accel, self._gyro = accel, gyro
+        if not np.isfinite(dt) or dt <= 0: return
+        self._accel = np.asarray(accel, dtype=float).copy()
+        self._gyro = np.asarray(gyro, dtype=float).copy()
 
         if self._calib is not None:
-            self._accumulate_calibration(accel, gyro)
-            return                              # gathering bias: hold the estimates
+            self._accumulate_calibration(self._accel, self._gyro)
+            return
 
-        accel_c = accel - self.accel_bias
-        gyro_c = gyro - self.gyro_bias
-        accel_c = self._compensate_lever_arm(accel_c, gyro_c, dt)   # offset IMU -> rotation center
-        self._accel_comp = accel_c                                  # de-biased, lever-arm body accel
+        accel_c = self._accel - self.accel_bias
+        gyro_c = self._gyro - self.gyro_bias
+        accel_c = self._compensate_lever_arm(accel_c, gyro_c, dt)
+        self._accel_comp = accel_c
         self._update_attitude(accel_c, gyro_c, dt)
 
         if self._detect_stationary(accel_c, gyro_c):
-            self._vel[:] = 0.0              # ZUPT: cancel velocity drift; hold position (no integrate)
+            self._vel[:] = 0.0
         else:
             self._update_vel_pos(accel_c, dt)
+
 
     def _compensate_lever_arm(self, accel, gyro, dt):
         r = self.imu_offset
@@ -141,40 +140,51 @@ class IMU:
 
     # ---------------- estimators ----------------
     def _update_attitude(self, accel, gyro, dt):
+        """Estimate roll, pitch and yaw using gyro integration and accel correction."""
+        # 1. Predict attitude using bias-corrected gyro rates.
         self._att += gyro * dt
-        if abs(np.linalg.norm(accel) - G) < 1.0:
-            roll_acc = np.arctan2(accel[1], accel[2])
-            pitch_acc = np.arctan2(-accel[0], np.sqrt(accel[1] ** 2 + accel[2] ** 2))
-            a = self.att_tau / (self.att_tau + dt)   # dt-independent complementary weight
-            self._att[0] = a * self._att[0] + (1 - a) * roll_acc
-            self._att[1] = a * self._att[1] + (1 - a) * pitch_acc
+
+        # 2. Accelerometer gives a gravity reference when linear acceleration is small.
+        accel_norm = np.linalg.norm(accel)
+        if abs(accel_norm - G) > 1.0:
+            return
+
+        roll_acc = np.arctan2(accel[1], accel[2])
+        pitch_acc = np.arctan2(
+            -accel[0],
+            np.sqrt(accel[1]**2 + accel[2]**2),
+        )
+
+        # 3. Complementary filter: trust gyro for fast changes, accel for long-term correction.
+        tau = 0.5  # seconds
+        alpha = tau / (tau + dt)
+
+        self._att[0] = alpha * self._att[0] + (1 - alpha) * roll_acc
+        self._att[1] = alpha * self._att[1] + (1 - alpha) * pitch_acc
 
     def _update_vel_pos(self, accel, dt):
+        """Integrate body acceleration into world-frame velocity and position."""
         roll, pitch, yaw = self._att
         ax, ay, az = accel
 
+        cr, sr = np.cos(roll), np.sin(roll)
+        cp, sp = np.cos(pitch), np.sin(pitch)
+        cy, sy = np.cos(yaw), np.sin(yaw)
+
         a_level = np.array([
-            ax * np.cos(pitch) + ay * np.sin(roll) * np.sin(pitch) + az * np.cos(roll) * np.sin(pitch),
-            ay * np.cos(roll) - az * np.sin(roll),
-            -ax * np.sin(pitch) + ay * np.sin(roll) * np.cos(pitch) + az * np.cos(roll) * np.cos(pitch) - G,
+            ax * cp + ay * sr * sp + az * cr * sp,
+            ay * cr - az * sr,
+            -ax * sp + ay * sr * cp + az * cr * cp - G,
         ])
 
-
-        cy, sy = np.cos(yaw), np.sin(yaw)
         a_world = np.array([
             cy * a_level[0] - sy * a_level[1],
             sy * a_level[0] + cy * a_level[1],
             a_level[2],
         ])
 
-
-        v_old = self._vel.copy()
-        self._vel += a_world * dt                       # velocity (world frame)
-        self._pos += v_old * dt + 0.5 * a_world * dt ** 2   # position (world frame)
-
-    def fuse_vertical_velocity(self, ref_vz, w=0.9):
-        """Anchor the drifty accel vz to an external vertical velocity (barometer)."""
-        self._vel[2] = w * self._vel[2] + (1 - w) * ref_vz
+        self._pos += self._vel * dt + 0.5 * a_world * dt**2
+        self._vel += a_world * dt
 
     # ---------------- getters ----------------
     def get_attitude(self):
